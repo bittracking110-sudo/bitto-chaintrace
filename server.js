@@ -67,6 +67,21 @@ const LABEL_DB = {
   '0x6cc5f688a315f3dc28a7781717a9a798a59fda7b': 'OKX Hot',
   '0xd551234ae421e3bcba99a0da6d736074f22192ff': 'Binance',
   '0xbe0eb53f46cd790cd13851d5eff43d12404d33e8': 'Binance Cold',
+  // ─── HitBTC ───
+  '0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c': 'HitBTC',
+  '0x0a98fb70939162725ae863267f8b056e9d890906': 'HitBTC',
+  '0xf259869dfc3f3de5e1b2292882e3d59c8f2d1b01': 'HitBTC',
+  '0x3d28a7c8d8f4f06b5f60d5855e5a1f6b5f59f95c': 'HitBTC',
+  '1KAt6STtisWMMVo63xFER7NnGBBBBMHTNK': 'HitBTC BTC',
+  '1GZEgEoAOcMKoqz93MPpFfQpFPDyKi41jh': 'HitBTC BTC',
+  // ─── その他主要取引所 ───
+  '0x4e9ce36e442e55ecd9025b759ce187c9aa80a4b': 'Bitfinex',
+  '0x742d35cc6634c0532925a3b844bc454e4438f44e': 'Bitfinex Hot',
+  '0x876eabf441b2ee5b5b0554fd502a8e0600950cfa': 'Bitfinex',
+  '0xd24400ae8bfebb18ca49be86258a3c749cf46853': 'Gemini',
+  '0x07ee55aa48bb72dcc6e9d78256648910de513eca': 'Gemini',
+  '0x6fc82a5fe25a5cdb58bc74600a40a69c065263f8': 'Huobi',
+  '0xadb2b42f6bd96f5c65920b9ac88619dce4166f94': 'Huobi',
   // ─── XRP ───
   'rpvmhwbsff9imxyj3aazjvkpdtfnsywdky': 'Binance XRP',
   'rlnapokeebj ze2qs6x52yvpzpz8td4dc6w': 'Kraken XRP',
@@ -79,6 +94,8 @@ const EX_KEYWORDS = [
   'bybit','kucoin','gate','bitflyer','coincheck','zaif','liquid',
   'ftx','bittrex','bitstamp','upbit','bithumb','exchange','hot wallet',
   'cold wallet','bitbank','mexc','crypto.com','hot','cold',
+  'hitbtc','hit btc','poloniex','gemini','bitget','lbank','whitebit',
+  'phemex','bitmart','digifinex','xt.com','latoken','probit',
 ];
 
 function getLabel(addr) {
