@@ -1,0 +1,1370 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChainTrace — ブロックチェーン資金追跡</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+
+:root {
+  /* Breadcrumbs-like dark theme */
+  --bg: #0a0c10;
+  --panel: #111318;
+  --panel2: #181c24;
+  --panel3: #1e2330;
+  --border: #252d3d;
+  --border2: #2d3748;
+
+  --acc: #4f9cf9;
+  --acc-dim: rgba(79,156,249,.15);
+  --green: #34d399;
+  --green-dim: rgba(52,211,153,.12);
+  --orange: #fb923c;
+  --orange-dim: rgba(251,146,60,.1);
+  --red: #f87171;
+  --red-dim: rgba(248,113,113,.12);
+  --yellow: #fbbf24;
+  --purple: #a78bfa;
+
+  --btc: #f7931a;
+  --eth: #8c9eff;
+  --xrp: #23aedb;
+
+  --text: #e2e8f0;
+  --text2: #94a3b8;
+  --text3: #475569;
+
+  /* Node colors */
+  --n-origin: #4f9cf9;
+  --n-exchange: #34d399;
+  --n-wallet: #fb923c;
+  --n-unknown: #8c9eff;
+  --n-flagged: #f87171;
+  --n-defi: #a78bfa;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;}
+body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;display:flex;flex-direction:column;}
+
+/* ══ TOPBAR ══════════════════════════════════════ */
+.topbar{
+  display:flex;align-items:center;gap:10px;
+  padding:0 16px;height:52px;
+  background:var(--panel);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;z-index:100;
+}
+
+.logo{
+  display:flex;align-items:center;gap:8px;
+  font-size:.95rem;font-weight:700;letter-spacing:-.3px;
+  color:var(--text);white-space:nowrap;flex-shrink:0;
+}
+.logo-icon{
+  width:28px;height:28px;border-radius:8px;
+  background:linear-gradient(135deg,#4f9cf9,#8b5cf6);
+  display:flex;align-items:center;justify-content:center;
+  font-size:.85rem;
+}
+
+.sep{width:1px;height:24px;background:var(--border);flex-shrink:0;}
+
+.chain-tabs{display:flex;gap:2px;background:var(--panel2);border-radius:8px;padding:3px;}
+.ctab{
+  padding:4px 12px;border-radius:6px;border:none;background:transparent;
+  color:var(--text3);font-size:.76rem;font-weight:500;cursor:pointer;transition:all .15s;
+  font-family:'Inter',sans-serif;
+}
+.ctab:hover{color:var(--text2);}
+.ctab.active-auto{background:var(--panel3);color:var(--text);}
+.ctab.active-btc {background:rgba(247,147,26,.2);color:var(--btc);}
+.ctab.active-eth {background:rgba(140,158,255,.15);color:var(--eth);}
+.ctab.active-xrp {background:rgba(35,174,219,.15);color:var(--xrp);}
+
+.search-wrap{
+  flex:1;max-width:480px;position:relative;
+}
+.search-input{
+  width:100%;background:var(--panel2);border:1px solid var(--border);
+  border-radius:8px;padding:7px 14px 7px 36px;
+  color:var(--text);font-family:'Space Mono',monospace;font-size:.74rem;
+  outline:none;transition:border-color .2s;
+}
+.search-input:focus{border-color:var(--acc);}
+.search-input::placeholder{color:var(--text3);}
+.search-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:.8rem;pointer-events:none;}
+
+.top-keys{display:flex;gap:6px;flex-shrink:0;}
+.key-wrap{position:relative;}
+.key-inp{
+  background:var(--panel2);border:1px solid var(--border);border-radius:8px;
+  padding:6px 10px 6px 28px;color:var(--text);
+  font-family:'Space Mono',monospace;font-size:.68rem;
+  outline:none;width:156px;transition:border-color .2s;
+}
+.key-inp:focus{border-color:var(--acc);}
+.key-inp.ok{border-color:rgba(52,211,153,.4);}
+.key-inp::placeholder{color:var(--text3);}
+.key-icon{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:.72rem;pointer-events:none;}
+
+.trace-btn{
+  padding:7px 18px;
+  background:var(--acc);color:#fff;
+  border:none;border-radius:8px;
+  font-family:'Inter',sans-serif;font-weight:600;font-size:.78rem;
+  cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0;
+}
+.trace-btn:hover{background:#3b82f6;}
+.trace-btn:disabled{opacity:.4;cursor:not-allowed;}
+
+.export-btn{
+  padding:6px 12px;background:transparent;
+  border:1px solid var(--border);border-radius:8px;
+  color:var(--text2);font-size:.72rem;cursor:pointer;
+  transition:all .15s;white-space:nowrap;flex-shrink:0;
+  display:flex;align-items:center;gap:5px;
+}
+.export-btn:hover{border-color:var(--acc);color:var(--acc);}
+
+/* ══ MAIN LAYOUT ═════════════════════════════════ */
+.layout{display:flex;flex:1;overflow:hidden;}
+
+/* ══ GRAPH AREA ══════════════════════════════════ */
+#graphArea{flex:1;position:relative;overflow:hidden;background:var(--bg);}
+#graphSvg{width:100%;height:100%;}
+
+/* grid bg */
+#graphArea::before{
+  content:'';position:absolute;inset:0;
+  background-image:radial-gradient(circle,rgba(79,156,249,.06) 1px,transparent 1px);
+  background-size:28px 28px;pointer-events:none;
+}
+
+/* ══ SIDEBAR ══════════════════════════════════════ */
+.sidebar{
+  width:300px;flex-shrink:0;
+  background:var(--panel);
+  border-left:1px solid var(--border);
+  display:flex;flex-direction:column;
+  overflow:hidden;
+}
+
+.sidebar-tabs{
+  display:flex;
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+  padding:0 4px;
+}
+.stab{
+  flex:1;padding:10px 0;text-align:center;
+  font-size:.68rem;font-weight:500;letter-spacing:.3px;
+  color:var(--text3);cursor:pointer;transition:all .15s;
+  border-bottom:2px solid transparent;
+}
+.stab:hover{color:var(--text2);}
+.stab.active{color:var(--acc);border-bottom-color:var(--acc);}
+
+.sbody{flex:1;overflow-y:auto;padding:12px 14px;}
+
+/* ── Stats strip ── */
+.stats-strip{
+  display:flex;gap:0;border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.stat-item{
+  flex:1;padding:8px 10px;text-align:center;
+  border-right:1px solid var(--border);
+}
+.stat-item:last-child{border-right:none;}
+.stat-val{font-size:.85rem;font-weight:700;color:var(--text);font-family:'Space Mono',monospace;}
+.stat-lbl{font-size:.58rem;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:1px;}
+
+/* ── Node detail ── */
+.nd-header{
+  display:flex;align-items:center;gap:8px;
+  padding:10px 14px;background:var(--panel2);
+  border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.nd-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+.nd-title{font-size:.72rem;font-weight:600;color:var(--text);}
+
+.nd-addr{
+  font-family:'Space Mono',monospace;font-size:.62rem;
+  color:var(--text3);word-break:break-all;line-height:1.6;
+  margin-bottom:10px;
+  background:var(--panel2);
+  border:1px solid var(--border);
+  border-radius:7px;padding:8px 10px;
+  cursor:pointer;transition:border-color .15s;
+}
+.nd-addr:hover{border-color:var(--acc);color:var(--text2);}
+.nd-addr-hint{font-size:.58rem;color:var(--text3);margin-top:3px;}
+
+.nd-row{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:5px 0;border-bottom:1px solid rgba(37,45,61,.7);
+  font-size:.72rem;
+}
+.nd-lbl{color:var(--text3);font-size:.65rem;}
+.nd-val{
+  font-family:'Space Mono',monospace;font-size:.67rem;
+  text-align:right;max-width:170px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+
+.badge{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:2px 8px;border-radius:20px;
+  font-size:.61rem;font-weight:600;
+}
+.badge-exchange{background:var(--green-dim);color:var(--green);}
+.badge-wallet  {background:var(--orange-dim);color:var(--orange);}
+.badge-flagged {background:var(--red-dim);color:var(--red);}
+.badge-defi    {background:rgba(167,139,250,.12);color:var(--purple);}
+.badge-origin  {background:var(--acc-dim);color:var(--acc);}
+.badge-unknown {background:rgba(100,116,139,.12);color:var(--text3);}
+
+/* ── Expand button ── */
+.xpand-btn{
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  margin-top:12px;padding:8px 0;width:100%;
+  background:var(--acc-dim);border:1px solid rgba(79,156,249,.3);
+  border-radius:8px;color:var(--acc);
+  font-size:.72rem;font-weight:500;
+  cursor:pointer;transition:all .15s;
+}
+.xpand-btn:hover{background:rgba(79,156,249,.25);}
+.xpand-btn:disabled{opacity:.35;cursor:not-allowed;}
+.xpand-btn.spin{animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* ── Hop selector ── */
+.hop-header{
+  display:flex;justify-content:space-between;align-items:center;
+  margin:12px 0 7px;
+}
+.hop-title{font-size:.64rem;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;}
+.hop-count{font-size:.62rem;color:var(--text3);}
+
+.hop-list{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow-y:auto;}
+
+.hop-item{
+  display:flex;align-items:center;gap:8px;
+  padding:7px 9px;
+  background:var(--panel2);border:1px solid var(--border);
+  border-radius:7px;cursor:pointer;transition:all .13s;
+}
+.hop-item:hover{border-color:var(--acc);background:var(--acc-dim);}
+.hop-item.sel{border-color:var(--acc);background:var(--acc-dim);}
+.hop-item.added{border-color:rgba(52,211,153,.3);opacity:.65;}
+
+.hi-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.hi-body{flex:1;min-width:0;}
+.hi-addr{font-family:'Space Mono',monospace;font-size:.62rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.hi-meta{font-size:.58rem;color:var(--text3);margin-top:2px;display:flex;gap:6px;flex-wrap:wrap;}
+.hi-lbl{font-weight:500;}
+.hi-amt{font-family:'Space Mono',monospace;font-size:.61rem;color:var(--yellow);flex-shrink:0;}
+
+.hop-footer{display:flex;gap:6px;margin-top:8px;}
+.sel-all-btn{
+  flex-shrink:0;padding:5px 10px;
+  background:transparent;border:1px solid var(--border);
+  border-radius:6px;color:var(--text3);font-size:.65rem;
+  cursor:pointer;transition:all .13s;
+}
+.sel-all-btn:hover{border-color:var(--acc);color:var(--acc);}
+.add-btn{
+  flex:1;padding:6px 0;
+  background:var(--acc);color:#fff;
+  border:none;border-radius:6px;
+  font-size:.72rem;font-weight:600;
+  cursor:pointer;transition:background .15s;
+}
+.add-btn:hover{background:#3b82f6;}
+.add-btn:disabled{opacity:.4;cursor:not-allowed;}
+.cancel-btn{
+  padding:6px 10px;background:transparent;
+  border:1px solid var(--border);border-radius:6px;
+  color:var(--text3);font-size:.65rem;cursor:pointer;
+}
+.cancel-btn:hover{border-color:var(--text3);}
+
+/* ── AI panel ── */
+.ai-header{display:flex;align-items:center;gap:7px;margin-bottom:10px;}
+.ai-icon{
+  width:24px;height:24px;border-radius:6px;
+  background:linear-gradient(135deg,var(--acc),var(--purple));
+  display:flex;align-items:center;justify-content:center;font-size:.7rem;flex-shrink:0;
+}
+.ai-title{font-size:.65rem;font-weight:600;color:var(--acc);text-transform:uppercase;letter-spacing:.5px;}
+.ai-body{font-size:.74rem;line-height:1.85;color:var(--text2);white-space:pre-wrap;}
+
+/* ── Log ── */
+.log-entry{font-family:'Space Mono',monospace;font-size:.62rem;line-height:1.9;padding:1px 0;}
+.log-ok  {color:var(--green);}
+.log-warn{color:var(--yellow);}
+.log-err {color:var(--red);}
+.log-info{color:var(--text3);}
+
+/* ══ OVERLAYS ════════════════════════════════════ */
+.loading-ov{
+  position:absolute;inset:0;
+  background:rgba(10,12,16,.85);
+  display:none;flex-direction:column;
+  align-items:center;justify-content:center;
+  gap:14px;z-index:50;backdrop-filter:blur(4px);
+}
+.ring{
+  width:40px;height:40px;border:2.5px solid var(--border2);
+  border-top-color:var(--acc);border-radius:50%;
+  animation:spin .65s linear infinite;
+}
+.ring-msg{color:var(--text2);font-size:.78rem;}
+
+.empty-ov{
+  position:absolute;inset:0;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:14px;pointer-events:none;
+}
+.empty-icon{font-size:2.2rem;opacity:.15;}
+.empty-text{font-size:.8rem;color:var(--text3);text-align:center;line-height:1.9;}
+.empty-chips{display:flex;gap:7px;flex-wrap:wrap;justify-content:center;pointer-events:all;}
+.chip{
+  padding:5px 13px;border:1px solid var(--border2);border-radius:20px;
+  font-size:.67rem;color:var(--text3);cursor:pointer;transition:all .13s;
+  font-family:'Space Mono',monospace;
+}
+.chip:hover{border-color:var(--acc);color:var(--acc);}
+
+.err-toast{
+  position:absolute;top:12px;left:50%;transform:translateX(-50%);
+  background:var(--red-dim);border:1px solid rgba(248,113,113,.3);
+  border-radius:9px;padding:9px 18px;
+  font-size:.74rem;color:var(--red);
+  z-index:60;display:none;max-width:460px;text-align:center;
+}
+
+/* ══ LEGEND ══════════════════════════════════════ */
+.legend{
+  position:absolute;bottom:14px;left:14px;
+  background:rgba(17,19,24,.9);border:1px solid var(--border);
+  border-radius:9px;padding:9px 13px;
+  font-size:.61rem;color:var(--text3);line-height:2.1;
+  backdrop-filter:blur(6px);
+}
+.leg-row{display:flex;align-items:center;gap:7px;}
+.leg-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+
+/* ══ ZOOM ════════════════════════════════════════ */
+.zoom-btns{position:absolute;bottom:14px;right:14px;display:flex;flex-direction:column;gap:4px;}
+.zbtn{
+  width:28px;height:28px;background:var(--panel);border:1px solid var(--border);
+  border-radius:6px;color:var(--text2);font-size:.9rem;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:background .13s;
+}
+.zbtn:hover{background:var(--panel2);}
+
+/* ══ PROGRESS BAR ════════════════════════════════ */
+.prog-bar-wrap{position:absolute;top:0;left:0;right:0;height:2px;z-index:10;}
+.prog-bar{height:100%;background:linear-gradient(90deg,var(--acc),var(--purple));width:0%;transition:width .25s;}
+
+/* ══ D3 GRAPH ELEMENTS ═══════════════════════════ */
+.glink{stroke:rgba(79,156,249,.18);stroke-width:1.5;fill:none;marker-end:url(#arr);}
+.glink.hl{stroke:rgba(79,156,249,.5);stroke-width:2;}
+.glabel{font-family:'Space Mono',monospace;font-size:7px;fill:rgba(251,191,36,.5);text-anchor:middle;pointer-events:none;}
+.gnode circle{stroke-width:1.5;cursor:pointer;}
+.gnode circle:hover{filter:brightness(1.3);}
+.gnode.sel circle{stroke-width:3;filter:brightness(1.5);}
+.gnode.expandable circle{stroke-dasharray:4,2;}
+.gnode text.lbl{font-family:'Inter',sans-serif;font-size:9px;fill:var(--text2);text-anchor:middle;pointer-events:none;}
+.gnode text.hop{font-family:'Space Mono',monospace;font-size:7px;fill:rgba(79,156,249,.7);text-anchor:middle;pointer-events:none;}
+
+/* ══ SCROLLBAR ═══════════════════════════════════ */
+::-webkit-scrollbar{width:4px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
+
+.divider{height:1px;background:var(--border);margin:10px 0;}
+a{color:var(--acc);text-decoration:none;}
+a:hover{text-decoration:underline;}
+</style>
+</head>
+<body>
+
+<!-- ══ TOPBAR ══════════════════════════════════ -->
+<div class="topbar">
+  <div class="logo"><div class="logo-icon">⬡</div>ChainTrace</div>
+  <div class="sep"></div>
+
+  <div class="chain-tabs">
+    <button class="ctab active-auto" onclick="setChain('auto',this)">AUTO</button>
+    <button class="ctab" onclick="setChain('btc',this)">₿ BTC</button>
+    <button class="ctab" onclick="setChain('eth',this)">Ξ ETH</button>
+    <button class="ctab" onclick="setChain('xrp',this)">✦ XRP</button>
+  </div>
+
+  <div class="search-wrap">
+    <span class="search-icon">🔍</span>
+    <input class="search-input" id="txin" type="text"
+      placeholder="TXID / Transaction Hash を入力..."
+      onkeydown="if(event.key==='Enter')startTrace()">
+  </div>
+
+  <div class="top-keys">
+    <div class="key-wrap">
+      <span class="key-icon">🔑</span>
+      <input type="password" class="key-inp" id="bcKey"
+        placeholder="Blockchair APIキー"
+        oninput="this.classList.toggle('ok',this.value.length>4)">
+    </div>
+    <div class="key-wrap">
+      <span class="key-icon">✦</span>
+      <input type="password" class="key-inp" id="gemKey"
+        placeholder="Gemini Key (AI)"
+        oninput="this.classList.toggle('ok',this.value.length>4)">
+    </div>
+  </div>
+
+  <button class="trace-btn" id="traceBtn" onclick="startTrace()">追跡開始</button>
+  <button class="export-btn" onclick="showExportMenu()">⬇ 出力</button>
+</div>
+
+<!-- ══ LAYOUT ═══════════════════════════════════ -->
+<div class="layout">
+
+  <!-- GRAPH -->
+  <div id="graphArea">
+    <div class="prog-bar-wrap"><div class="prog-bar" id="progBar"></div></div>
+
+    <svg id="graphSvg">
+      <defs>
+        <marker id="arr" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L7,3 z" fill="rgba(79,156,249,.4)"/>
+        </marker>
+      </defs>
+      <g id="gG"></g>
+    </svg>
+
+    <!-- Empty state -->
+    <div class="empty-ov" id="emptyOv">
+      <div class="empty-icon">⬡</div>
+      <div class="empty-text">TXIDを入力して追跡を開始<br>ノードをクリックして次の送金先を選択できます</div>
+      <div class="empty-chips">
+        <span class="chip" onclick="fillEx('a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d','btc')">₿ BTC サンプル</span>
+        <span class="chip" onclick="fillEx('0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060','eth')">Ξ ETH サンプル</span>
+        <span class="chip" onclick="fillEx('2D3A865C3AAC50A20ACC40E3644D93FE5FEF2C8CFF21B1E0580ADB34D9487A9E','xrp')">✦ XRP サンプル</span>
+      </div>
+    </div>
+
+    <!-- Loading -->
+    <div class="loading-ov" id="loadOv">
+      <div class="ring"></div>
+      <div class="ring-msg" id="ringMsg">データ取得中...</div>
+    </div>
+
+    <!-- Error toast -->
+    <div class="err-toast" id="errToast"></div>
+
+    <!-- Legend -->
+    <div class="legend">
+      <div class="leg-row"><div class="leg-dot" style="background:var(--n-origin);box-shadow:0 0 4px rgba(79,156,249,.6)"></div>起点TX</div>
+      <div class="leg-row"><div class="leg-dot" style="background:var(--n-exchange)"></div>取引所</div>
+      <div class="leg-row"><div class="leg-dot" style="background:var(--n-wallet)"></div>ウォレット</div>
+      <div class="leg-row"><div class="leg-dot" style="background:var(--n-unknown)"></div>不明アドレス</div>
+      <div class="leg-row"><div class="leg-dot" style="background:var(--n-flagged)"></div>要注意</div>
+    </div>
+
+    <!-- Zoom -->
+    <div class="zoom-btns">
+      <button class="zbtn" onclick="doZoom(1.3)">+</button>
+      <button class="zbtn" onclick="doZoom(.77)">−</button>
+      <button class="zbtn" onclick="resetZoom()">⊙</button>
+    </div>
+  </div>
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-tabs">
+      <div class="stab active" id="stab-node" onclick="stab('node')">ノード</div>
+      <div class="stab" id="stab-ai"   onclick="stab('ai')">AI分析</div>
+      <div class="stab" id="stab-log"  onclick="stab('log')">ログ</div>
+    </div>
+
+    <div class="stats-strip" id="statsStrip" style="display:none">
+      <div class="stat-item"><div class="stat-val" id="stN">0</div><div class="stat-lbl">ノード</div></div>
+      <div class="stat-item"><div class="stat-val" id="stE">0</div><div class="stat-lbl">エッジ</div></div>
+      <div class="stat-item"><div class="stat-val" id="stH">0</div><div class="stat-lbl">最大Hop</div></div>
+      <div class="stat-item" style="cursor:pointer;flex-shrink:0;width:auto;padding:8px 10px;" onclick="clearAll()">
+        <div class="stat-val" style="color:var(--text3);font-size:.68rem">🗑</div>
+        <div class="stat-lbl">クリア</div>
+      </div>
+    </div>
+
+    <!-- Node tab -->
+    <div class="sbody" id="sbody-node">
+      <div style="color:var(--text3);font-size:.74rem;text-align:center;padding:32px 0;line-height:2;">
+        ノードをクリックして<br>詳細と追跡オプションを表示
+      </div>
+    </div>
+
+    <!-- AI tab -->
+    <div class="sbody" id="sbody-ai" style="display:none">
+      <div id="aiCt">
+        <div style="color:var(--text3);font-size:.74rem;text-align:center;padding:32px 0;line-height:2;">
+          追跡後にAI分析が表示されます
+        </div>
+      </div>
+    </div>
+
+    <!-- Log tab -->
+    <div class="sbody" id="sbody-log" style="display:none">
+      <div id="logEl"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ EXPORT MODAL ══════════════════════════════ -->
+<div id="exportModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;display:none;align-items:center;justify-content:center;">
+  <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:24px;width:320px;">
+    <div style="font-size:.88rem;font-weight:600;margin-bottom:16px;color:var(--text);">📥 レポート出力</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <button onclick="exportCSV()" style="padding:9px;background:var(--green-dim);border:1px solid rgba(52,211,153,.3);border-radius:8px;color:var(--green);font-size:.76rem;cursor:pointer;font-weight:500;">📊 CSV (アドレス一覧)</button>
+      <button onclick="exportJSON()" style="padding:9px;background:var(--acc-dim);border:1px solid rgba(79,156,249,.3);border-radius:8px;color:var(--acc);font-size:.76rem;cursor:pointer;font-weight:500;">{ } JSON (グラフデータ)</button>
+      <button onclick="exportPDF()" style="padding:9px;background:var(--orange-dim);border:1px solid rgba(251,146,60,.3);border-radius:8px;color:var(--orange);font-size:.76rem;cursor:pointer;font-weight:500;">📄 PDF レポート</button>
+      <button onclick="hideExport()" style="padding:7px;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--text3);font-size:.72rem;cursor:pointer;margin-top:4px;">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════
+// ラベルデータベース（取引所・有名ウォレット）
+// ═══════════════════════════════════════════════════
+const LABEL_DB = {
+  // BTC exchanges
+  '1NDyJtNTjmwk5xPNhjgAMu4HDHigtobu1s': 'Binance Cold',
+  '34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo': 'Binance Hot',
+  '3LYJfcfHkxYkFQmkgW4Beta69jzNe8uEyl': 'Coinbase',
+  '3Cbq7aT1tY8kMxWLBkCQFKU5y74oUTz9MV': 'Coinbase 2',
+  '1FzWLkAahHooV3kzTgyx6qsswXJ6sCXkSR': 'OKX Hot',
+  '3LCGsSmfr24demGvriN4e3ft8wEcDuHFqh': 'OKX Cold',
+  '12cgpFdJViXbwHbhrA3TuW1EGnL25Zqc3P': 'Bitfinex',
+  '385cR5DM96n1HvBDMnlt6xWTimfbkH8C8V': 'Kraken',
+  '3BMEXqGpG4FxBA1KWhRFufXfSTRgzfDBhJ': 'Bitflyer',
+  '3FHNBLobJnbCPujBDkZoTtBHMs3KXMG4eE': 'Coincheck',
+  // ETH exchanges
+  '0x3f5ce5fbfe3e9af3971dd833d26ba9b5c936f0be': 'Binance Hot',
+  '0x28c6c06298d514db089934071355e5743bf21d60': 'Binance Hot 2',
+  '0xdfd5293d8e347dfe59e90efd55b2956a1343963d': 'Binance',
+  '0x56eddb7aa87536c09ccc2793473599fd21a8b17f': 'Binance',
+  '0xa9d1e08c7793af67e9d92fe308d5697fb81d3e43': 'Coinbase',
+  '0x71660c4005ba85c37ccec55d0c4493e66fe775d3': 'Coinbase 2',
+  '0x503828976d22510aad0201ac7ec88293211d23da': 'Coinbase',
+  '0x236f9f97e0e62388479bf9e5ba4889e46b0273c3': 'Coinbase',
+  '0xb62132e35a6c13ee1ee0f84dc5d40bad8d815206': 'Coinbase',
+  '0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae': 'Ethereum Foundation',
+  '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': 'WETH Contract',
+  '0x7a250d5630b4cf539739df2c5dacb4c659f2488d': 'Uniswap V2 Router',
+  '0xe592427a0aece92de3edee1f18e0157c05861564': 'Uniswap V3 Router',
+  '0x00000000219ab540356cbb839cbe05303d7705fa': 'ETH2 Deposit',
+  '0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419': 'Chainlink ETH/USD',
+  // XRP exchanges  
+  'rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B': 'Bitstamp',
+  'rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh': 'XRP Genesis',
+  'rN7n3473SaZBCG4dFL75SouD5e3SuFn7g7': 'Ripple Labs',
+  'rPVMhWBsfF9iMXYj3aAzJVkPDTFNSyWdKy': 'Binance XRP',
+  'rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh': 'Bitfinex XRP',
+  'rLNaPoKeeBjZe2qs6x52yVPZpZ8td4dc6w': 'Kraken XRP',
+  'rBndiPPKs9k5rjBb7HsEiqXKVq34zvduZs': 'OKX XRP',
+};
+
+// Known flagged addresses
+const FLAGGED_DB = {
+  '12t9YDPgwueZ9NyMgw519p7AA8isjr6SMw': 'Silk Road',
+  '1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF': 'Satoshi Mined',
+  '0xd882cfc20f52f2599d84b8e8d58c7fb62cfe344b': 'Tornado Cash',
+  '0x8589427373d6d84e98730d7795d8f6f8731fda16': 'Tornado Cash',
+};
+
+const EX_P  = ['binance','okx','okex','coinbase','kraken','bitfinex','huobi','bybit','kucoin','gate','bitflyer','coincheck','zaif','liquid','ftx','bittrex','poloniex','bitstamp','upbit','bithumb','exchange','hot wallet','cold wallet','bitbank','mexc','crypto.com'];
+const DEFI_P= ['uniswap','sushi','aave','compound','curve','balancer','1inch','opensea','lido','makerdao','yearn','chainlink','weth','wrapped','router','v2','v3 '];
+const FLAG_P= ['mixer','tornado','wasabi','coinjoin','silk road','darknet','scam','phishing','hack','exploit','sanction','ofac','flagged','blacklist','drainer'];
+
+function getLabel(addr) {
+  if (!addr) return { label: '', type: 'unknown' };
+  const lo = addr.toLowerCase();
+  if (FLAGGED_DB[lo] || FLAGGED_DB[addr]) return { label: FLAGGED_DB[lo]||FLAGGED_DB[addr], type: 'flagged' };
+  if (LABEL_DB[lo]   || LABEL_DB[addr])   return { label: LABEL_DB[lo]||LABEL_DB[addr], type: 'exchange' };
+  return { label: '', type: 'unknown' };
+}
+
+function classify(label, isCon) {
+  const db = getLabel('');
+  const l = (label||'').toLowerCase();
+  if (FLAG_P.some(p=>l.includes(p))) return {type:'flagged',color:'var(--n-flagged)',glow:'rgba(248,113,113,.5)',cls:'badge-flagged',txt:'⚠️ 要注意'};
+  if (EX_P.some(p=>l.includes(p)))   return {type:'exchange',color:'var(--n-exchange)',glow:'rgba(52,211,153,.4)',cls:'badge-exchange',txt:'取引所'};
+  if (DEFI_P.some(p=>l.includes(p))) return {type:'defi',color:'var(--n-defi)',glow:'rgba(167,139,250,.4)',cls:'badge-defi',txt:'DeFi'};
+  if (isCon)                          return {type:'defi',color:'var(--n-defi)',glow:'rgba(167,139,250,.35)',cls:'badge-defi',txt:'コントラクト'};
+  if (label&&label.length>1)          return {type:'wallet',color:'var(--n-wallet)',glow:'rgba(251,146,60,.4)',cls:'badge-wallet',txt:'ウォレット'};
+  return                                     {type:'unknown',color:'var(--n-unknown)',glow:'rgba(140,158,255,.3)',cls:'badge-unknown',txt:'不明'};
+}
+
+function resolveNode(n) {
+  const db = getLabel(n.addr);
+  const merged = db.label || n.label || '';
+  const type   = db.type !== 'unknown' ? db.type : (n.type||'unknown');
+  return { ...classify(merged, n.isContract), label: merged, resolvedType: type };
+}
+
+function nodeColor(n) {
+  if (n.hop===0||n.isTx) return {color:'var(--n-origin)',glow:'rgba(79,156,249,.65)'};
+  return resolveNode(n);
+}
+
+// ═══════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════
+let nodes=[], edges=[];
+let sim=null, d3z=null, selNode=null;
+let selChain='auto', selHops=new Set(), hopStore=[];
+
+const $=id=>document.getElementById(id);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+// ═══════════════════════════════════════════════════
+// UI helpers
+// ═══════════════════════════════════════════════════
+function setChain(c,btn){
+  selChain=c;
+  document.querySelectorAll('.ctab').forEach(b=>b.className='ctab');
+  btn.classList.add('active-'+c);
+}
+
+function fillEx(tx,c){
+  $('txin').value=tx;
+  const map={btc:'₿ BTC',eth:'Ξ ETH',xrp:'✦ XRP'};
+  document.querySelectorAll('.ctab').forEach(b=>{
+    b.className='ctab';
+    if(b.textContent.trim()===map[c]) b.classList.add('active-'+c);
+  });
+  selChain=c;
+}
+
+function stab(t){
+  ['node','ai','log'].forEach(k=>{
+    $('stab-'+k).classList.toggle('active',k===t);
+    $('sbody-'+k).style.display=k===t?'block':'none';
+  });
+}
+
+function log(msg,type='info'){
+  const el=$('logEl');
+  if(!el)return;
+  const ts=new Date().toLocaleTimeString('ja',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  el.innerHTML+=`<div class="log-entry log-${type}">[${ts}] ${msg}</div>`;
+  el.scrollTop=el.scrollHeight;
+}
+
+function showErr(m){
+  const b=$('errToast');
+  b.textContent=m;b.style.display='block';
+  setTimeout(()=>b.style.display='none',5000);
+  log(m,'err');
+}
+
+function setProg(p){$('progBar').style.width=p+'%';}
+
+function updateStats(){
+  $('statsStrip').style.display='flex';
+  $('stN').textContent=nodes.length;
+  $('stE').textContent=edges.length;
+  $('stH').textContent=nodes.length?Math.max(...nodes.map(n=>n.hop||0)):0;
+}
+
+function clearAll(){
+  nodes=[];edges=[];selNode=null;
+  $('gG').innerHTML='';
+  $('emptyOv').style.display='flex';
+  $('statsStrip').style.display='none';
+  $('sbody-node').innerHTML='<div style="color:var(--text3);font-size:.74rem;text-align:center;padding:32px 0;line-height:2;">ノードをクリックして<br>詳細と追跡オプションを表示</div>';
+  if(sim)sim.stop();
+}
+
+function addNode(id,data){if(!nodes.find(n=>n.id===id))nodes.push({id,...data});}
+function updNode(id,d){const n=nodes.find(n=>n.id===id);if(n)Object.assign(n,d);}
+function addEdge(s,t,d={}){if(!edges.find(e=>e.source===s&&e.target===t))edges.push({source:s,target:t,...d});}
+
+// ═══════════════════════════════════════════════════
+// API: Blockchair
+// ═══════════════════════════════════════════════════
+const bcKey=()=>$('bcKey').value.trim();
+const bcQ=p=>`https://api.blockchair.com${p}${bcKey()?'?key='+bcKey():''}`;
+
+async function bcGet(path){
+  const r=await fetch(bcQ(path));
+  if(!r.ok)throw new Error(`Blockchair ${r.status}`);
+  const j=await r.json();
+  return j;
+}
+
+// BTC TX → inputs & outputs
+async function btcTx(txid){
+  const j=await bcGet(`/bitcoin/dashboards/transaction/${txid}`);
+  const d=Object.values(j.data||{})[0];
+  if(!d)throw new Error('BTC TX not found');
+  return d;
+}
+
+// BTC Address → tx list
+async function btcAddrTxList(addr){
+  const j=await bcGet(`/bitcoin/dashboards/address/${addr}`);
+  const d=Object.values(j.data||{})[0];
+  return d?.transactions||[];
+}
+
+// ETH TX
+async function ethTx(hash){
+  const h=hash.startsWith('0x')?hash:'0x'+hash;
+  const j=await bcGet(`/ethereum/dashboards/transaction/${h}`);
+  const d=Object.values(j.data||{})[0];
+  if(!d)throw new Error('ETH TX not found');
+  return d;
+}
+
+// ETH Address → outgoing calls
+async function ethAddrCalls(addr){
+  const j=await bcGet(`/ethereum/dashboards/address/${addr}`);
+  const d=Object.values(j.data||{})[0];
+  return (d?.calls||[]).filter(c=>c.sender?.toLowerCase()===addr.toLowerCase());
+}
+
+// XRP TX (XRPScan)
+async function xrpTx(txid){
+  const h=txid.trim().toUpperCase();
+  const r=await fetch(`https://api.xrpscan.com/api/v1/tx/${h}`);
+  const t=await r.text();
+  if(t==='Not found'||!r.ok)throw new Error('XRP TX not found');
+  return JSON.parse(t);
+}
+
+// XRP Address → outgoing txs
+async function xrpAddrTxs(addr){
+  const r=await fetch(`https://api.xrpscan.com/api/v1/account/${addr}/transactions`);
+  if(!r.ok)return[];
+  const j=await r.json();
+  return(j.transactions||[]).filter(t=>{
+    const tx=t.tx||t;
+    return tx.Account===addr&&tx.TransactionType==='Payment'&&tx.Destination;
+  });
+}
+
+// ═══════════════════════════════════════════════════
+// Chain detection
+// ═══════════════════════════════════════════════════
+function detectChain(tx){
+  if(selChain!=='auto')return selChain;
+  const t=tx.trim();
+  if(t.startsWith('0x'))return 'eth';
+  if(t.length===64&&t===t.toUpperCase()&&/^[A-F0-9]+$/.test(t))return 'xrp';
+  return 'btc';
+}
+
+// ═══════════════════════════════════════════════════
+// Root trace
+// ═══════════════════════════════════════════════════
+async function startTrace(){
+  const txid=$('txin').value.trim();
+  if(!txid){showErr('TXIDを入力してください');return;}
+  clearAll();
+  $('emptyOv').style.display='none';
+  $('loadOv').style.display='flex';
+  $('traceBtn').disabled=true;
+  setProg(5);
+
+  const chain=detectChain(txid);
+  log(`追跡開始 [${chain.toUpperCase()}] ${txid.slice(0,20)}…`);
+
+  try{
+    if(chain==='btc')      await rootBTC(txid);
+    else if(chain==='eth') await rootETH(txid);
+    else                    await rootXRP(txid);
+    setProg(100);renderGraph();updateStats();
+    const gk=$('gemKey').value.trim();
+    if(gk)runGemini(gk,chain,txid);
+  }catch(e){
+    showErr('🚫 '+e.message);
+    $('emptyOv').style.display='flex';
+  }finally{
+    $('loadOv').style.display='none';
+    $('traceBtn').disabled=false;
+  }
+}
+
+async function rootBTC(txid){
+  $('ringMsg').textContent='BTC TX取得中 (Blockchair)...';
+  const d=await btcTx(txid);
+  const rootId='tx:'+txid;
+  const totalOut=(d.outputs||[]).reduce((a,o)=>a+(o.value||0),0)/1e8;
+  addNode(rootId,{addr:txid.slice(0,12)+'…',label:'起点TX',type:'origin',hop:0,isTx:true,txid,amount:totalOut,expanded:true,chain:'btc'});
+  setProg(35);
+
+  for(const i of (d.inputs||[]).slice(0,4)){
+    if(!i.recipient)continue;
+    const db=getLabel(i.recipient);
+    addNode('addr:'+i.recipient,{addr:i.recipient,label:db.label,type:db.type,hop:0,amount:i.value/1e8,expanded:false,chain:'btc'});
+    addEdge('addr:'+i.recipient,rootId,{amount:(i.value/1e8).toFixed(8)+' BTC'});
+  }
+  for(const o of (d.outputs||[]).slice(0,6)){
+    if(!o.recipient)continue;
+    const db=getLabel(o.recipient);
+    addNode('addr:'+o.recipient,{addr:o.recipient,label:db.label,type:db.type,hop:1,amount:o.value/1e8,expanded:false,chain:'btc'});
+    addEdge(rootId,'addr:'+o.recipient,{amount:(o.value/1e8).toFixed(8)+' BTC',txid});
+    log(`ホップ1: ${o.recipient.slice(0,14)}… ${(o.value/1e8).toFixed(4)} BTC${db.label?' → '+db.label:''}`,'ok');
+  }
+  setProg(85);renderGraph();
+}
+
+async function rootETH(hash){
+  $('ringMsg').textContent='ETH TX取得中 (Blockchair)...';
+  const h=hash.startsWith('0x')?hash:'0x'+hash;
+  const d=await ethTx(h);
+  const tx=d.transaction;
+  const rootId='tx:'+h;
+  const val=(tx.value||0)/1e18;
+  addNode(rootId,{addr:h.slice(0,12)+'…',label:'起点TX',type:'origin',hop:0,isTx:true,txid:h,amount:val,expanded:true,chain:'eth'});
+  setProg(35);
+
+  if(tx.sender){
+    const dbF=getLabel(tx.sender);
+    const lF=tx.sender_label||dbF.label||'';
+    addNode('addr:'+tx.sender,{addr:tx.sender,label:lF,type:classify(lF,false).type,hop:0,amount:val,expanded:false,chain:'eth'});
+    addEdge('addr:'+tx.sender,rootId,{amount:val.toFixed(8)+' ETH'});
+  }
+  if(tx.recipient){
+    const dbT=getLabel(tx.recipient);
+    const lT=tx.recipient_label||dbT.label||'';
+    addNode('addr:'+tx.recipient,{addr:tx.recipient,label:lT,type:classify(lT,false).type,hop:1,amount:val,expanded:false,chain:'eth'});
+    addEdge(rootId,'addr:'+tx.recipient,{amount:val.toFixed(8)+' ETH',txid:h});
+    log(`ホップ1: ${tx.recipient.slice(0,14)}… ${val.toFixed(4)} ETH${lT?' → '+lT:''}`,'ok');
+  }
+  setProg(85);renderGraph();
+}
+
+async function rootXRP(txid){
+  $('ringMsg').textContent='XRP TX取得中 (XRPScan)...';
+  const data=await xrpTx(txid);
+  const tx=data.transaction||data;
+  const meta=data.meta||{};
+  const raw=tx.Amount;
+  const amt=typeof raw==='string'?(parseInt(raw)/1e6).toFixed(6):(raw?.value||'?');
+  const rootId='tx:'+txid;
+  addNode(rootId,{addr:txid.slice(0,12)+'…',label:'起点TX',type:'origin',hop:0,isTx:true,txid,amount:parseFloat(amt),expanded:true,chain:'xrp'});
+  setProg(35);
+
+  if(tx.Account){
+    const db=getLabel(tx.Account);
+    addNode('addr:'+tx.Account,{addr:tx.Account,label:db.label,type:db.type,hop:0,amount:parseFloat(amt),expanded:false,chain:'xrp'});
+    addEdge('addr:'+tx.Account,rootId,{amount:amt+' XRP'});
+  }
+  if(tx.Destination){
+    const dtag=tx.DestinationTag!==undefined?`Tag:${tx.DestinationTag}`:'';
+    const db=getLabel(tx.Destination);
+    const lbl=db.label||(dtag)||'';
+    addNode('addr:'+tx.Destination,{addr:tx.Destination,label:lbl,type:db.type!=='unknown'?db.type:(dtag?'wallet':'unknown'),hop:1,amount:parseFloat(amt),expanded:false,chain:'xrp',destTag:tx.DestinationTag});
+    addEdge(rootId,'addr:'+tx.Destination,{amount:amt+' XRP',txid});
+    log(`ホップ1: ${tx.Destination.slice(0,14)}… ${parseFloat(amt).toFixed(4)} XRP${lbl?' → '+lbl:''}`,'ok');
+  }
+  setProg(85);renderGraph();
+}
+
+// ═══════════════════════════════════════════════════
+// Node click
+// ═══════════════════════════════════════════════════
+function onNodeClick(ev,d){
+  selNode=d;
+  d3.selectAll('.gnode').classed('sel',n=>n.id===d.id);
+  stab('node');
+  renderDetail(d);
+}
+
+function renderDetail(d){
+  const {color,label,cls,txt}=resolveNode(d);
+  const merged=label||d.label||'';
+  const chain=d.chain||'btc';
+  const cColor={btc:'var(--btc)',eth:'var(--eth)',xrp:'var(--xrp)'}[chain];
+  const cName={btc:'₿ Bitcoin',eth:'Ξ Ethereum',xrp:'✦ XRP'}[chain];
+  const explorerUrl=d.isTx
+    ?{btc:`https://blockchair.com/bitcoin/transaction/${d.txid||d.addr}`,eth:`https://blockchair.com/ethereum/transaction/${d.txid||d.addr}`,xrp:`https://xrpscan.com/tx/${(d.txid||'').toUpperCase()}`}[chain]
+    :{btc:`https://blockchair.com/bitcoin/address/${d.addr}`,eth:`https://blockchair.com/ethereum/address/${d.addr}`,xrp:`https://xrpscan.com/account/${d.addr}`}[chain];
+
+  $('sbody-node').innerHTML=`
+    <div class="nd-addr" onclick="navigator.clipboard.writeText('${d.addr}').then(()=>this.setAttribute('title','コピーしました！'))" title="クリックでコピー">
+      ${d.addr}
+      <div class="nd-addr-hint">クリックでアドレスをコピー</div>
+    </div>
+    <div class="nd-row"><span class="nd-lbl">チェーン</span><span class="nd-val" style="color:${cColor}">${cName}</span></div>
+    <div class="nd-row"><span class="nd-lbl">種別</span><span class="badge ${cls}">${txt}</span></div>
+    ${merged?`<div class="nd-row"><span class="nd-lbl">ラベル</span><span class="nd-val" style="color:${color}">${merged}</span></div>`:''}
+    <div class="nd-row"><span class="nd-lbl">ホップ</span><span class="nd-val">H${d.hop}</span></div>
+    <div class="nd-row"><span class="nd-lbl">金額</span><span class="nd-val" style="color:${cColor}">${d.amount?d.amount.toFixed(6):'—'}</span></div>
+    ${d.destTag!=null?`<div class="nd-row"><span class="nd-lbl">Dest.Tag</span><span class="nd-val" style="color:var(--acc)">${d.destTag}</span></div>`:''}
+    <div class="nd-row"><span class="nd-lbl">追跡状態</span><span class="nd-val" style="color:${d.expanded?'var(--green)':'var(--text3)'}">${d.expanded?'✓ 展開済み':'未追跡'}</span></div>
+    <div style="margin-top:8px;"><a href="${explorerUrl}" target="_blank" style="font-size:.66rem;">エクスプローラーで確認 ↗</a></div>
+    <div class="divider"></div>
+    ${d.isTx||d.expanded
+      ?`<div style="color:var(--text3);font-size:.71rem;line-height:1.8;">展開済みノードです。<br>送金先アドレスをクリックして追跡してください。</div>`
+      :`<button class="xpand-btn" id="xpandBtn" onclick="fetchHops('${d.id}')">📡 送金履歴を取得</button>`
+    }
+    <div id="hopArea"></div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════
+// Fetch outgoing TXs (BTC / ETH / XRP)
+// ═══════════════════════════════════════════════════
+async function fetchHops(nodeId){
+  const node=nodes.find(n=>n.id===nodeId);
+  if(!node)return;
+  const btn=$('xpandBtn');
+  if(btn){btn.disabled=true;btn.innerHTML='<span style="display:inline-block;animation:spin .7s linear infinite">⟳</span> 取得中...';}
+
+  const chain=node.chain||'btc';
+  const addr=node.addr;
+  log(`${addr.slice(0,14)}… の送金履歴取得中 [${chain.toUpperCase()}]...`);
+  $('loadOv').style.display='flex';
+
+  try{
+    let hops=[];
+
+    if(chain==='btc'){
+      $('ringMsg').textContent='BTC 送金履歴取得中...';
+      const txids=await btcAddrTxList(addr);
+      const limited=txids.slice(0,8);
+      for(const txid of limited){
+        if(typeof txid!=='string')continue;
+        try{
+          const d=await btcTx(txid);
+          const isOut=(d.inputs||[]).some(i=>i.recipient?.toLowerCase()===addr.toLowerCase());
+          if(!isOut)continue;
+          for(const o of (d.outputs||[]).slice(0,5)){
+            if(!o.recipient||o.recipient===addr)continue;
+            const db=getLabel(o.recipient);
+            hops.push({addr:o.recipient,value:(o.value/1e8).toFixed(8),valueNum:o.value/1e8,txid,label:db.label,type:db.type});
+          }
+        }catch(_){}
+        await sleep(120);
+      }
+    }else if(chain==='eth'){
+      $('ringMsg').textContent='ETH 送金履歴取得中 (Blockchair)...';
+      const calls=await ethAddrCalls(addr);
+      hops=calls.slice(0,15).map(c=>{
+        const db=getLabel(c.recipient);
+        const lbl=c.recipient_label||db.label||'';
+        return{addr:c.recipient,value:((c.value||0)/1e18).toFixed(8),valueNum:(c.value||0)/1e18,txid:c.transaction_hash,label:lbl,type:classify(lbl,false).type,time:c.time};
+      });
+    }else{
+      $('ringMsg').textContent='XRP 送金履歴取得中 (XRPScan)...';
+      const txs=await xrpAddrTxs(addr);
+      hops=txs.slice(0,15).map(t=>{
+        const tx=t.tx||t;
+        const raw=tx.Amount;
+        const v=typeof raw==='string'?(parseInt(raw)/1e6).toFixed(6):(raw?.value||'?');
+        const dtag=tx.DestinationTag!==undefined?`Tag:${tx.DestinationTag}`:'';
+        const db=getLabel(tx.Destination);
+        return{addr:tx.Destination,value:v,valueNum:parseFloat(v),txid:tx.hash||t.hash||'',label:db.label||dtag,type:db.type!=='unknown'?db.type:(dtag?'wallet':'unknown'),destTag:tx.DestinationTag};
+      });
+    }
+
+    // Deduplicate
+    const seen=new Set();
+    hops=hops.filter(h=>{if(seen.has(h.addr))return false;seen.add(h.addr);return true;});
+    log(`${hops.length}件の送金先を発見`,'ok');
+
+    hopStore=hops;
+    selHops=new Set();
+    renderHopList(hops,nodeId,chain);
+
+  }catch(e){
+    showErr('送金履歴取得エラー: '+e.message);
+    if(btn){btn.disabled=false;btn.innerHTML='📡 送金履歴を取得';}
+  }finally{
+    $('loadOv').style.display='none';
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// Hop list UI
+// ═══════════════════════════════════════════════════
+function renderHopList(hops,srcId,chain){
+  const unit={btc:'BTC',eth:'ETH',xrp:'XRP'}[chain];
+  const cColor={btc:'var(--btc)',eth:'var(--eth)',xrp:'var(--xrp)'}[chain];
+
+  $('hopArea').innerHTML=`
+    <div class="hop-header">
+      <div class="hop-title">送金先を選択</div>
+      <div class="hop-count">${hops.length}件</div>
+    </div>
+    <div class="hop-list" id="hopList">
+      ${hops.map((h,i)=>{
+        const cl=classify(h.label,false);
+        const already=!!nodes.find(n=>n.id==='addr:'+h.addr);
+        return`<div class="hop-item${already?' added':''}" id="hi-${i}" onclick="toggleHop(${i})">
+          <div class="hi-dot" style="background:${cl.color}"></div>
+          <div class="hi-body">
+            <div class="hi-addr" title="${h.addr}">${h.addr}</div>
+            <div class="hi-meta">
+              ${h.label?`<span class="hi-lbl" style="color:${cl.color}">${h.label}</span>`:''}
+              ${h.txid?`<span>${h.txid.slice(0,10)}…</span>`:''}
+              ${already?'<span style="color:var(--green)">✓追加済</span>':''}
+            </div>
+          </div>
+          <div class="hi-amt" style="color:${cColor}">${h.value} ${unit}</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="hop-footer">
+      <button class="sel-all-btn" onclick="selAll()">全選択</button>
+      <button class="add-btn" id="addBtn" onclick="addHops('${srcId}')" disabled>追加</button>
+      <button class="cancel-btn" onclick="$('hopArea').innerHTML=''">✕</button>
+    </div>
+    <div style="font-size:.6rem;color:var(--text3);text-align:center;margin-top:5px;">追跡したいアドレスを選んで「追加」</div>
+  `;
+
+  // Pre-select added nodes
+  hops.forEach((_,i)=>{
+    if(nodes.find(n=>n.id==='addr:'+hops[i].addr)){selHops.add(i);$('hi-'+i)?.classList.add('sel');}
+  });
+  updAddBtn();
+}
+
+function toggleHop(i){
+  if(selHops.has(i))selHops.delete(i);else selHops.add(i);
+  $('hi-'+i)?.classList.toggle('sel',selHops.has(i));
+  updAddBtn();
+}
+
+function selAll(){
+  hopStore.forEach((_,i)=>{selHops.add(i);$('hi-'+i)?.classList.add('sel');});
+  updAddBtn();
+}
+
+function updAddBtn(){
+  const b=$('addBtn');
+  if(b){b.disabled=selHops.size===0;b.textContent=selHops.size>0?`${selHops.size}件を追加`:'追加';}
+}
+
+async function addHops(srcId){
+  const src=nodes.find(n=>n.id===srcId);
+  if(!src)return;
+  const b=$('addBtn');if(b)b.disabled=true;
+  const chain=src.chain||'btc';
+  const unit={btc:'BTC',eth:'ETH',xrp:'XRP'}[chain];
+
+  for(const i of selHops){
+    const h=hopStore[i];if(!h)continue;
+    const nid='addr:'+h.addr;
+    const db=getLabel(h.addr);
+    const lbl=db.label||h.label||'';
+    if(!nodes.find(n=>n.id===nid)){
+      addNode(nid,{addr:h.addr,label:lbl,type:db.type!=='unknown'?db.type:classify(lbl,false).type,hop:(src.hop||0)+1,amount:h.valueNum||0,expanded:false,chain,destTag:h.destTag});
+      log(`追加: ${h.addr.slice(0,14)}… (${lbl||'不明'}) ${h.value} ${unit}`,'ok');
+    }else{
+      if(lbl)updNode(nid,{label:lbl,type:classify(lbl,false).type});
+    }
+    addEdge(srcId,nid,{amount:`${h.value} ${unit}`,txid:h.txid||''});
+  }
+
+  updNode(srcId,{expanded:true});
+  renderGraph();updateStats();
+  const n=nodes.find(n=>n.id===srcId);
+  if(n)renderDetail(n);
+  log(`${selHops.size}件をグラフに追加しました`,'ok');
+  selHops=new Set();
+}
+
+// ═══════════════════════════════════════════════════
+// D3 Force Graph
+// ═══════════════════════════════════════════════════
+function renderGraph(){
+  const svg=d3.select('#graphSvg');
+  const g=d3.select('#gG');
+  const W=$('graphArea').clientWidth;
+  const H=$('graphArea').clientHeight;
+
+  if(!d3z){
+    d3z=d3.zoom().scaleExtent([.06,6]).on('zoom',e=>g.attr('transform',e.transform));
+    svg.call(d3z);
+    svg.call(d3z.transform,d3.zoomIdentity.translate(W/2,H/2));
+  }
+
+  const ns=nodes.map(d=>({...d}));
+  const es=edges.map(d=>({...d}));
+  const maxA=Math.max(...ns.map(n=>n.amount||0),1);
+  const rS=d3.scaleSqrt().domain([0,maxA]).range([9,28]);
+
+  if(sim)sim.stop();
+  sim=d3.forceSimulation(ns)
+    .force('link',d3.forceLink(es).id(d=>d.id).distance(145).strength(.5))
+    .force('charge',d3.forceManyBody().strength(-360))
+    .force('center',d3.forceCenter(0,0))
+    .force('col',d3.forceCollide().radius(d=>rS(d.amount||0)+16))
+    .alphaDecay(.024);
+
+  // Links
+  const link=g.selectAll('.glink').data(es,d=>(d.source.id||d.source)+'-'+(d.target.id||d.target))
+    .join(
+      en=>en.append('path').attr('class','glink').attr('marker-end','url(#arr)').style('opacity',0).call(e=>e.transition().duration(500).style('opacity',1)),
+      up=>up,
+      ex=>ex.transition().duration(200).style('opacity',0).remove()
+    );
+
+  const llbl=g.selectAll('.glabel').data(es.filter(e=>e.amount),d=>(d.source.id||d.source)+'-l')
+    .join(en=>en.append('text').attr('class','glabel'),up=>up,ex=>ex.remove())
+    .text(d=>d.amount||'');
+
+  // Nodes
+  const node=g.selectAll('.gnode').data(ns,d=>d.id)
+    .join(
+      en=>{
+        const ng=en.append('g').attr('class','gnode')
+          .classed('expandable',d=>!d.expanded&&!d.isTx)
+          .call(d3.drag()
+            .on('start',(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
+            .on('drag', (e,d)=>{d.fx=e.x;d.fy=e.y;})
+            .on('end',  (e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;})
+          )
+          .on('click',onNodeClick);
+
+        // outer glow ring
+        ng.append('circle')
+          .attr('r',0).attr('fill','none')
+          .attr('stroke',d=>nodeColor(d).color)
+          .attr('stroke-opacity',.15).attr('stroke-width',8)
+          .transition().duration(450).attr('r',d=>rS(d.amount||0));
+
+        // main circle
+        ng.append('circle')
+          .attr('r',0)
+          .attr('fill',d=>nodeColor(d).color)
+          .attr('stroke',d=>nodeColor(d).color)
+          .attr('stroke-opacity',.8)
+          .attr('filter',d=>`drop-shadow(0 0 6px ${nodeColor(d).glow})`)
+          .transition().duration(450).attr('r',d=>rS(d.amount||0));
+
+        // dash ring for expandable
+        ng.append('circle')
+          .attr('r',d=>rS(d.amount||0)+5)
+          .attr('fill','none')
+          .attr('stroke',d=>d.expanded?'transparent':'rgba(255,255,255,.08)')
+          .attr('stroke-width',1).attr('stroke-dasharray','4,3');
+
+        ng.append('text').attr('class','hop')
+          .attr('dy',d=>-rS(d.amount||0)-6)
+          .text(d=>d.isTx?'TX':`H${d.hop}`);
+
+        ng.append('text').attr('class','lbl')
+          .attr('dy',d=>rS(d.amount||0)+14)
+          .text(d=>{
+            const db=getLabel(d.addr);
+            const l=db.label||(d.label&&d.label!=='起点TX'?d.label:'');
+            const a=d.addr.length>14?d.addr.slice(0,8)+'…':d.addr;
+            return l||a;
+          });
+        return ng;
+      },
+      up=>{
+        up.classed('expandable',d=>!d.expanded&&!d.isTx);
+        up.select('circle:nth-of-type(2)')
+          .attr('fill',d=>nodeColor(d).color).attr('stroke',d=>nodeColor(d).color)
+          .attr('filter',d=>`drop-shadow(0 0 6px ${nodeColor(d).glow})`);
+        up.select('text.lbl').text(d=>{
+          const db=getLabel(d.addr);
+          const l=db.label||(d.label&&d.label!=='起点TX'?d.label:'');
+          const a=d.addr.length>14?d.addr.slice(0,8)+'…':d.addr;
+          return l||a;
+        });
+        return up;
+      },
+      ex=>ex.transition().duration(200).style('opacity',0).remove()
+    );
+
+  sim.on('tick',()=>{
+    link.attr('d',d=>{
+      if(!d.source.x)return'';
+      const dx=d.target.x-d.source.x,dy=d.target.y-d.source.y;
+      const dr=Math.sqrt(dx*dx+dy*dy)*1.45;
+      return`M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+    });
+    llbl.attr('x',d=>((d.source.x||0)+(d.target.x||0))/2).attr('y',d=>((d.source.y||0)+(d.target.y||0))/2-9);
+    node.attr('transform',d=>`translate(${d.x||0},${d.y||0})`);
+  });
+}
+
+// ═══════════════════════════════════════════════════
+// Gemini AI
+// ═══════════════════════════════════════════════════
+async function runGemini(key,chain,txid){
+  stab('ai');
+  $('aiCt').innerHTML=`
+    <div class="ai-header">
+      <div class="ai-icon">✦</div>
+      <div class="ai-title">AI分析中...</div>
+    </div>
+    <div class="ai-body" id="aiTxt" style="color:var(--text3)">Gemini AI が分析しています...</div>
+  `;
+  const chainName={btc:'Bitcoin',eth:'Ethereum',xrp:'XRP'}[chain];
+  const summary=nodes.slice(0,20).map(n=>{
+    const db=getLabel(n.addr);
+    return`  H${n.hop}|${n.addr}|${db.label||n.label||'不明'}|${n.amount||0}`;
+  }).join('\n');
+
+  const prompt=`あなたはブロックチェーンフォレンジックの専門家AIです。以下の${chainName}トランザクション追跡データを分析し、日本語で報告してください。
+
+起点TXID: ${txid}
+チェーン: ${chain.toUpperCase()}
+総ノード: ${nodes.length} / 総エッジ: ${edges.length}
+
+ノード一覧:
+${summary}
+
+以下を分析してください：
+1. **資金フローの概要** — どこからどこへいくら
+2. **取引所・エンティティの特定** — ラベルから判明する取引所や組織
+3. **リスク評価** — 低／中／高（最後に必ず「リスク: 低/中/高」と明記）
+4. **疑わしいパターン** — 分散・混合・大口などの特徴
+5. **追跡推奨** — 次に調査すべきアドレスや方向性
+
+箇条書きで300〜430字。`;
+
+  try{
+    const r=await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${key}`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:.2,maxOutputTokens:900}})
+    });
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.error?.message||'Gemini error');
+    const txt=j.candidates?.[0]?.content?.parts?.[0]?.text||'（応答なし）';
+    $('aiCt').innerHTML=`
+      <div class="ai-header"><div class="ai-icon">✦</div><div class="ai-title">Gemini AI 分析</div></div>
+      <div class="ai-body">${txt}</div>
+    `;
+  }catch(e){
+    $('aiCt').innerHTML=`<div class="ai-body" style="color:var(--red)">⚠️ AI分析エラー: ${e.message}</div>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// Export
+// ═══════════════════════════════════════════════════
+function showExportMenu(){
+  $('exportModal').style.display='flex';
+}
+function hideExport(){
+  $('exportModal').style.display='none';
+}
+
+function exportCSV(){
+  if(!nodes.length){showErr('追跡データがありません');return;}
+  const headers=['ID','アドレス','ラベル','種別','ホップ','金額','チェーン','展開済み','TXリンク'];
+  const rows=nodes.map(n=>{
+    const db=getLabel(n.addr);
+    const lbl=db.label||n.label||'';
+    const cl=classify(lbl,n.isContract);
+    const explorerUrl=n.isTx
+      ?{btc:`https://blockchair.com/bitcoin/transaction/${n.txid||n.addr}`,eth:`https://blockchair.com/ethereum/transaction/${n.txid||n.addr}`,xrp:`https://xrpscan.com/tx/${(n.txid||'').toUpperCase()}`}[n.chain||'btc']
+      :{btc:`https://blockchair.com/bitcoin/address/${n.addr}`,eth:`https://blockchair.com/ethereum/address/${n.addr}`,xrp:`https://xrpscan.com/account/${n.addr}`}[n.chain||'btc'];
+    return [n.id,n.addr,lbl,cl.txt,n.hop,n.amount||0,n.chain||'',n.expanded?'Yes':'No',explorerUrl].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',');
+  });
+  const csv='\uFEFF'+[headers.join(','),...rows].join('\n');
+  dl('chaintrace_report.csv',csv,'text/csv;charset=utf-8;');
+  hideExport();
+  log('CSV出力完了','ok');
+}
+
+function exportJSON(){
+  if(!nodes.length){showErr('追跡データがありません');return;}
+  const data={
+    exportTime:new Date().toISOString(),
+    summary:{nodes:nodes.length,edges:edges.length,maxHop:Math.max(...nodes.map(n=>n.hop||0))},
+    nodes:nodes.map(n=>{const db=getLabel(n.addr);return{...n,resolvedLabel:db.label||n.label||''};}),
+    edges:edges.map(e=>({source:e.source?.id||e.source,target:e.target?.id||e.target,amount:e.amount,txid:e.txid}))
+  };
+  dl('chaintrace_graph.json',JSON.stringify(data,null,2),'application/json');
+  hideExport();
+  log('JSON出力完了','ok');
+}
+
+function exportPDF(){
+  if(!nodes.length){showErr('追跡データがありません');return;}
+  const now=new Date().toLocaleString('ja');
+  const maxHop=Math.max(...nodes.map(n=>n.hop||0));
+  const rows=nodes.map(n=>{
+    const db=getLabel(n.addr);
+    const lbl=db.label||n.label||'';
+    const cl=classify(lbl,n.isContract);
+    const color={flagged:'#f87171',exchange:'#34d399',wallet:'#fb923c',defi:'#a78bfa',unknown:'#8c9eff',origin:'#4f9cf9'}[cl.type]||'#8c9eff';
+    return`<tr>
+      <td style="font-family:monospace;font-size:11px;word-break:break-all;">${n.addr}</td>
+      <td><span style="background:${color}22;color:${color};padding:2px 8px;border-radius:4px;font-size:11px;">${lbl||'—'}</span></td>
+      <td style="text-align:center;">${n.hop}</td>
+      <td style="font-family:monospace;font-size:11px;">${n.amount?n.amount.toFixed(6):'—'}</td>
+      <td style="text-align:center;color:${n.expanded?'#34d399':'#94a3b8'}">${n.expanded?'✓':'—'}</td>
+    </tr>`;
+  }).join('');
+
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>ChainTrace レポート</title>
+  <style>
+    body{font-family:'Helvetica Neue',sans-serif;background:#0a0c10;color:#e2e8f0;margin:0;padding:24px;}
+    .header{border-bottom:2px solid #252d3d;padding-bottom:16px;margin-bottom:20px;}
+    h1{font-size:1.4rem;color:#4f9cf9;margin:0 0 6px;}
+    .meta{font-size:.75rem;color:#64748b;}
+    .stats{display:flex;gap:24px;margin:16px 0;padding:14px;background:#111318;border-radius:8px;}
+    .stat{text-align:center;} .sv{font-size:1.3rem;font-weight:700;color:#4f9cf9;font-family:monospace;} .sl{font-size:.65rem;color:#64748b;text-transform:uppercase;}
+    table{width:100%;border-collapse:collapse;font-size:.75rem;margin-top:16px;}
+    th{background:#181c24;padding:8px 12px;text-align:left;color:#64748b;font-size:.65rem;text-transform:uppercase;letter-spacing:.5px;}
+    td{padding:7px 12px;border-bottom:1px solid #1e2330;vertical-align:middle;}
+    tr:nth-child(even) td{background:#0d1018;}
+    .footer{margin-top:24px;font-size:.65rem;color:#475569;text-align:center;}
+  </style></head><body>
+  <div class="header">
+    <h1>⬡ ChainTrace 追跡レポート</h1>
+    <div class="meta">出力日時: ${now}</div>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="sv">${nodes.length}</div><div class="sl">ノード数</div></div>
+    <div class="stat"><div class="sv">${edges.length}</div><div class="sl">エッジ数</div></div>
+    <div class="stat"><div class="sv">${maxHop}</div><div class="sl">最大ホップ</div></div>
+  </div>
+  <table><thead><tr><th>アドレス</th><th>ラベル / 取引所</th><th>Hop</th><th>金額</th><th>追跡</th></tr></thead>
+  <tbody>${rows}</tbody></table>
+  <div class="footer">ChainTrace — Powered by Blockchair API &amp; XRPScan API</div>
+  </body></html>`;
+
+  const w=window.open('','_blank');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(()=>w.print(),600);
+  hideExport();
+  log('PDFレポートを印刷ダイアログで開きました','ok');
+}
+
+function dl(name,content,mime){
+  const b=new Blob([content],{type:mime});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(b);a.download=name;a.click();
+}
+
+// ═══════════════════════════════════════════════════
+// Zoom
+// ═══════════════════════════════════════════════════
+function doZoom(f){if(!d3z)return;d3.select('#graphSvg').transition().duration(260).call(d3z.scaleBy,f);}
+function resetZoom(){
+  if(!d3z)return;
+  const W=$('graphArea').clientWidth,H=$('graphArea').clientHeight;
+  d3.select('#graphSvg').transition().duration(360).call(d3z.transform,d3.zoomIdentity.translate(W/2,H/2).scale(1));
+}
+</script>
+</body>
+</html>
