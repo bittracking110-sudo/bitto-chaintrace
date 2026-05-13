@@ -105,6 +105,100 @@ function detectChain(input) {
   return null;
 }
 
+// ══ マルチホップ追跡 ══════════════════════════════════════════
+
+// 指定アドレスの送金後TXを取得（最大5件）
+async function getNextTxBTC(addr, afterTime) {
+  try {
+    const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    const txHashes = j.data?.[addr]?.transactions || [];
+    const refMs = new Date(afterTime).getTime();
+    // 各TXを取得して送信TX（inputにaddrを含む）かつafterTime以降を探す
+    for (const txHash of txHashes.slice(0, 8)) {
+      await new Promise(res => setTimeout(res, 200)); // レート制限対策
+      try {
+        const tr = await fetch(`https://api.blockchair.com/bitcoin/dashboards/transaction/${txHash}?key=${BLOCKCHAIR_KEY}`);
+        const tj = await tr.json();
+        const tdata = tj.data?.[txHash];
+        if (!tdata) continue;
+        const inputs = tdata.inputs || [];
+        const outputs = tdata.outputs || [];
+        const isOutgoing = inputs.some(i => i.recipient === addr);
+        if (!isOutgoing) continue;
+        const txMs = new Date(tdata.transaction.time).getTime();
+        if (txMs < refMs - 1000) continue; // 1秒の余裕
+        // 最大金額の送金先を返す
+        const target = outputs.filter(o => o.recipient !== addr)
+          .sort((a, b) => b.value - a.value)[0];
+        if (!target) continue;
+        return { addr: target.recipient, amount: target.value / 1e8, time: tdata.transaction.time, txHash };
+      } catch { continue; }
+    }
+  } catch (e) { console.error('getNextTxBTC:', e.message); }
+  return null;
+}
+
+async function getNextTxETH(addr, afterTime) {
+  try {
+    const refMs = new Date(afterTime).getTime();
+    const afterBlock = Math.floor(refMs / 1000); // unix timestamp
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=10&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    const txs = j.result || [];
+    for (const tx of txs) {
+      if (parseInt(tx.timeStamp) * 1000 < refMs - 1000) continue;
+      if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
+      const db = getLabel(tx.to);
+      return { addr: tx.to, amount: parseFloat(tx.value) / 1e18, time: new Date(parseInt(tx.timeStamp) * 1000).toISOString(), txHash: tx.hash, label: db.label || tx.to };
+    }
+  } catch (e) { console.error('getNextTxETH:', e.message); }
+  return null;
+}
+
+async function getNextTxXRP(addr, afterTime) {
+  try {
+    const r = await fetch(`https://api.xrpscan.com/api/v1/account/${addr}/transactions`);
+    const j = await r.json();
+    const txs = (j.transactions || j || []);
+    const refMs = new Date(afterTime).getTime();
+    for (const tx of txs) {
+      if (tx.Account !== addr) continue;
+      const txMs = new Date(tx.date).getTime();
+      if (txMs < refMs - 1000) continue;
+      const db = getLabel(tx.Destination);
+      return { addr: tx.Destination, amount: parseFloat(tx.Amount) / 1e6, time: tx.date, txHash: tx.hash, label: db.label || '' };
+    }
+  } catch (e) { console.error('getNextTxXRP:', e.message); }
+  return null;
+}
+
+// 起点TX後の送金経路を最大maxHopsホップ追跡
+async function traceHops(startAddr, startTime, chain, maxHops = 3) {
+  const hops = [];
+  let currentAddr = startAddr;
+  let currentTime = startTime;
+
+  for (let i = 0; i < maxHops; i++) {
+    let next = null;
+    if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime);
+    else if (chain === 'eth') next = await getNextTxETH(currentAddr, currentTime);
+    else if (chain === 'xrp') next = await getNextTxXRP(currentAddr, currentTime);
+    if (!next) break;
+
+    const db  = getLabel(next.addr);
+    const lbl = db.label || next.label || '';
+    const isEx = db.type === 'exchange' || isExchange(lbl);
+    hops.push({ address: next.addr, label: lbl, amount: next.amount, isExchange: isEx, time: next.time, txHash: next.txHash });
+    if (isEx) break;
+    currentAddr = next.addr;
+    currentTime = next.time;
+  }
+  return hops;
+}
+
 // ══ ブロックチェーン調査 ══════════════════════════════════════
 
 async function investigateBTC(txid) {
@@ -132,6 +226,16 @@ async function investigateBTC(txid) {
     const isEx = db.type === 'exchange' || isExchange(lbl);
     path.push({ address: out.recipient, label: lbl, amount: out.value / 1e8, isExchange: isEx });
     if (isEx) exchanges.push({ name: lbl, address: out.recipient, amount: out.value / 1e8 });
+  }
+
+  // 取引所未検出 → 追加ホップ追跡（最大3ホップ）
+  if (exchanges.length === 0 && path.length > 0) {
+    const trackAddr = path[0].address;
+    const hops = await traceHops(trackAddr, tx.time, 'btc', 3);
+    for (const hop of hops) {
+      path.push(hop);
+      if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
+    }
   }
 
   return {
@@ -175,6 +279,15 @@ async function investigateETH(hash) {
     }
   }
 
+  // 取引所未検出 → 追加ホップ追跡（最大3ホップ）
+  if (exchanges.length === 0) {
+    const hops = await traceHops(tx.recipient, tx.time, 'eth', 3);
+    for (const hop of hops) {
+      path.push(hop);
+      if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
+    }
+  }
+
   return {
     chain: 'ETH', txid: h,
     blockTime: tx.time, blockHeight: tx.block_id,
@@ -201,6 +314,15 @@ async function investigateXRP(txid) {
     { address: tx.Destination, label: destLbl, role: 'recipient', isExchange: isDestEx },
   ];
   const exchanges = isDestEx ? [{ name: destLbl, address: tx.Destination, amount: parseFloat(tx.Amount) / 1e6 }] : [];
+
+  // 取引所未検出 → 追加ホップ追跡（最大3ホップ）
+  if (exchanges.length === 0) {
+    const hops = await traceHops(tx.Destination, tx.date, 'xrp', 3);
+    for (const hop of hops) {
+      path.push(hop);
+      if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
+    }
+  }
 
   return {
     chain: 'XRP', txid: h,
@@ -235,8 +357,9 @@ function buildReport(result) {
     const addrShort = p.address.slice(0, 10) + '...' + p.address.slice(-6);
     const lbl = p.label ? ` [${p.label}]` : '';
     if (i === 0)       return `🔴 被害者ウォレット\n   ${addrShort}${lbl}`;
-    if (p.isExchange)  return `🏦 取引所到達\n   ${addrShort}${lbl}`;
-    return              `🔵 中継アドレス\n   ${addrShort}${lbl}`;
+    if (p.isExchange)  return `🏦 取引所到達（${i}次先）\n   ${addrShort}${lbl}`;
+    const timeStr = p.time ? `\n   📅 ${fmtDate(p.time)}` : '';
+    return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}`;
   });
   const pathText = pathLines.join('\n　↓\n');
 
