@@ -107,29 +107,32 @@ function detectChain(input) {
 
 // ══ マルチホップ追跡 ══════════════════════════════════════════
 
-// 指定アドレスの送金後TXを取得（最大5件）
+// 指定アドレスの送金後TXを取得（最大8件チェック）
 async function getNextTxBTC(addr, afterTime) {
   try {
     const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
     const txHashes = j.data?.[addr]?.transactions || [];
-    const refMs = new Date(afterTime).getTime();
-    // 各TXを取得して送信TX（inputにaddrを含む）かつafterTime以降を探す
+    const normalizedTime = typeof afterTime === 'string'
+      ? afterTime.replace(' ', 'T') + 'Z'
+      : afterTime;
+    const refMs = new Date(normalizedTime).getTime();
+
     for (const txHash of txHashes.slice(0, 8)) {
-      await new Promise(res => setTimeout(res, 200)); // レート制限対策
+      await new Promise(res => setTimeout(res, 250)); // レート制限対策
       try {
         const tr = await fetch(`https://api.blockchair.com/bitcoin/dashboards/transaction/${txHash}?key=${BLOCKCHAIR_KEY}`);
         const tj = await tr.json();
         const tdata = tj.data?.[txHash];
         if (!tdata) continue;
-        const inputs = tdata.inputs || [];
+        const inputs  = tdata.inputs  || [];
         const outputs = tdata.outputs || [];
         const isOutgoing = inputs.some(i => i.recipient === addr);
         if (!isOutgoing) continue;
-        const txMs = new Date(tdata.transaction.time).getTime();
-        if (txMs < refMs - 1000) continue; // 1秒の余裕
-        // 最大金額の送金先を返す
+        const txNorm = tdata.transaction.time.replace(' ', 'T') + 'Z';
+        const txMs = new Date(txNorm).getTime();
+        if (txMs < refMs - 3600000) continue; // 1時間の余裕
         const target = outputs.filter(o => o.recipient !== addr)
           .sort((a, b) => b.value - a.value)[0];
         if (!target) continue;
@@ -142,18 +145,36 @@ async function getNextTxBTC(addr, afterTime) {
 
 async function getNextTxETH(addr, afterTime) {
   try {
-    const refMs = new Date(afterTime).getTime();
-    const afterBlock = Math.floor(refMs / 1000); // unix timestamp
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=10&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    // Blockchair の時刻 "2025-06-02 03:02:11" → UTC として正しくパース
+    const normalizedTime = typeof afterTime === 'string'
+      ? afterTime.replace(' ', 'T') + 'Z'
+      : afterTime;
+    const refMs = new Date(normalizedTime).getTime();
+
+    // 最新20件を降順で取得（直近のTXを効率的に取得）
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=20&sort=desc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
-    const txs = j.result || [];
-    for (const tx of txs) {
-      if (parseInt(tx.timeStamp) * 1000 < refMs - 1000) continue;
-      if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
-      const db = getLabel(tx.to);
-      return { addr: tx.to, amount: parseFloat(tx.value) / 1e18, time: new Date(parseInt(tx.timeStamp) * 1000).toISOString(), txHash: tx.hash, label: db.label || tx.to };
-    }
+    const txs = (j.result || []).filter(tx =>
+      tx.from.toLowerCase() === addr.toLowerCase() &&     // 送信TXのみ
+      parseInt(tx.timeStamp) * 1000 >= refMs - 3600000   // ref時刻から±1時間以内
+    );
+    if (txs.length === 0) return null;
+
+    // ref時刻に最も近いTXを選択
+    txs.sort((a, b) =>
+      Math.abs(parseInt(a.timeStamp) * 1000 - refMs) -
+      Math.abs(parseInt(b.timeStamp) * 1000 - refMs)
+    );
+    const tx = txs[0];
+    const db = getLabel(tx.to);
+    return {
+      addr:   tx.to,
+      amount: parseFloat(tx.value) / 1e18,
+      time:   new Date(parseInt(tx.timeStamp) * 1000).toISOString(),
+      txHash: tx.hash,
+      label:  db.label || '',
+    };
   } catch (e) { console.error('getNextTxETH:', e.message); }
   return null;
 }
