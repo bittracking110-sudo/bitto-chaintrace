@@ -162,36 +162,54 @@ async function getNextTxBTC(addr, afterTime) {
 
 async function getNextTxETH(addr, afterTime) {
   try {
-    // Blockchair の時刻 "2025-06-02 03:02:11" → UTC として正しくパース
+    // 時刻パース（Blockchair形式 "2025-06-02 03:02:11" → UTC）
     const normalizedTime = typeof afterTime === 'string'
       ? afterTime.replace(' ', 'T') + 'Z'
       : afterTime;
     const refMs = new Date(normalizedTime).getTime();
 
-    // 最新20件を降順で取得（直近のTXを効率的に取得）
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=20&sort=desc&apikey=${ETHERSCAN_KEY}`;
+    // 全TX昇順で取得 → ref時刻以降の最初の送信TXを探す
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=50&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
-    const txs = (j.result || []).filter(tx =>
-      tx.from.toLowerCase() === addr.toLowerCase() &&     // 送信TXのみ
-      parseInt(tx.timeStamp) * 1000 >= refMs - 3600000   // ref時刻から±1時間以内
-    );
-    if (txs.length === 0) return null;
+    const txs = j.result || [];
 
-    // ref時刻に最も近いTXを選択
-    txs.sort((a, b) =>
-      Math.abs(parseInt(a.timeStamp) * 1000 - refMs) -
-      Math.abs(parseInt(b.timeStamp) * 1000 - refMs)
-    );
-    const tx = txs[0];
-    const db = getLabel(tx.to);
-    return {
-      addr:   tx.to,
-      amount: parseFloat(tx.value) / 1e18,
-      time:   new Date(parseInt(tx.timeStamp) * 1000).toISOString(),
-      txHash: tx.hash,
-      label:  db.label || '',
-    };
+    for (const tx of txs) {
+      const txMs = parseInt(tx.timeStamp) * 1000;
+      if (txMs < refMs) continue;                                    // ref時刻より前はスキップ
+      if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;    // 送信のみ
+      if (tx.isError === '1') continue;                              // 失敗TXはスキップ
+      const db = getLabel(tx.to);
+      return {
+        addr:   tx.to,
+        amount: parseFloat(tx.value) / 1e18,
+        time:   new Date(txMs).toISOString(),
+        txHash: tx.hash,
+        label:  db.label || '',
+      };
+    }
+
+    // ETH送金が見つからない場合 → ERC-20（USDT/USDC等）も確認
+    const erc20url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=20&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const er = await fetch(erc20url);
+    const ej = await er.json();
+    const etxs = ej.result || [];
+    for (const tx of etxs) {
+      const txMs = parseInt(tx.timeStamp) * 1000;
+      if (txMs < refMs) continue;
+      if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
+      const db = getLabel(tx.to);
+      const symbol = tx.tokenSymbol || 'TOKEN';
+      const decimals = parseInt(tx.tokenDecimal) || 18;
+      return {
+        addr:   tx.to,
+        amount: parseFloat(tx.value) / Math.pow(10, decimals),
+        time:   new Date(txMs).toISOString(),
+        txHash: tx.hash,
+        label:  db.label || '',
+        token:  symbol,
+      };
+    }
   } catch (e) { console.error('getNextTxETH:', e.message); }
   return null;
 }
@@ -395,9 +413,10 @@ function buildReport(result) {
     const addrShort = p.address.slice(0, 10) + '...' + p.address.slice(-6);
     const lbl = p.label ? ` [${p.label}]` : '';
     if (i === 0)       return `🔴 被害者ウォレット\n   ${addrShort}${lbl}`;
-    if (p.isExchange)  return `🏦 取引所到達（${i}次先）\n   ${addrShort}${lbl}`;
-    const timeStr = p.time ? `\n   📅 ${fmtDate(p.time)}` : '';
-    return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}`;
+    const timeStr   = p.time   ? `\n   📅 ${fmtDate(p.time)}` : '';
+    const amountStr = p.amount ? `\n   💰 ${p.amount.toFixed(6)} ${p.token || result.chain}` : '';
+    if (p.isExchange) return `🏦 取引所到達（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}`;
+    return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}`;
   });
   const pathText = pathLines.join('\n　↓\n');
 
