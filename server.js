@@ -124,6 +124,17 @@ function detectChain(input) {
 
 // ══ マルチホップ追跡 ══════════════════════════════════════════
 
+// 時刻文字列を安全にISO形式へ正規化（末尾Zの重複を防ぐ）
+function normalizeTimeStr(t) {
+  if (!t) return t;
+  if (typeof t === 'string') {
+    // "2025-06-02 03:02:11" → "2025-06-02T03:02:11Z"
+    // "2025-06-02T03:02:11Z" → そのまま（Zを剥がしてから付け直す）
+    return t.replace(' ', 'T').replace(/Z+$/, '') + 'Z';
+  }
+  return t;
+}
+
 // 指定アドレスの送金後TXを取得（最大8件チェック）
 async function getNextTxBTC(addr, afterTime) {
   try {
@@ -131,9 +142,7 @@ async function getNextTxBTC(addr, afterTime) {
     const r = await fetch(url);
     const j = await r.json();
     const txHashes = j.data?.[addr]?.transactions || [];
-    const normalizedTime = typeof afterTime === 'string'
-      ? afterTime.replace(' ', 'T') + 'Z'
-      : afterTime;
+    const normalizedTime = normalizeTimeStr(afterTime);
     const refMs = new Date(normalizedTime).getTime();
 
     for (const txHash of txHashes.slice(0, 8)) {
@@ -161,10 +170,9 @@ async function getNextTxBTC(addr, afterTime) {
 }
 
 async function getNextTxETH(addr, afterTime) {
-  const normalizedTime = typeof afterTime === 'string'
-    ? afterTime.replace(' ', 'T') + 'Z' : afterTime;
+  const normalizedTime = normalizeTimeStr(afterTime);
   const refMs = new Date(normalizedTime).getTime();
-  console.log(`[HOP] ETH追跡: ${addr} / 基準時刻: ${new Date(refMs).toISOString()}`);
+  console.log(`[HOP] ETH追跡: ${addr} / 基準時刻: ${isNaN(refMs) ? '(不明)' : new Date(refMs).toISOString()}`);
 
   // ── Method 1: Etherscan 通常TX ──────────────────────────
   try {
@@ -440,7 +448,8 @@ function buildReport(result) {
     const lbl = p.label ? ` [${p.label}]` : '';
     if (i === 0)       return `🔴 被害者ウォレット\n   ${addrShort}${lbl}`;
     const timeStr   = p.time   ? `\n   📅 ${fmtDate(p.time)}` : '';
-    const amountStr = p.amount ? `\n   💰 ${p.amount.toFixed(6)} ${p.token || result.chain}` : '';
+    const amountStr = (p.amount != null && !isNaN(p.amount) && p.amount > 0)
+      ? `\n   💰 ${p.amount.toFixed(6)} ${p.token || result.chain}` : '';
     if (p.isExchange) return `🏦 取引所到達（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}`;
     return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}`;
   });
@@ -457,7 +466,7 @@ function buildReport(result) {
 ━━━━━━━━━━━━━━━━━
 取引所名：${ex.name || '特定済み'}
 アドレス：${ex.address.slice(0, 12)}...${ex.address.slice(-6)}
-着金額　：${ex.amount ? ex.amount.toFixed(8) : '不明'} ${result.chain}`;
+着金額　：${(ex.amount != null && !isNaN(ex.amount)) ? ex.amount.toFixed(8) : '不明'} ${result.chain}`;
 
     tplSection = `
 
@@ -476,7 +485,7 @@ ${result.txid}
 
 ■ チェーン：${result.chain}
 ■ 送金日時（JST）：${fmtDate(result.blockTime)}
-■ 送金額：${result.amount ? result.amount.toFixed(8) : '不明'} ${result.chain}
+■ 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}
 ■ 着金アドレス：${ex.address}
 
 上記は詐欺被害に起因する不正送金の疑いがあります。
@@ -499,7 +508,7 @@ ${result.txid}
 ${em} チェーン：${result.chain}
 🔗 TXID：${txShort}
 📅 送金日時：${fmtDate(result.blockTime)}
-💰 送金額：${result.amount ? result.amount.toFixed(8) : '不明'} ${result.chain}${result.fee ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}
+💰 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}
 
 📍 送金経路
 ━━━━━━━━━━━━━━━━━
