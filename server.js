@@ -161,56 +161,72 @@ async function getNextTxBTC(addr, afterTime) {
 }
 
 async function getNextTxETH(addr, afterTime) {
-  try {
-    // 時刻パース（Blockchair形式 "2025-06-02 03:02:11" → UTC）
-    const normalizedTime = typeof afterTime === 'string'
-      ? afterTime.replace(' ', 'T') + 'Z'
-      : afterTime;
-    const refMs = new Date(normalizedTime).getTime();
+  const normalizedTime = typeof afterTime === 'string'
+    ? afterTime.replace(' ', 'T') + 'Z' : afterTime;
+  const refMs = new Date(normalizedTime).getTime();
+  console.log(`[HOP] ETH追跡: ${addr} / 基準時刻: ${new Date(refMs).toISOString()}`);
 
-    // 全TX昇順で取得 → ref時刻以降の最初の送信TXを探す
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=50&sort=asc&apikey=${ETHERSCAN_KEY}`;
+  // ── Method 1: Etherscan 通常TX ──────────────────────────
+  try {
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=100&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
-    const txs = j.result || [];
-
+    const txs = Array.isArray(j.result) ? j.result : [];
+    console.log(`[HOP] Etherscan TX件数: ${txs.length}, status: ${j.status}, msg: ${j.message}`);
     for (const tx of txs) {
       const txMs = parseInt(tx.timeStamp) * 1000;
-      if (txMs < refMs) continue;                                    // ref時刻より前はスキップ
-      if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;    // 送信のみ
-      if (tx.isError === '1') continue;                              // 失敗TXはスキップ
+      if (txMs < refMs) continue;
+      if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
+      if (tx.isError === '1') continue;
       const db = getLabel(tx.to);
-      return {
-        addr:   tx.to,
-        amount: parseFloat(tx.value) / 1e18,
-        time:   new Date(txMs).toISOString(),
-        txHash: tx.hash,
-        label:  db.label || '',
-      };
+      console.log(`[HOP] ETH送金先発見: ${tx.to} (${db.label || 'unknown'})`);
+      return { addr: tx.to, amount: parseFloat(tx.value)/1e18, time: new Date(txMs).toISOString(), txHash: tx.hash, label: db.label||'' };
     }
+  } catch(e) { console.error('[HOP] Etherscan ETH error:', e.message); }
 
-    // ETH送金が見つからない場合 → ERC-20（USDT/USDC等）も確認
-    const erc20url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=20&sort=asc&apikey=${ETHERSCAN_KEY}`;
-    const er = await fetch(erc20url);
-    const ej = await er.json();
-    const etxs = ej.result || [];
-    for (const tx of etxs) {
+  // ── Method 2: Etherscan ERC-20（USDT/USDC等）──────────
+  try {
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=50&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    const txs = Array.isArray(j.result) ? j.result : [];
+    console.log(`[HOP] Etherscan ERC20件数: ${txs.length}`);
+    for (const tx of txs) {
       const txMs = parseInt(tx.timeStamp) * 1000;
       if (txMs < refMs) continue;
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       const db = getLabel(tx.to);
-      const symbol = tx.tokenSymbol || 'TOKEN';
-      const decimals = parseInt(tx.tokenDecimal) || 18;
-      return {
-        addr:   tx.to,
-        amount: parseFloat(tx.value) / Math.pow(10, decimals),
-        time:   new Date(txMs).toISOString(),
-        txHash: tx.hash,
-        label:  db.label || '',
-        token:  symbol,
-      };
+      const dec = parseInt(tx.tokenDecimal) || 18;
+      console.log(`[HOP] ERC20送金先発見: ${tx.to} token:${tx.tokenSymbol}`);
+      return { addr: tx.to, amount: parseFloat(tx.value)/Math.pow(10,dec), time: new Date(txMs).toISOString(), txHash: tx.hash, label: db.label||'', token: tx.tokenSymbol };
     }
-  } catch (e) { console.error('getNextTxETH:', e.message); }
+  } catch(e) { console.error('[HOP] Etherscan ERC20 error:', e.message); }
+
+  // ── Method 3: Blockchair（フォールバック）──────────────
+  try {
+    const url = `https://api.blockchair.com/ethereum/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}&limit=10`;
+    const r = await fetch(url);
+    const j = await r.json();
+    const txHashes = j.data?.[addr.toLowerCase()]?.transactions || [];
+    console.log(`[HOP] Blockchair TX件数: ${txHashes.length}`);
+    for (const txHash of txHashes.slice(0, 8)) {
+      await new Promise(res => setTimeout(res, 300));
+      const tr = await fetch(`https://api.blockchair.com/ethereum/dashboards/transaction/${txHash}?key=${BLOCKCHAIR_KEY}`);
+      const tj = await tr.json();
+      const txData = tj.data?.[txHash.toLowerCase()];
+      if (!txData) continue;
+      const tx = txData.transaction;
+      if (tx.sender?.toLowerCase() !== addr.toLowerCase()) continue;
+      const txNorm = tx.time.replace(' ', 'T') + 'Z';
+      if (new Date(txNorm).getTime() < refMs) continue;
+      const db  = getLabel(tx.recipient);
+      const lbl = db.label || tx.recipient_label || '';
+      console.log(`[HOP] Blockchair送金先発見: ${tx.recipient} (${lbl})`);
+      return { addr: tx.recipient, amount: parseFloat(tx.value)/1e18, time: tx.time, txHash, label: lbl };
+    }
+  } catch(e) { console.error('[HOP] Blockchair ETH error:', e.message); }
+
+  console.log(`[HOP] ${addr} → 次のTXが見つかりませんでした`);
   return null;
 }
 
