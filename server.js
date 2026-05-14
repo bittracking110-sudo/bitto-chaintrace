@@ -417,7 +417,17 @@ async function investigate(txid, chain) {
 
 function fmtDate(d) {
   if (!d) return '不明';
-  return new Date(d).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  try {
+    // Blockchair形式 "2025-06-02 03:02:11" → "2025-06-02T03:02:11Z"
+    const s = typeof d === 'string'
+      ? d.replace(' ', 'T').replace(/Z?$/, 'Z').replace('ZZ', 'Z')
+      : d;
+    const dt = new Date(s);
+    if (isNaN(dt.getTime())) return '不明';
+    return dt.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  } catch (e) {
+    return '不明';
+  }
 }
 
 function buildReport(result) {
