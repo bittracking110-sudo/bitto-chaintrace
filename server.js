@@ -796,6 +796,9 @@ app.post('/api/ai/analyze', express.json(), async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// /apply → apply.html（クエリパラメータ付きでも対応）
+app.get('/apply', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'apply.html')));
+
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.listen(PORT, () => {
