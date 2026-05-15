@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BitTo 詳細レポート申し込み</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0a0c10;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      padding: 24px 16px 60px;
+    }
+
+    .container { max-width: 560px; margin: 0 auto; }
+
+    /* ヘッダー */
+    .header { text-align: center; margin-bottom: 32px; }
+    .header .logo { font-size: 2rem; margin-bottom: 8px; }
+    .header h1 { font-size: 1.4rem; color: #f1f5f9; font-weight: 700; }
+    .header p  { color: #64748b; font-size: 0.9rem; margin-top: 6px; }
+
+    /* カード */
+    .card {
+      background: #111318;
+      border: 1px solid #1e293b;
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    .card h2 {
+      font-size: 1rem;
+      color: #94a3b8;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #1e293b;
+    }
+
+    /* フォームフィールド */
+    .field { margin-bottom: 16px; }
+    .field label {
+      display: block;
+      font-size: 0.85rem;
+      color: #94a3b8;
+      margin-bottom: 6px;
+    }
+    .field label .req {
+      color: #f87171;
+      margin-left: 4px;
+      font-size: 0.75rem;
+    }
+    .field input,
+    .field select {
+      width: 100%;
+      background: #0f1117;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 12px 14px;
+      color: #e2e8f0;
+      font-size: 1rem;
+      outline: none;
+      transition: border-color 0.2s;
+      appearance: none;
+    }
+    .field input:focus,
+    .field select:focus { border-color: #3b82f6; }
+    .field input::placeholder { color: #334155; }
+
+    /* TXID件数セレクタ */
+    .count-selector {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .count-btn {
+      background: #0f1117;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 12px 4px;
+      color: #94a3b8;
+      font-size: 0.9rem;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+      user-select: none;
+    }
+    .count-btn:hover  { border-color: #3b82f6; color: #e2e8f0; }
+    .count-btn.active { background: #1e40af; border-color: #3b82f6; color: #fff; font-weight: 700; }
+
+    /* 金額表示 */
+    .price-box {
+      background: #0d1117;
+      border: 1px solid #1e3a5f;
+      border-radius: 10px;
+      padding: 16px;
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .price-label { color: #64748b; font-size: 0.85rem; }
+    .price-amount { color: #34d399; font-size: 1.5rem; font-weight: 700; }
+    .price-tax    { color: #64748b; font-size: 0.75rem; margin-top: 2px; text-align: right; }
+
+    /* 利用規約 */
+    .tos-box {
+      background: #0a0c10;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 0.8rem;
+      color: #64748b;
+      line-height: 1.7;
+      max-height: 220px;
+      overflow-y: auto;
+      margin-bottom: 14px;
+      white-space: pre-line;
+    }
+    .tos-box h4 { color: #94a3b8; margin-bottom: 8px; }
+
+    .agree-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      cursor: pointer;
+    }
+    .agree-row input[type="checkbox"] {
+      width: 18px; height: 18px;
+      margin-top: 2px;
+      cursor: pointer;
+      accent-color: #3b82f6;
+      flex-shrink: 0;
+    }
+    .agree-row span { font-size: 0.9rem; color: #cbd5e1; line-height: 1.5; }
+
+    /* 送信ボタン */
+    .submit-btn {
+      width: 100%;
+      background: linear-gradient(135deg, #1d4ed8, #2563eb);
+      border: none;
+      border-radius: 12px;
+      padding: 16px;
+      color: #fff;
+      font-size: 1.05rem;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .submit-btn:hover   { opacity: 0.9; }
+    .submit-btn:active  { transform: scale(0.98); }
+    .submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* エラー */
+    .error-msg {
+      background: #2d0000;
+      border: 1px solid #7f1d1d;
+      border-radius: 8px;
+      padding: 12px;
+      color: #fca5a5;
+      font-size: 0.85rem;
+      margin-top: 12px;
+      display: none;
+    }
+
+    /* スクロールバー */
+    .tos-box::-webkit-scrollbar { width: 4px; }
+    .tos-box::-webkit-scrollbar-track { background: #0a0c10; }
+    .tos-box::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <div class="header">
+      <div class="logo">🔗</div>
+      <h1>BitTo 詳細レポート申し込み</h1>
+      <p>ブロックチェーン調査・公的機関提出資料の作成</p>
+    </div>
+
+    <form id="applyForm" novalidate>
+
+      <!-- お客様情報 -->
+      <div class="card">
+        <h2>📋 お客様情報</h2>
+
+        <div class="field">
+          <label>お名前<span class="req">必須</span></label>
+          <input type="text" name="name" placeholder="山田 太郎" required autocomplete="name">
+        </div>
+
+        <div class="field">
+          <label>電話番号<span class="req">必須</span></label>
+          <input type="tel" name="phone" placeholder="090-1234-5678" required autocomplete="tel">
+        </div>
+
+        <div class="field">
+          <label>メールアドレス<span class="req">必須</span></label>
+          <input type="email" name="email" placeholder="example@email.com" required autocomplete="email">
+        </div>
+
+        <div class="field">
+          <label>ご住所<span class="req">必須</span></label>
+          <input type="text" name="address" placeholder="東京都渋谷区〇〇1-2-3" required autocomplete="street-address">
+        </div>
+      </div>
+
+      <!-- TXID件数 -->
+      <div class="card">
+        <h2>🔢 調査TXID件数を選択</h2>
+
+        <div class="count-selector">
+          <div class="count-btn active" data-count="1">1件</div>
+          <div class="count-btn" data-count="2">2件</div>
+          <div class="count-btn" data-count="3">3件</div>
+          <div class="count-btn" data-count="4">4件</div>
+          <div class="count-btn" data-count="5">5件</div>
+        </div>
+
+        <div class="price-box">
+          <div>
+            <div class="price-label">お支払い金額</div>
+            <div class="price-tax">（税込）</div>
+          </div>
+          <div class="price-amount" id="priceDisplay">¥6,600</div>
+        </div>
+
+        <input type="hidden" name="txid_count" id="txidCountInput" value="1">
+      </div>
+
+      <!-- 利用規約 -->
+      <div class="card">
+        <h2>📄 利用規約</h2>
+
+        <div class="tos-box">
+<h4>BitTo 調査サービス 利用規約</h4>
+
+■ サービス内容
+ブロックチェーン公開データを解析し
+送金先取引所を特定する調査サービスです。
+公的機関への提出資料を作成します。
+
+■ 料金
+・送金経路・取引所特定：無料
+・詳細調査レポート 1TXID：¥6,600（税込）
+・複数TXIDはTXID数 × ¥6,600
+
+■ 返金について
+本サービスはデジタル調査コンテンツの提供のため、
+調査開始後の返金はいたしかねます。
+
+・取引所への凍結・資金回収を保証するものではありません
+・調査結果に法的効力はありません
+・結果に関わらず返金対応は行いません
+
+■ 免責事項
+・全追跡の成功を保証しません
+・取引所の対応結果は当社の管理外です
+・本レポートは被害申告・警察相談の参考資料としてご活用ください
+
+■ 個人情報の取扱い
+収集情報は調査業務のみに使用し、
+第三者への提供はしません。
+        </div>
+
+        <label class="agree-row">
+          <input type="checkbox" id="tosCheck" required>
+          <span>上記の利用規約を読み、内容に同意します</span>
+        </label>
+      </div>
+
+      <button type="submit" class="submit-btn" id="submitBtn">
+        同意して決済へ進む →
+      </button>
+
+      <div class="error-msg" id="errorMsg"></div>
+
+    </form>
+  </div>
+
+  <script>
+    // URLからLINE userIdを取得
+    const uid = new URLSearchParams(window.location.search).get('uid') || '';
+
+    // 件数選択
+    let selectedCount = 1;
+    const pricePerItem = 6600;
+
+    document.querySelectorAll('.count-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.count-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedCount = parseInt(btn.dataset.count);
+        document.getElementById('txidCountInput').value = selectedCount;
+        const total = pricePerItem * selectedCount;
+        document.getElementById('priceDisplay').textContent = '¥' + total.toLocaleString();
+      });
+    });
+
+    // フォーム送信
+    document.getElementById('applyForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+
+      const errorEl = document.getElementById('errorMsg');
+      errorEl.style.display = 'none';
+
+      // バリデーション
+      const name    = this.name.value.trim();
+      const phone   = this.phone.value.trim();
+      const email   = this.email.value.trim();
+      const address = this.address.value.trim();
+      const agreed  = document.getElementById('tosCheck').checked;
+
+      if (!name || !phone || !email || !address) {
+        errorEl.textContent = '全ての必須項目を入力してください。';
+        errorEl.style.display = 'block';
+        return;
+      }
+      if (!agreed) {
+        errorEl.textContent = '利用規約への同意が必要です。';
+        errorEl.style.display = 'block';
+        return;
+      }
+
+      const btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.textContent = '処理中...';
+
+      try {
+        const res = await fetch('/api/create-checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            uid,
+            name,
+            phone,
+            email,
+            address,
+            txid_count: selectedCount,
+          }),
+        });
+        const data = await res.json();
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          throw new Error(data.error || '決済リンクの生成に失敗しました。');
+        }
+      } catch (err) {
+        errorEl.textContent = 'エラー: ' + err.message;
+        errorEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = '同意して決済へ進む →';
+      }
+    });
+  </script>
+</body>
+</html>

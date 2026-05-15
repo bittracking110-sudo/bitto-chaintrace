@@ -37,26 +37,20 @@ const lineConfig = {
 const lineClient = new line.Client(lineConfig);
 
 // ══ セッション管理 ════════════════════════════════════════════
-// ユーザーごとの会話状態
-// state: idle → h_name → h_damage → h_reason → h_txid
-//        → investigating → tos → awaiting_payment → paid
-const userSessions = new Map();
-
-// TXIDの調査結果キャッシュ（全ユーザー共通・API節約）
-const txidCache = new Map();
-
-// Stripe決済セッション
-const pendingSessions = new Map();
+// state: idle → waiting_txid → investigating → done
+const userSessions  = new Map(); // userId → session
+const txidCache     = new Map(); // txid（小文字）→ { result, investigatedAt }
+const pendingSessions = new Map(); // sessionId → { userId, txidCount, stripeId }
 
 function getSession(userId) {
   if (!userSessions.has(userId)) {
-    userSessions.set(userId, { state: 'idle' });
+    userSessions.set(userId, { state: 'idle', investigatedList: [] });
   }
   return userSessions.get(userId);
 }
 
 function resetSession(userId) {
-  userSessions.set(userId, { state: 'idle' });
+  userSessions.set(userId, { state: 'idle', investigatedList: [] });
 }
 
 // ══ 取引所ラベルDB ═══════════════════════════════════════════
@@ -94,7 +88,7 @@ const LABEL_DB = {
   '0x3d28a7c8d8f4f06b5f60d5855e5a1f6b5f59f95c': 'HitBTC',
   '1KAt6STtisWMMVo63xFER7NnGBBBBMHTNK': 'HitBTC BTC',
   '1GZEgEoAOcMKoqz93MPpFfQpFPDyKi41jh': 'HitBTC BTC',
-  // ─── その他主要取引所 ───
+  // ─── その他 ───
   '0x4e9ce36e442e55ecd9025b759ce187c9aa80a4b': 'Bitfinex',
   '0x742d35cc6634c0532925a3b844bc454e4438f44e': 'Bitfinex Hot',
   '0x876eabf441b2ee5b5b0554fd502a8e0600950cfa': 'Bitfinex',
@@ -128,8 +122,7 @@ function getLabel(addr) {
 
 function isExchange(label) {
   if (!label) return false;
-  const l = label.toLowerCase();
-  return EX_KEYWORDS.some(k => l.includes(k));
+  return EX_KEYWORDS.some(k => label.toLowerCase().includes(k));
 }
 
 // ══ チェーン自動判定 ══════════════════════════════════════════
@@ -144,12 +137,9 @@ function detectChain(input) {
 
 // ══ マルチホップ追跡 ══════════════════════════════════════════
 
-// 時刻文字列を安全にISO形式へ正規化（末尾Zの重複を防ぐ）
 function normalizeTimeStr(t) {
   if (!t) return t;
-  if (typeof t === 'string') {
-    return t.replace(' ', 'T').replace(/Z+$/, '') + 'Z';
-  }
+  if (typeof t === 'string') return t.replace(' ', 'T').replace(/Z+$/, '') + 'Z';
   return t;
 }
 
@@ -159,9 +149,7 @@ async function getNextTxBTC(addr, afterTime) {
     const r = await fetch(url);
     const j = await r.json();
     const txHashes = j.data?.[addr]?.transactions || [];
-    const normalizedTime = normalizeTimeStr(afterTime);
-    const refMs = new Date(normalizedTime).getTime();
-
+    const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
     for (const txHash of txHashes.slice(0, 8)) {
       await new Promise(res => setTimeout(res, 250));
       try {
@@ -173,11 +161,9 @@ async function getNextTxBTC(addr, afterTime) {
         const outputs = tdata.outputs || [];
         const isOutgoing = inputs.some(i => i.recipient === addr);
         if (!isOutgoing) continue;
-        const txNorm = tdata.transaction.time.replace(' ', 'T') + 'Z';
-        const txMs = new Date(txNorm).getTime();
+        const txMs = new Date(normalizeTimeStr(tdata.transaction.time)).getTime();
         if (txMs < refMs - 3600000) continue;
-        const target = outputs.filter(o => o.recipient !== addr)
-          .sort((a, b) => b.value - a.value)[0];
+        const target = outputs.filter(o => o.recipient !== addr).sort((a, b) => b.value - a.value)[0];
         if (!target) continue;
         return { addr: target.recipient, amount: target.value / 1e8, time: tdata.transaction.time, txHash };
       } catch { continue; }
@@ -187,53 +173,46 @@ async function getNextTxBTC(addr, afterTime) {
 }
 
 async function getNextTxETH(addr, afterTime) {
-  const normalizedTime = normalizeTimeStr(afterTime);
-  const refMs = new Date(normalizedTime).getTime();
-  console.log(`[HOP] ETH追跡: ${addr} / 基準時刻: ${isNaN(refMs) ? '(不明)' : new Date(refMs).toISOString()}`);
+  const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
+  console.log(`[HOP] ETH追跡: ${addr} / 基準: ${isNaN(refMs) ? '不明' : new Date(refMs).toISOString()}`);
 
-  // ── Method 1: Etherscan 通常TX ──────────────────────────
   try {
     const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=100&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
-    console.log(`[HOP] Etherscan TX件数: ${txs.length}, status: ${j.status}, msg: ${j.message}`);
+    console.log(`[HOP] Etherscan TX: ${txs.length}件`);
     for (const tx of txs) {
       const txMs = parseInt(tx.timeStamp) * 1000;
       if (txMs < refMs) continue;
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       if (tx.isError === '1') continue;
       const db = getLabel(tx.to);
-      console.log(`[HOP] ETH送金先発見: ${tx.to} (${db.label || 'unknown'})`);
+      console.log(`[HOP] ETH送金先: ${tx.to} (${db.label || 'unknown'})`);
       return { addr: tx.to, amount: parseFloat(tx.value)/1e18, time: new Date(txMs).toISOString(), txHash: tx.hash, label: db.label||'' };
     }
-  } catch(e) { console.error('[HOP] Etherscan ETH error:', e.message); }
+  } catch(e) { console.error('[HOP] Etherscan ETH:', e.message); }
 
-  // ── Method 2: Etherscan ERC-20（USDT/USDC等）──────────
   try {
     const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=50&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
-    console.log(`[HOP] Etherscan ERC20件数: ${txs.length}`);
     for (const tx of txs) {
       const txMs = parseInt(tx.timeStamp) * 1000;
       if (txMs < refMs) continue;
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       const db = getLabel(tx.to);
       const dec = parseInt(tx.tokenDecimal) || 18;
-      console.log(`[HOP] ERC20送金先発見: ${tx.to} token:${tx.tokenSymbol}`);
       return { addr: tx.to, amount: parseFloat(tx.value)/Math.pow(10,dec), time: new Date(txMs).toISOString(), txHash: tx.hash, label: db.label||'', token: tx.tokenSymbol };
     }
-  } catch(e) { console.error('[HOP] Etherscan ERC20 error:', e.message); }
+  } catch(e) { console.error('[HOP] ERC20:', e.message); }
 
-  // ── Method 3: Blockchair（フォールバック）──────────────
   try {
     const url = `https://api.blockchair.com/ethereum/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}&limit=10`;
     const r = await fetch(url);
     const j = await r.json();
     const txHashes = j.data?.[addr.toLowerCase()]?.transactions || [];
-    console.log(`[HOP] Blockchair TX件数: ${txHashes.length}`);
     for (const txHash of txHashes.slice(0, 8)) {
       await new Promise(res => setTimeout(res, 300));
       const tr = await fetch(`https://api.blockchair.com/ethereum/dashboards/transaction/${txHash}?key=${BLOCKCHAIR_KEY}`);
@@ -242,16 +221,14 @@ async function getNextTxETH(addr, afterTime) {
       if (!txData) continue;
       const tx = txData.transaction;
       if (tx.sender?.toLowerCase() !== addr.toLowerCase()) continue;
-      const txNorm = tx.time.replace(' ', 'T') + 'Z';
-      if (new Date(txNorm).getTime() < refMs) continue;
+      if (new Date(normalizeTimeStr(tx.time)).getTime() < refMs) continue;
       const db  = getLabel(tx.recipient);
       const lbl = db.label || tx.recipient_label || '';
-      console.log(`[HOP] Blockchair送金先発見: ${tx.recipient} (${lbl})`);
       return { addr: tx.recipient, amount: parseFloat(tx.value)/1e18, time: tx.time, txHash, label: lbl };
     }
-  } catch(e) { console.error('[HOP] Blockchair ETH error:', e.message); }
+  } catch(e) { console.error('[HOP] Blockchair ETH:', e.message); }
 
-  console.log(`[HOP] ${addr} → 次のTXが見つかりませんでした`);
+  console.log(`[HOP] ${addr} → 次TX見つからず`);
   return null;
 }
 
@@ -259,14 +236,13 @@ async function getNextTxXRP(addr, afterTime) {
   try {
     const r = await fetch(`https://api.xrpscan.com/api/v1/account/${addr}/transactions`);
     const j = await r.json();
-    const txs = (j.transactions || j || []);
+    const txs = j.transactions || j || [];
     const refMs = new Date(afterTime).getTime();
     for (const tx of txs) {
       if (tx.Account !== addr) continue;
-      const txMs = new Date(tx.date).getTime();
-      if (txMs < refMs - 1000) continue;
+      if (new Date(tx.date).getTime() < refMs - 1000) continue;
       const db = getLabel(tx.Destination);
-      return { addr: tx.Destination, amount: parseFloat(tx.Amount) / 1e6, time: tx.date, txHash: tx.hash, label: db.label || '' };
+      return { addr: tx.Destination, amount: parseFloat(tx.Amount)/1e6, time: tx.date, txHash: tx.hash, label: db.label||'' };
     }
   } catch (e) { console.error('getNextTxXRP:', e.message); }
   return null;
@@ -276,14 +252,12 @@ async function traceHops(startAddr, startTime, chain, maxHops = 3) {
   const hops = [];
   let currentAddr = startAddr;
   let currentTime = startTime;
-
   for (let i = 0; i < maxHops; i++) {
     let next = null;
     if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime);
     else if (chain === 'eth') next = await getNextTxETH(currentAddr, currentTime);
     else if (chain === 'xrp') next = await getNextTxXRP(currentAddr, currentTime);
     if (!next) break;
-
     const db  = getLabel(next.addr);
     const lbl = db.label || next.label || '';
     const isEx = db.type === 'exchange' || isExchange(lbl);
@@ -303,77 +277,60 @@ async function investigateBTC(txid) {
   const j    = await r.json();
   const data = j.data?.[txid];
   if (!data) throw new Error('BTC TXが見つかりません');
-
-  const tx      = data.transaction;
-  const inputs  = data.inputs  || [];
+  const tx = data.transaction;
+  const inputs = data.inputs || [];
   const outputs = data.outputs || [];
-
-  const senderAddr  = inputs[0]?.recipient || '不明';
-  const senderLabel = getLabel(senderAddr);
+  const senderAddr = inputs[0]?.recipient || '不明';
   const changeAddrs = new Set(inputs.map(i => i.recipient));
-
   const path = [];
   const exchanges = [];
-
   for (const out of outputs) {
     if (changeAddrs.has(out.recipient)) continue;
-    const db  = getLabel(out.recipient);
+    const db = getLabel(out.recipient);
     const lbl = db.label || out.recipient_label || '';
     const isEx = db.type === 'exchange' || isExchange(lbl);
-    path.push({ address: out.recipient, label: lbl, amount: out.value / 1e8, isExchange: isEx });
-    if (isEx) exchanges.push({ name: lbl, address: out.recipient, amount: out.value / 1e8 });
+    path.push({ address: out.recipient, label: lbl, amount: out.value/1e8, isExchange: isEx });
+    if (isEx) exchanges.push({ name: lbl, address: out.recipient, amount: out.value/1e8 });
   }
-
   if (exchanges.length === 0 && path.length > 0) {
-    const trackAddr = path[0].address;
-    const hops = await traceHops(trackAddr, tx.time, 'btc', 3);
+    const hops = await traceHops(path[0].address, tx.time, 'btc', 3);
     for (const hop of hops) {
       path.push(hop);
       if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
     }
   }
-
-  return {
-    chain: 'BTC', txid,
-    blockTime: tx.time, blockHeight: tx.block_id,
-    amount: tx.output_total / 1e8, fee: tx.fee / 1e8,
-    sender: senderAddr, senderLabel: senderLabel.label,
-    path, exchanges,
-  };
+  return { chain: 'BTC', txid, blockTime: tx.time, blockHeight: tx.block_id,
+    amount: tx.output_total/1e8, fee: tx.fee/1e8,
+    sender: senderAddr, senderLabel: getLabel(senderAddr).label, path, exchanges };
 }
 
 async function investigateETH(hash) {
-  const h    = hash.startsWith('0x') ? hash : '0x' + hash;
-  const url  = `https://api.blockchair.com/ethereum/dashboards/transaction/${h}?key=${BLOCKCHAIR_KEY}`;
-  const r    = await fetch(url);
-  const j    = await r.json();
+  const h   = hash.startsWith('0x') ? hash : '0x' + hash;
+  const url = `https://api.blockchair.com/ethereum/dashboards/transaction/${h}?key=${BLOCKCHAIR_KEY}`;
+  const r   = await fetch(url);
+  const j   = await r.json();
   const data = j.data?.[h.toLowerCase()];
   if (!data) throw new Error('ETH TXが見つかりません');
-
-  const tx    = data.transaction;
+  const tx = data.transaction;
   const calls = data.calls || [];
-
   const senderDb = getLabel(tx.sender);
   const recipDb  = getLabel(tx.recipient);
   const recipLbl = recipDb.label || tx.recipient_label || '';
   const isRecipEx = recipDb.type === 'exchange' || isExchange(recipLbl);
-
   const path = [
     { address: tx.sender,    label: senderDb.label || tx.sender_label || '', role: 'sender' },
     { address: tx.recipient, label: recipLbl, role: 'recipient', isExchange: isRecipEx },
   ];
   const exchanges = [];
-  if (isRecipEx) exchanges.push({ name: recipLbl, address: tx.recipient, amount: parseFloat(tx.value) / 1e18 });
-
+  if (isRecipEx) exchanges.push({ name: recipLbl, address: tx.recipient, amount: parseFloat(tx.value)/1e18 });
   for (const call of calls) {
-    const db  = getLabel(call.recipient);
+    const db = getLabel(call.recipient);
     const lbl = db.label || call.recipient_label || '';
     if (db.type === 'exchange' || isExchange(lbl)) {
-      exchanges.push({ name: lbl, address: call.recipient, amount: parseFloat(call.value || '0') / 1e18 });
+      exchanges.push({ name: lbl, address: call.recipient, amount: parseFloat(call.value||'0')/1e18 });
       path.push({ address: call.recipient, label: lbl, role: 'internal', isExchange: true });
     }
   }
-
   if (exchanges.length === 0) {
     const hops = await traceHops(tx.recipient, tx.time, 'eth', 3);
     for (const hop of hops) {
@@ -381,14 +338,9 @@ async function investigateETH(hash) {
       if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
     }
   }
-
-  return {
-    chain: 'ETH', txid: h,
-    blockTime: tx.time, blockHeight: tx.block_id,
-    amount: parseFloat(tx.value) / 1e18, fee: (tx.gas_used * tx.gas_price) / 1e18,
-    sender: tx.sender, senderLabel: senderDb.label,
-    recipient: tx.recipient, path, exchanges,
-  };
+  return { chain: 'ETH', txid: h, blockTime: tx.time, blockHeight: tx.block_id,
+    amount: parseFloat(tx.value)/1e18, fee: (tx.gas_used * tx.gas_price)/1e18,
+    sender: tx.sender, senderLabel: senderDb.label, recipient: tx.recipient, path, exchanges };
 }
 
 async function investigateXRP(txid) {
@@ -397,34 +349,22 @@ async function investigateXRP(txid) {
   const t = await r.text();
   if (t === 'Not found') throw new Error('XRP TXが見つかりません');
   const tx = JSON.parse(t);
-
   const senderDb = getLabel(tx.Account);
   const destDb   = getLabel(tx.Destination);
   const destLbl  = destDb.label || tx.destinationName || '';
   const isDestEx = destDb.type === 'exchange' || isExchange(destLbl);
-
   const path = [
     { address: tx.Account,     label: senderDb.label, role: 'sender' },
     { address: tx.Destination, label: destLbl, role: 'recipient', isExchange: isDestEx },
   ];
-  const exchanges = isDestEx ? [{ name: destLbl, address: tx.Destination, amount: parseFloat(tx.Amount) / 1e6 }] : [];
-
+  const exchanges = isDestEx ? [{ name: destLbl, address: tx.Destination, amount: parseFloat(tx.Amount)/1e6 }] : [];
   if (exchanges.length === 0) {
     const hops = await traceHops(tx.Destination, tx.date, 'xrp', 3);
-    for (const hop of hops) {
-      path.push(hop);
-      if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
-    }
+    for (const hop of hops) { path.push(hop); if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount }); }
   }
-
-  return {
-    chain: 'XRP', txid: h,
-    blockTime: tx.date, blockHeight: tx.ledger_index,
-    amount: parseFloat(tx.Amount) / 1e6,
-    sender: tx.Account, senderLabel: senderDb.label,
-    recipient: tx.Destination, destTag: tx.DestinationTag,
-    path, exchanges,
-  };
+  return { chain: 'XRP', txid: h, blockTime: tx.date, blockHeight: tx.ledger_index,
+    amount: parseFloat(tx.Amount)/1e6, sender: tx.Account, senderLabel: senderDb.label,
+    recipient: tx.Destination, destTag: tx.DestinationTag, path, exchanges };
 }
 
 async function investigate(txid, chain) {
@@ -440,14 +380,11 @@ function fmtDate(d) {
   if (!d) return '不明';
   try {
     const s = typeof d === 'string'
-      ? d.replace(' ', 'T').replace(/Z?$/, 'Z').replace('ZZ', 'Z')
-      : d;
+      ? d.replace(' ', 'T').replace(/Z+$/, '') + 'Z' : d;
     const dt = new Date(s);
     if (isNaN(dt.getTime())) return '不明';
     return dt.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
-  } catch (e) {
-    return '不明';
-  }
+  } catch { return '不明'; }
 }
 
 function buildReport(result) {
@@ -464,140 +401,77 @@ function buildReport(result) {
     if (p.isExchange) return `🏦 取引所到達（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}`;
     return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}`;
   });
-  const pathText = pathLines.join('\n　↓\n');
 
   let exSection = '';
   let tplSection = '';
-
   if (result.exchanges && result.exchanges.length > 0) {
     const ex = result.exchanges[0];
-    exSection = `
-🏦 判明した取引所
-━━━━━━━━━━━━━━━━━
-取引所名：${ex.name || '特定済み'}
-アドレス：${ex.address.slice(0, 12)}...${ex.address.slice(-6)}
-着金額　：${(ex.amount != null && !isNaN(ex.amount)) ? ex.amount.toFixed(8) : '不明'} ${result.chain}`;
-
-    tplSection = `
-
-📝 取引所への要請テンプレート
-━━━━━━━━━━━━━━━━━
-【${ex.name || '取引所'} サポートチームへ】
-
-件名：不正送金に関する緊急凍結要請
-
-拝啓
-
-不正な仮想通貨送金について緊急のご対応をお願いいたします。
-
-■ トランザクションID
-${result.txid}
-
-■ チェーン：${result.chain}
-■ 送金日時（JST）：${fmtDate(result.blockTime)}
-■ 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}
-■ 着金アドレス：${ex.address}
-
-上記は詐欺被害に起因する不正送金の疑いがあります。
-①上記アドレスの凍結措置
-②関連する取引情報の保全
-について緊急のご対応をお願い申し上げます。
-
-敬具
-━━━━━━━━━━━━━━━━━`;
+    exSection = `\n🏦 判明した取引所\n━━━━━━━━━━━━━━━━━\n取引所名：${ex.name || '特定済み'}\nアドレス：${ex.address.slice(0,12)}...${ex.address.slice(-6)}\n着金額　：${(ex.amount != null && !isNaN(ex.amount)) ? ex.amount.toFixed(8) : '不明'} ${result.chain}`;
+    tplSection = `\n\n📝 取引所への要請テンプレート\n━━━━━━━━━━━━━━━━━\n【${ex.name || '取引所'} サポートチームへ】\n\n件名：不正送金に関する緊急凍結要請\n\n拝啓\n\n不正な仮想通貨送金について緊急のご対応をお願いいたします。\n\n■ トランザクションID\n${result.txid}\n\n■ チェーン：${result.chain}\n■ 送金日時（JST）：${fmtDate(result.blockTime)}\n■ 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}\n■ 着金アドレス：${ex.address}\n\n上記は詐欺被害に起因する不正送金の疑いがあります。\n①上記アドレスの凍結措置\n②関連する取引情報の保全\nについて緊急のご対応をお願い申し上げます。\n\n敬具\n━━━━━━━━━━━━━━━━━`;
   } else {
-    exSection = `
-⚠️ 取引所判定
-━━━━━━━━━━━━━━━━━
-送金先は既知の取引所DBに一致しませんでした。
-追加追跡が必要な場合はご連絡ください。`;
+    exSection = `\n⚠️ 取引所判定\n━━━━━━━━━━━━━━━━━\n送金先は既知の取引所DBに一致しませんでした。\n追加追跡が必要な場合はご連絡ください。`;
   }
 
-  return `📊 BitTo 調査レポート
-━━━━━━━━━━━━━━━━━
-${em} チェーン：${result.chain}
-🔗 TXID：${txShort}
-📅 送金日時：${fmtDate(result.blockTime)}
-💰 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}
-
-📍 送金経路
-━━━━━━━━━━━━━━━━━
-${pathText}
-${exSection}${tplSection}
-
-🔒 BitTo が自動生成したレポートです`;
+  return `📊 BitTo 調査レポート\n━━━━━━━━━━━━━━━━━\n${em} チェーン：${result.chain}\n🔗 TXID：${txShort}\n📅 送金日時：${fmtDate(result.blockTime)}\n💰 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}\n\n📍 送金経路\n━━━━━━━━━━━━━━━━━\n${pathLines.join('\n　↓\n')}\n${exSection}${tplSection}\n\n🔒 BitTo が自動生成したレポートです`;
 }
 
-// ══ Stripe 決済 ══════════════════════════════════════════════
-
-async function createCheckoutSession(userId, txid, chain) {
-  const sessionId = crypto.randomUUID();
-  pendingSessions.set(sessionId, { userId, txid, chain, createdAt: Date.now() });
-
-  const session = await stripe.checkout.sessions.create({
-    payment_method_types: ['card'],
-    line_items: [{
-      price_data: {
-        currency: 'jpy',
-        product_data: {
-          name:        'BitTo ブロックチェーン調査レポート',
-          description: `${chain.toUpperCase()} TXID: ${txid.slice(0, 20)}...`,
-        },
-        unit_amount: 6600,
-      },
-      quantity: 1,
-    }],
-    mode: 'payment',
-    // 住所・電話番号をStripe側で収集
-    billing_address_collection: 'required',
-    phone_number_collection: { enabled: true },
-    // 規約への同意チェックボックス
-    consent_collection: { terms_of_service: 'required' },
-    success_url: `${BASE_URL}/payment/success?sid=${sessionId}`,
-    cancel_url:  `${BASE_URL}/payment/cancel`,
-    metadata: { sessionId, userId, txid, chain },
-  });
-
-  pendingSessions.set(sessionId, { userId, txid, chain, stripeId: session.id, createdAt: Date.now() });
-  return { url: session.url, sessionId };
-}
-
-// ══ 利用規約テキスト ════════════════════════════════════════
-const TOS_TEXT = `📋 BitTo 調査サービス 利用規約
+// 調査後に送るサービス案内メッセージ
+function buildServiceMsg(applyUrl) {
+  return `📋 BitTo 調査サービス
 ━━━━━━━━━━━━━━━━━
-■ サービス内容
 ブロックチェーン公開データを解析し
-送金先取引所を特定する調査サービスです
+送金先取引所を特定する調査サービスです。
+公的機関への提出資料を作成します。
 
 ■ 料金
 ・送金経路・取引所特定：無料
-・詳細調査レポート：¥6,600（税込）
+・詳細調査レポート 1TXID：¥6,600（税込）
+・複数TXIDもまとめて対応可能
 
-■ 返金について
-本サービスはデジタル調査コンテンツの
-提供のため、調査開始後の返金は
-いたしかねます
+📝 詳細レポートをご希望の場合は
+下記フォームよりお申し込みください
 
-・取引所への凍結・資金回収を
-　保証するものではありません
-・調査結果に法的効力はありません
-・結果に関わらず返金対応は行いません
+🔗 ${applyUrl}`;
+}
 
-■ 免責事項
-・全追跡の成功を保証しません
-・取引所の対応結果は当社管理外です
-・本レポートは被害申告・警察相談の
-　参考資料としてご活用ください
+// ══ 調査バックグラウンド実行 ══════════════════════════════════
 
-■ 個人情報の取扱い
-収集情報は調査業務のみに使用し
-第三者への提供はしません
-━━━━━━━━━━━━━━━━━
-上記に同意される場合は
+async function runInvestigation(userId, txid, chain) {
+  const session  = getSession(userId);
+  const cacheKey = txid.toLowerCase();
 
-「同意する」
+  try {
+    let result = txidCache.get(cacheKey)?.result;
+    if (result) {
+      console.log(`[CACHE] キャッシュ利用: ${txid}`);
+    } else {
+      result = await investigate(txid, chain);
+      txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
+    }
 
-とご返信ください`;
+    // 調査結果をリストに追加（重複除外）
+    if (!session.investigatedList) session.investigatedList = [];
+    const alreadyIn = session.investigatedList.some(r => r.txid.toLowerCase() === txid.toLowerCase());
+    if (!alreadyIn) session.investigatedList.push({ txid, chain, result });
+
+    // 無料調査レポートを送信
+    await lineClient.pushMessage(userId, { type: 'text', text: buildReport(result) });
+
+    // サービス案内＋フォームURL
+    const applyUrl = `${BASE_URL}/apply?uid=${encodeURIComponent(userId)}`;
+    await lineClient.pushMessage(userId, { type: 'text', text: buildServiceMsg(applyUrl) });
+
+    session.state = 'done';
+
+  } catch (e) {
+    console.error('[調査エラー]', e.message);
+    session.state = 'waiting_txid';
+    await lineClient.pushMessage(userId, {
+      type: 'text',
+      text: `⚠️ 調査中にエラーが発生しました\n\n${e.message}\n\nTXIDをご確認の上、再度送ってください`,
+    });
+  }
+}
 
 // ══ LINE 会話フロー ══════════════════════════════════════════
 
@@ -607,8 +481,7 @@ const HELP_TEXT = `📋 BitTo 使い方ガイド
 もとに送金先取引所を自動追跡します
 
 💬 ご利用方法
-まずメッセージを送ってください
-順番にご案内します
+TXIDをそのまま送信してください
 
 対応チェーン：
 ₿ Bitcoin (BTC)
@@ -617,49 +490,9 @@ const HELP_TEXT = `📋 BitTo 使い方ガイド
 
 💴 料金
 ・送金経路・取引所特定：無料
-・詳細レポート：¥6,600（税込）
+・詳細レポート：¥6,600（税込）/ 件
 
 「リセット」で最初からやり直し`;
-
-// 調査をバックグラウンドで実行し、完了後にLINEへpush
-async function runInvestigation(userId, txid, chain) {
-  const session = getSession(userId);
-  const cacheKey = txid.toLowerCase();
-
-  try {
-    // キャッシュ確認（同じTXIDは再調査しない）
-    let result = txidCache.get(cacheKey)?.result;
-    if (result) {
-      console.log(`[CACHE] キャッシュ利用: ${txid}`);
-    } else {
-      result = await investigate(txid, chain);
-      txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
-    }
-
-    session.investigationResult = result;
-
-    // 無料調査結果を通知
-    const exName = result.exchanges?.[0]?.name || null;
-    const chainName = { btc: 'Bitcoin', eth: 'Ethereum', xrp: 'XRP Ledger' }[chain];
-    const summaryMsg = exName
-      ? `✅ 送金先取引所を特定しました\n\nチェーン：${chainName}\n取引所名：${exName}\n送金日時：${fmtDate(result.blockTime)}\n\n詳細レポートを取得するには\n次の手続きにお進みください`
-      : `🔍 送金経路の追跡が完了しました\n\nチェーン：${chainName}\n送金日時：${fmtDate(result.blockTime)}\n取引所：DBに一致なし\n\n詳細レポートでさらに詳しく\n調査いたします`;
-
-    await lineClient.pushMessage(userId, { type: 'text', text: summaryMsg });
-
-    // 利用規約を送付
-    session.state = 'tos';
-    await lineClient.pushMessage(userId, { type: 'text', text: TOS_TEXT });
-
-  } catch (e) {
-    console.error('[調査エラー]', e.message);
-    session.state = 'h_txid';
-    await lineClient.pushMessage(userId, {
-      type: 'text',
-      text: `⚠️ 調査中にエラーが発生しました\n\n${e.message}\n\nTXIDをご確認の上、再度送ってください`,
-    });
-  }
-}
 
 async function handleLineEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') return;
@@ -668,7 +501,7 @@ async function handleLineEvent(event) {
   const text    = event.message.text.trim();
   const session = getSession(userId);
 
-  // ── グローバルコマンド（どの状態でも反応） ──────────────
+  // ── グローバルコマンド ──────────────────────────────────
   if (['ヘルプ', 'help', '？', '?'].includes(text.toLowerCase())) {
     return lineClient.replyMessage(event.replyToken, { type: 'text', text: HELP_TEXT });
   }
@@ -676,281 +509,111 @@ async function handleLineEvent(event) {
     resetSession(userId);
     return lineClient.replyMessage(event.replyToken, {
       type: 'text',
-      text: '🔄 最初からやり直します\n\nご相談内容をお聞きします\n\n① お名前を教えてください',
+      text: `🔄 リセットしました\n\nTXIDをお送りください\n対応：BTC / ETH / XRP`,
     });
   }
 
-  // ── 状態別ハンドラ ──────────────────────────────────────
+  const chain = detectChain(text);
+
   switch (session.state) {
 
     // ── 最初のメッセージ ──────────────────────────────────
     case 'idle': {
-      session.state = 'h_name';
+      session.state = 'waiting_txid';
       return lineClient.replyMessage(event.replyToken, {
         type: 'text',
-        text: `ご相談ありがとうございます。\n順番にお聞きします。\n\n① お名前を教えてください`,
+        text: `先ずは無料調査を開始しますので\nTXIDを1件ずつお送りください\n\n※ TXIDの取得方法はLINEプロフィールを\n　ご参照ください\n\n対応：BTC / ETH / XRP`,
       });
     }
 
-    // ── ① 名前 ────────────────────────────────────────────
-    case 'h_name': {
-      session.hearingName = text;
-      session.state = 'h_damage';
-      return lineClient.replyMessage(event.replyToken, {
-        type: 'text',
-        text: `② 被害を受けた通貨と金額を教えてください\n例：ETH 2.5枚 / BTC 0.1 / USDT 50,000`,
-      });
-    }
-
-    // ── ② 被害金額・通貨 ──────────────────────────────────
-    case 'h_damage': {
-      session.damage = text;
-      session.state = 'h_reason';
-      return lineClient.replyMessage(event.replyToken, {
-        type: 'text',
-        text: `③ 被害の経緯を簡単に教えてください`,
-      });
-    }
-
-    // ── ③ 経緯 ────────────────────────────────────────────
-    case 'h_reason': {
-      session.reason = text;
-      session.state = 'h_txid';
-      return lineClient.replyMessage(event.replyToken, {
-        type: 'text',
-        text: `④ 調査するTXID（トランザクションID）を送ってください\n\n対応：BTC / ETH / XRP`,
-      });
-    }
-
-    // ── ④ TXID受信 → 無料調査 ────────────────────────────
-    case 'h_txid': {
-      const chain = detectChain(text);
+    // ── TXID 待ち ─────────────────────────────────────────
+    case 'waiting_txid': {
       if (!chain) {
         return lineClient.replyMessage(event.replyToken, {
           type: 'text',
-          text: `TXIDを認識できませんでした\n\nBTC / ETH / XRP のTXIDを送ってください\n（ETH: 0xから始まる66文字）`,
+          text: `TXIDを認識できませんでした\n\nBTC / ETH / XRP のTXIDをお送りください\n（例：ETH は 0x から始まる66文字）`,
         });
       }
-
-      // 同じユーザーが同じTXIDで決済済み → レポート再送
-      if (
-        session.paidAt &&
-        session.txid &&
-        session.txid.toLowerCase() === text.toLowerCase() &&
-        session.reportResult
-      ) {
-        await lineClient.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `このTXIDはすでに調査済みです\n\n📄 レポートを再送します`,
-        });
-        await lineClient.pushMessage(userId, { type: 'text', text: buildReport(session.reportResult) });
-        return;
-      }
-
-      // 同じユーザーが同じTXIDで調査済み（未決済）→ 結果と決済リンクを再表示
-      if (
-        session.txid &&
-        session.txid.toLowerCase() === text.toLowerCase() &&
-        session.investigationResult &&
-        !session.paidAt
-      ) {
-        await lineClient.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `このTXIDはすでに調査済みです\n\n詳細レポートの決済にお進みください\n利用規約を再度ご確認ください`,
-        });
-        session.state = 'tos';
-        await lineClient.pushMessage(userId, { type: 'text', text: TOS_TEXT });
-        return;
-      }
-
-      // 新しいTXID → 調査開始
       session.txid  = text;
       session.chain = chain;
-      session.investigationResult = null;
       session.state = 'investigating';
 
       const chainName = { btc: 'Bitcoin', eth: 'Ethereum', xrp: 'XRP Ledger' }[chain];
       const txShort   = text.slice(0, 10) + '...' + text.slice(-6);
-
-      // キャッシュにある場合は「調査済みデータを使用」と通知
-      const cacheKey = text.toLowerCase();
-      const cached   = txidCache.get(cacheKey);
-      const waitMsg  = cached
-        ? `🔍 ${chainName} のTXIDを受け付けました\nTXID：${txShort}\n\n⚡ 過去の調査データを取得中...`
-        : `🔍 ${chainName} のTXIDを受け付けました\nTXID：${txShort}\n\n⚙️ 送金経路を追跡中です...\n通常30秒〜2分かかります\nしばらくお待ちください`;
+      const cached    = txidCache.get(text.toLowerCase());
+      const waitMsg   = cached
+        ? `🔍 TXIDを受け付けました\n\nチェーン：${chainName}\nTXID：${txShort}\n\n⚡ 過去の調査データを取得中...`
+        : `🔍 TXIDを受け付けました\n\nチェーン：${chainName}\nTXID：${txShort}\n\n⚙️ 調査を実行中です...\n通常30秒〜2分かかります`;
 
       await lineClient.replyMessage(event.replyToken, { type: 'text', text: waitMsg });
-
-      // バックグラウンドで調査実行（awaitしない）
       runInvestigation(userId, text, chain).catch(console.error);
       return;
     }
 
     // ── 調査実行中 ────────────────────────────────────────
     case 'investigating': {
-      const inChain = detectChain(text);
-      if (inChain) {
+      if (chain) {
         if (text.toLowerCase() === session.txid?.toLowerCase()) {
-          // 同じTXID → NG
           return lineClient.replyMessage(event.replyToken, {
             type: 'text',
-            text: `⚠️ このTXIDはただいま調査中です\n\n完了次第、結果をお送りします\nしばらくお待ちください`,
-          });
-        } else {
-          // 違うTXID → NG
-          return lineClient.replyMessage(event.replyToken, {
-            type: 'text',
-            text: `⚠️ 現在別のTXIDを調査中です\n\n別のTXIDを調査する場合は\n現在の調査完了後に\n「リセット」と送ってください`,
+            text: `⚙️ このTXIDはただいま調査中です\nしばらくお待ちください`,
           });
         }
+        return lineClient.replyMessage(event.replyToken, {
+          type: 'text',
+          text: `⚠️ 現在別のTXIDを調査中です\n\n調査完了後に新しいTXIDを送ってください`,
+        });
       }
       return lineClient.replyMessage(event.replyToken, {
         type: 'text',
-        text: `⚙️ ただいま調査中です\nしばらくお待ちください\n\n完了次第、結果をお送りします`,
+        text: `⚙️ 調査中です。しばらくお待ちください`,
       });
     }
 
-    // ── 利用規約への同意待ち ──────────────────────────────
-    case 'tos': {
-      const inChainTos = detectChain(text);
-      if (inChainTos) {
-        if (text.toLowerCase() === session.txid?.toLowerCase()) {
-          // 同じTXID → NG＋利用規約を再表示
-          await lineClient.replyMessage(event.replyToken, {
-            type: 'text',
-            text: `⚠️ このTXIDはすでに調査済みです\n\n詳細レポートをご希望の場合は\n利用規約にご同意ください`,
-          });
-          await lineClient.pushMessage(userId, { type: 'text', text: TOS_TEXT });
-          return;
-        } else {
-          // 違うTXID → リセット案内
-          return lineClient.replyMessage(event.replyToken, {
-            type: 'text',
-            text: `⚠️ 別のTXIDが送られました\n\n現在のTXIDの手続きを続ける場合は\n「同意する」とご返信ください\n\n新しいTXIDを調査する場合は\n「リセット」と送ってください`,
-          });
-        }
-      }
-      if (text !== '同意する') {
+    // ── 調査完了（次のTXID or 再送受付）──────────────────
+    case 'done': {
+      if (!chain) {
         return lineClient.replyMessage(event.replyToken, {
           type: 'text',
-          text: `「同意する」とご返信いただくと\n次のステップに進めます\n\n同意されない場合、\nレポートの作成ができません`,
+          text: `次のTXIDをお送りください\n対応：BTC / ETH / XRP`,
         });
       }
 
-      // 同意済み → 決済リンク作成
-      if (!stripe) {
-        // テストモード（Stripe未設定）→ 直接レポート送付
-        session.state = 'paid';
-        session.paidAt = Date.now();
-        session.reportResult = session.investigationResult;
-        await lineClient.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `✅ 同意を確認しました\n\n📄 レポートを生成中...`,
-        });
-        if (session.investigationResult) {
-          await lineClient.pushMessage(userId, { type: 'text', text: buildReport(session.investigationResult) });
+      // 同じTXID → キャッシュから再表示
+      if (text.toLowerCase() === session.txid?.toLowerCase()) {
+        const cached = txidCache.get(text.toLowerCase());
+        if (cached?.result) {
+          await lineClient.replyMessage(event.replyToken, {
+            type: 'text', text: `このTXIDは調査済みです\n調査結果を再表示します`,
+          });
+          await lineClient.pushMessage(userId, { type: 'text', text: buildReport(cached.result) });
+          const applyUrl = `${BASE_URL}/apply?uid=${encodeURIComponent(userId)}`;
+          await lineClient.pushMessage(userId, { type: 'text', text: buildServiceMsg(applyUrl) });
         }
         return;
       }
 
-      try {
-        const payment = await createCheckoutSession(userId, session.txid, session.chain);
-        session.state = 'awaiting_payment';
-        const txShort = session.txid.slice(0, 10) + '...' + session.txid.slice(-6);
-        return lineClient.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `✅ 同意を確認しました\n\n💳 お支払いページ\n${payment.url}\n\nTXID：${txShort}\n料金：¥6,600（税込）\n\n※ お支払いページにて\n　 お名前・住所・電話番号を\n　 ご入力ください\n\nお支払い完了後、自動でレポートを\nお送りします`,
-        });
-      } catch (e) {
-        return lineClient.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `⚠️ 決済リンクの生成に失敗しました\n${e.message}\n\nしばらく後に「同意する」と\n再度送ってください`,
-        });
-      }
+      // 違うTXID → 新規調査
+      session.txid  = text;
+      session.chain = chain;
+      session.state = 'investigating';
+      const chainName = { btc: 'Bitcoin', eth: 'Ethereum', xrp: 'XRP Ledger' }[chain];
+      const txShort   = text.slice(0, 10) + '...' + text.slice(-6);
+      const cached    = txidCache.get(text.toLowerCase());
+      const waitMsg   = cached
+        ? `🔍 新しいTXIDを受け付けました\n\nチェーン：${chainName}\nTXID：${txShort}\n\n⚡ 過去の調査データを取得中...`
+        : `🔍 新しいTXIDを受け付けました\n\nチェーン：${chainName}\nTXID：${txShort}\n\n⚙️ 調査を実行中です...\n通常30秒〜2分かかります`;
+      await lineClient.replyMessage(event.replyToken, { type: 'text', text: waitMsg });
+      runInvestigation(userId, text, chain).catch(console.error);
+      return;
     }
 
-    // ── 決済待ち ──────────────────────────────────────────
-    case 'awaiting_payment': {
-      const inChainPay = detectChain(text);
-      if (inChainPay) {
-        if (text.toLowerCase() === session.txid?.toLowerCase()) {
-          // 同じTXID → NG＋決済リンク案内
-          return lineClient.replyMessage(event.replyToken, {
-            type: 'text',
-            text: `⚠️ このTXIDはすでに調査済みです\n\nお支払いページからお手続きをお願いします\n\nキャンセルする場合は「リセット」と送ってください`,
-          });
-        } else {
-          // 違うTXID → リセット案内
-          return lineClient.replyMessage(event.replyToken, {
-            type: 'text',
-            text: `⚠️ 別のTXIDが送られました\n\n現在のTXIDの決済手続き中です\n\n新しいTXIDを調査する場合は\n「リセット」と送ってください`,
-          });
-        }
-      }
-      return lineClient.replyMessage(event.replyToken, {
-        type: 'text',
-        text: `💳 お支払いをお待ちしています\n\nお支払い完了後、自動でレポートを\nお送りします\n\nキャンセルする場合は\n「リセット」と送ってください`,
-      });
-    }
-
-    // ── 決済済み ──────────────────────────────────────────
-    case 'paid': {
-      const chain = detectChain(text);
-      if (chain) {
-        if (session.txid && text.toLowerCase() === session.txid.toLowerCase()) {
-          // 同じTXID → レポート再送（無料）
-          await lineClient.replyMessage(event.replyToken, {
-            type: 'text',
-            text: `📄 以前のレポートを再送します`,
-          });
-          if (session.reportResult) {
-            await lineClient.pushMessage(userId, { type: 'text', text: buildReport(session.reportResult) });
-          }
-          return;
-        } else {
-          // 違うTXID → ヒアリングをスキップして即調査
-          const prevName   = session.hearingName || '';
-          const prevDamage = session.damage || '';
-          const prevReason = session.reason || '';
-          resetSession(userId);
-          const ns = getSession(userId);
-          // 以前のヒアリング情報を引き継ぐ
-          ns.hearingName = prevName;
-          ns.damage      = prevDamage;
-          ns.reason      = prevReason;
-          ns.txid        = text;
-          ns.chain       = chain;
-          ns.state       = 'investigating';
-
-          const chainName = { btc: 'Bitcoin', eth: 'Ethereum', xrp: 'XRP Ledger' }[chain];
-          const txShort   = text.slice(0, 10) + '...' + text.slice(-6);
-          const cacheKey  = text.toLowerCase();
-          const cached    = txidCache.get(cacheKey);
-          const waitMsg   = cached
-            ? `🔍 新しいTXIDを受け付けました\n${chainName} / ${txShort}\n\n⚡ 過去の調査データを取得中...`
-            : `🔍 新しいTXIDを受け付けました\n${chainName} / ${txShort}\n\n⚙️ 送金経路を追跡中...\n通常30秒〜2分かかります`;
-
-          await lineClient.replyMessage(event.replyToken, { type: 'text', text: waitMsg });
-          runInvestigation(userId, text, chain).catch(console.error);
-          return;
-        }
-      }
-      // TXID以外のメッセージ → 新規ヒアリング
-      resetSession(userId);
-      const ns = getSession(userId);
-      ns.state = 'h_name';
-      return lineClient.replyMessage(event.replyToken, {
-        type: 'text',
-        text: `新しいご相談ですね\n\n① お名前を教えてください`,
-      });
-    }
-
-    // ── 想定外の状態 ──────────────────────────────────────
     default: {
       resetSession(userId);
+      const ns = getSession(userId);
+      ns.state = 'waiting_txid';
       return lineClient.replyMessage(event.replyToken, {
-        type: 'text',
-        text: `ご相談ありがとうございます\n\n① お名前を教えてください`,
+        type: 'text', text: `TXIDをお送りください\n対応：BTC / ETH / XRP`,
       });
     }
   }
@@ -969,45 +632,94 @@ app.post('/stripe-webhook',
     } catch (e) {
       return res.status(400).send(`Webhook Error: ${e.message}`);
     }
+
     if (event.type === 'checkout.session.completed') {
       const s = event.data.object;
-      const { sessionId, userId, txid, chain } = s.metadata;
+      const { sessionId, userId, txidCount, customerName } = s.metadata;
       const userSession = getSession(userId);
+      const count = parseInt(txidCount) || 1;
 
       try {
         await lineClient.pushMessage(userId, {
           type: 'text',
-          text: '✅ お支払いを確認しました！\n\n📄 レポートを生成中...\n通常1〜2分でお届けします',
+          text: `✅ お支払いを確認しました！\n\n📄 詳細レポートを生成中...\n通常1〜2分でお届けします`,
         });
 
-        // キャッシュ優先、なければ再調査
-        const cacheKey = txid.toLowerCase();
-        let result = txidCache.get(cacheKey)?.result || userSession.investigationResult;
-        if (!result) {
-          result = await investigate(txid, chain);
-          txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
+        // 調査済みリストから最新N件を取得
+        const list = (userSession.investigatedList || []).slice(-count);
+
+        if (list.length === 0) {
+          // セッションが失われた場合（サーバー再起動等）→ キャッシュから試行
+          await lineClient.pushMessage(userId, {
+            type: 'text',
+            text: `⚠️ 調査データが見つかりませんでした\nサポートまでご連絡ください`,
+          });
+        } else {
+          // 有料レポートを送付（ヘッダー付き）
+          const header = `📄 BitTo 正式調査レポート\n━━━━━━━━━━━━━━━━━\n依頼者：${customerName || '（お名前）'}\n発行日：${new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}\n━━━━━━━━━━━━━━━━━\n\n`;
+          for (const item of list) {
+            await lineClient.pushMessage(userId, { type: 'text', text: header + buildReport(item.result) });
+          }
+          await lineClient.pushMessage(userId, {
+            type: 'text',
+            text: `✅ レポートの送付が完了しました\n\nご不明な点はLINEにてお問い合わせください`,
+          });
         }
 
-        const reportText = buildReport(result);
-        await lineClient.pushMessage(userId, { type: 'text', text: reportText });
-
-        // セッション更新
-        userSession.state        = 'paid';
-        userSession.paidAt       = Date.now();
-        userSession.reportResult = result;
         pendingSessions.delete(sessionId);
-
       } catch (e) {
         console.error('レポート生成エラー:', e);
         await lineClient.pushMessage(userId, {
-          type: 'text',
-          text: `⚠️ レポート生成エラー\n${e.message}\n\nサポートにご連絡ください`,
+          type: 'text', text: `⚠️ レポート生成エラー\n${e.message}\nサポートにご連絡ください`,
         });
       }
     }
     res.json({ received: true });
   }
 );
+
+// 申し込みフォームからの決済セッション作成
+app.post('/api/create-checkout', express.json(), async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: 'Stripe未設定（テストモード）' });
+  try {
+    const { uid, name, phone, email, address, txid_count } = req.body;
+    const count  = Math.max(1, Math.min(10, parseInt(txid_count) || 1));
+    const amount = 6600 * count;
+    const sessionId = crypto.randomUUID();
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      customer_email: email || undefined,
+      line_items: [{
+        price_data: {
+          currency: 'jpy',
+          product_data: {
+            name:        `BitTo 詳細調査レポート（${count}件）`,
+            description: `ブロックチェーン調査レポート ${count}件分`,
+          },
+          unit_amount: amount,
+        },
+        quantity: 1,
+      }],
+      mode: 'payment',
+      success_url: `${BASE_URL}/payment/success?sid=${sessionId}`,
+      cancel_url:  `${BASE_URL}/apply?uid=${encodeURIComponent(uid || '')}`,
+      metadata: {
+        sessionId,
+        userId:       uid || '',
+        txidCount:    String(count),
+        customerName: name || '',
+        phone:        phone || '',
+        address:      address || '',
+      },
+    });
+
+    pendingSessions.set(sessionId, { userId: uid, txidCount: count, stripeId: session.id, createdAt: Date.now() });
+    res.json({ url: session.url });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // 決済完了・キャンセルページ
 app.get('/payment/success', (_req, res) => res.send(`<!DOCTYPE html>
@@ -1026,7 +738,7 @@ app.get('/payment/cancel', (_req, res) => res.send(`<!DOCTYPE html>
 .card{background:#111318;border:1px solid #252d3d;border-radius:16px;padding:40px;max-width:380px}
 h1{color:#f87171;font-size:1.5rem;margin-bottom:12px}.icon{font-size:3rem;margin-bottom:16px}p{color:#94a3b8;line-height:1.6}</style></head>
 <body><div class="card"><div class="icon">❌</div><h1>キャンセルされました</h1>
-<p>調査を再開する場合は<br>LINEで「同意する」と再度<br>ご返信ください。</p></div></body></html>`));
+<p>やり直す場合はLINEにて<br>フォームリンクをご確認ください。</p></div></body></html>`));
 
 // LINE Webhook
 app.post('/webhook', line.middleware(lineConfig), async (req, res) => {
@@ -1038,44 +750,32 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── REST API（ChainTrace UI用）────────────────────────────
+// ── REST API ────────────────────────────────────────────────
 app.get('/api/status', (_req, res) => res.json({
-  ok: true,
-  mode: stripe ? 'production' : 'test（Stripeなし）',
+  ok: true, mode: stripe ? 'production' : 'test（Stripeなし）',
   keys: { blockchair: !!BLOCKCHAIR_KEY, etherscan: !!ETHERSCAN_KEY, gemini: !!GEMINI_KEY, line: !!LINE_CHANNEL_ACCESS_TOKEN, stripe: !!stripe },
   webhook: `${BASE_URL}/webhook`,
 }));
-
 app.get('/api/btc/tx/:txid', async (req, res) => {
-  try { const r = await fetch(`https://api.blockchair.com/bitcoin/dashboards/transaction/${req.params.txid}?key=${BLOCKCHAIR_KEY}`); res.json(await r.json()); }
+  try { res.json(await (await fetch(`https://api.blockchair.com/bitcoin/dashboards/transaction/${req.params.txid}?key=${BLOCKCHAIR_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/btc/address/:addr', async (req, res) => {
-  try { const r = await fetch(`https://api.blockchair.com/bitcoin/dashboards/address/${req.params.addr}?key=${BLOCKCHAIR_KEY}`); res.json(await r.json()); }
+  try { res.json(await (await fetch(`https://api.blockchair.com/bitcoin/dashboards/address/${req.params.addr}?key=${BLOCKCHAIR_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/eth/tx/:hash', async (req, res) => {
   try { const h = req.params.hash.startsWith('0x') ? req.params.hash : '0x' + req.params.hash;
-    const r = await fetch(`https://api.blockchair.com/ethereum/dashboards/transaction/${h}?key=${BLOCKCHAIR_KEY}`); res.json(await r.json()); }
+    res.json(await (await fetch(`https://api.blockchair.com/ethereum/dashboards/transaction/${h}?key=${BLOCKCHAIR_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/eth/address/:addr', async (req, res) => {
-  try { const r = await fetch(`https://api.blockchair.com/ethereum/dashboards/address/${req.params.addr}?key=${BLOCKCHAIR_KEY}`); res.json(await r.json()); }
+  try { res.json(await (await fetch(`https://api.blockchair.com/ethereum/dashboards/address/${req.params.addr}?key=${BLOCKCHAIR_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/eth/txlist/:addr', async (req, res) => {
-  try {
-    const { page = 1, offset = 20, sort = 'desc' } = req.query;
-    const r = await fetch(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${req.params.addr}&startblock=0&endblock=latest&page=${page}&offset=${offset}&sort=${sort}&apikey=${ETHERSCAN_KEY}`);
-    res.json(await r.json());
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.get('/api/eth/label/:addr', async (req, res) => {
-  try { const r = await fetch(`https://api.etherscan.io/v2/api?chainid=1&module=contract&action=getsourcecode&address=${req.params.addr}&apikey=${ETHERSCAN_KEY}`); res.json(await r.json()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.get('/api/eth/balance/:addr', async (req, res) => {
-  try { const r = await fetch(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=balance&address=${req.params.addr}&tag=latest&apikey=${ETHERSCAN_KEY}`); res.json(await r.json()); }
+  try { const { page=1, offset=20, sort='desc' } = req.query;
+    res.json(await (await fetch(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${req.params.addr}&startblock=0&endblock=latest&page=${page}&offset=${offset}&sort=${sort}&apikey=${ETHERSCAN_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/xrp/tx/:txid', async (req, res) => {
@@ -1083,13 +783,8 @@ app.get('/api/xrp/tx/:txid', async (req, res) => {
     const t = await r.text(); if (t === 'Not found') return res.status(404).json({ error: 'Not found' }); res.json(JSON.parse(t)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.get('/api/xrp/address/:addr', async (req, res) => {
-  try { const r = await fetch(`https://api.xrpscan.com/api/v1/account/${req.params.addr}/transactions`); res.json(await r.json()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.post('/api/ai/analyze', async (req, res) => {
-  try {
-    const { prompt } = req.body;
+app.post('/api/ai/analyze', express.json(), async (req, res) => {
+  try { const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: 'promptが必要です' });
     const r = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1103,7 +798,6 @@ app.post('/api/ai/analyze', async (req, res) => {
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-// ── サーバー起動 ────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`\n✅ BitTo サーバー起動完了`);
   console.log(`🌐 http://localhost:${PORT}`);
