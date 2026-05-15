@@ -21,7 +21,11 @@ const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const LINE_CHANNEL_SECRET       = process.env.LINE_CHANNEL_SECRET;
 const STRIPE_SECRET_KEY         = process.env.STRIPE_SECRET_KEY;
 const STRIPE_WEBHOOK_SECRET     = process.env.STRIPE_WEBHOOK_SECRET;
-const BASE_URL                  = process.env.BASE_URL || `http://localhost:${PORT}`;
+// Railway は RAILWAY_PUBLIC_DOMAIN を自動設定する → https:// を付けて使用
+const BASE_URL = process.env.BASE_URL
+  || (process.env.RAILWAY_PUBLIC_DOMAIN
+      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+      : `http://localhost:${PORT}`);
 
 // ── Stripe（任意） ─────────────────────────────────────────
 let stripe = null;
