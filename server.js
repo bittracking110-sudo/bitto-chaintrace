@@ -788,6 +788,22 @@ async function handleLineEvent(event) {
 
     // ── 調査実行中 ────────────────────────────────────────
     case 'investigating': {
+      const inChain = detectChain(text);
+      if (inChain) {
+        if (text.toLowerCase() === session.txid?.toLowerCase()) {
+          // 同じTXID → NG
+          return lineClient.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `⚠️ このTXIDはただいま調査中です\n\n完了次第、結果をお送りします\nしばらくお待ちください`,
+          });
+        } else {
+          // 違うTXID → NG
+          return lineClient.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `⚠️ 現在別のTXIDを調査中です\n\n別のTXIDを調査する場合は\n現在の調査完了後に\n「リセット」と送ってください`,
+          });
+        }
+      }
       return lineClient.replyMessage(event.replyToken, {
         type: 'text',
         text: `⚙️ ただいま調査中です\nしばらくお待ちください\n\n完了次第、結果をお送りします`,
@@ -796,6 +812,24 @@ async function handleLineEvent(event) {
 
     // ── 利用規約への同意待ち ──────────────────────────────
     case 'tos': {
+      const inChainTos = detectChain(text);
+      if (inChainTos) {
+        if (text.toLowerCase() === session.txid?.toLowerCase()) {
+          // 同じTXID → NG＋利用規約を再表示
+          await lineClient.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `⚠️ このTXIDはすでに調査済みです\n\n詳細レポートをご希望の場合は\n利用規約にご同意ください`,
+          });
+          await lineClient.pushMessage(userId, { type: 'text', text: TOS_TEXT });
+          return;
+        } else {
+          // 違うTXID → リセット案内
+          return lineClient.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `⚠️ 別のTXIDが送られました\n\n現在のTXIDの手続きを続ける場合は\n「同意する」とご返信ください\n\n新しいTXIDを調査する場合は\n「リセット」と送ってください`,
+          });
+        }
+      }
       if (text !== '同意する') {
         return lineClient.replyMessage(event.replyToken, {
           type: 'text',
@@ -837,6 +871,22 @@ async function handleLineEvent(event) {
 
     // ── 決済待ち ──────────────────────────────────────────
     case 'awaiting_payment': {
+      const inChainPay = detectChain(text);
+      if (inChainPay) {
+        if (text.toLowerCase() === session.txid?.toLowerCase()) {
+          // 同じTXID → NG＋決済リンク案内
+          return lineClient.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `⚠️ このTXIDはすでに調査済みです\n\nお支払いページからお手続きをお願いします\n\nキャンセルする場合は「リセット」と送ってください`,
+          });
+        } else {
+          // 違うTXID → リセット案内
+          return lineClient.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `⚠️ 別のTXIDが送られました\n\n現在のTXIDの決済手続き中です\n\n新しいTXIDを調査する場合は\n「リセット」と送ってください`,
+          });
+        }
+      }
       return lineClient.replyMessage(event.replyToken, {
         type: 'text',
         text: `💳 お支払いをお待ちしています\n\nお支払い完了後、自動でレポートを\nお送りします\n\nキャンセルする場合は\n「リセット」と送ってください`,
@@ -845,19 +895,47 @@ async function handleLineEvent(event) {
 
     // ── 決済済み ──────────────────────────────────────────
     case 'paid': {
-      // 同じTXIDを送ってきた → レポート再送
       const chain = detectChain(text);
-      if (chain && session.txid && text.toLowerCase() === session.txid.toLowerCase()) {
-        await lineClient.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `📄 以前のレポートを再送します`,
-        });
-        if (session.reportResult) {
-          await lineClient.pushMessage(userId, { type: 'text', text: buildReport(session.reportResult) });
+      if (chain) {
+        if (session.txid && text.toLowerCase() === session.txid.toLowerCase()) {
+          // 同じTXID → レポート再送（無料）
+          await lineClient.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `📄 以前のレポートを再送します`,
+          });
+          if (session.reportResult) {
+            await lineClient.pushMessage(userId, { type: 'text', text: buildReport(session.reportResult) });
+          }
+          return;
+        } else {
+          // 違うTXID → ヒアリングをスキップして即調査
+          const prevName   = session.hearingName || '';
+          const prevDamage = session.damage || '';
+          const prevReason = session.reason || '';
+          resetSession(userId);
+          const ns = getSession(userId);
+          // 以前のヒアリング情報を引き継ぐ
+          ns.hearingName = prevName;
+          ns.damage      = prevDamage;
+          ns.reason      = prevReason;
+          ns.txid        = text;
+          ns.chain       = chain;
+          ns.state       = 'investigating';
+
+          const chainName = { btc: 'Bitcoin', eth: 'Ethereum', xrp: 'XRP Ledger' }[chain];
+          const txShort   = text.slice(0, 10) + '...' + text.slice(-6);
+          const cacheKey  = text.toLowerCase();
+          const cached    = txidCache.get(cacheKey);
+          const waitMsg   = cached
+            ? `🔍 新しいTXIDを受け付けました\n${chainName} / ${txShort}\n\n⚡ 過去の調査データを取得中...`
+            : `🔍 新しいTXIDを受け付けました\n${chainName} / ${txShort}\n\n⚙️ 送金経路を追跡中...\n通常30秒〜2分かかります`;
+
+          await lineClient.replyMessage(event.replyToken, { type: 'text', text: waitMsg });
+          runInvestigation(userId, text, chain).catch(console.error);
+          return;
         }
-        return;
       }
-      // 別のTXID or メッセージ → 新規ヒアリング開始
+      // TXID以外のメッセージ → 新規ヒアリング
       resetSession(userId);
       const ns = getSession(userId);
       ns.state = 'h_name';
