@@ -14,7 +14,6 @@
     .cover-left p{color:#94a3b8;font-size:0.85rem}
     .cover-meta{text-align:right;font-size:0.82rem;color:#94a3b8;line-height:1.8}
     .cover-meta strong{color:#e2e8f0;display:block}
-    /* サンプルバッジ */
     .sample-badge{background:#f59e0b;color:#1a1a2e;font-size:0.72rem;font-weight:700;padding:3px 10px;border-radius:20px;margin-left:10px;vertical-align:middle}
     /* セクション */
     .tx-section{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:24px;margin-bottom:20px}
@@ -29,7 +28,14 @@
     .info-table td{padding:8px 10px;border:1px solid #e2e8f0;font-size:0.85rem;word-break:break-all}
     .info-table a{color:#3b82f6;text-decoration:none}
     .mono{font-family:'Courier New',monospace;font-size:0.78rem;color:#1e3a5f;word-break:break-all}
-    /* フローマップ */
+    /* Mermaid フロー */
+    .mermaid-wrap{background:#fafbfc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:8px;overflow-x:auto;text-align:center}
+    .mermaid-wrap pre{display:inline-block;text-align:left}
+    /* 価格チャート */
+    .chart-wrap{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:8px}
+    .tx-price-label{font-size:0.82rem;color:#dc2626;font-weight:600;margin-bottom:8px;text-align:right}
+    .chart-error{color:#94a3b8;font-size:0.82rem;text-align:center;padding:20px 0}
+    /* 送金経路詳細 */
     .flow-map{display:flex;flex-direction:column;align-items:center;gap:0;margin:12px 0}
     .flow-node{width:100%;border-radius:10px;padding:14px 16px;border:2px solid}
     .flow-node.victim  {background:#fff5f5;border-color:#fca5a5}
@@ -42,8 +48,15 @@
     .flow-node.exchange .node-role{color:#16a34a}
     .node-address{font-family:'Courier New',monospace;font-size:0.77rem;color:#374151;word-break:break-all;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;margin-bottom:4px}
     .node-meta{font-size:0.78rem;color:#64748b;margin-top:3px}
+    .usd-val{color:#059669;font-size:0.76rem;font-weight:600}
     .badge{background:#1a1a2e;color:#fff;font-size:0.72rem;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:400}
     .flow-arrow{font-size:1.4rem;color:#94a3b8;margin:4px 0;line-height:1}
+    /* AI分析 */
+    .ai-section{background:linear-gradient(135deg,#1e3a5f 0%,#1a1a2e 100%);border-radius:10px;padding:20px 22px;margin-top:20px;color:#e2e8f0}
+    .ai-section h3{color:#93c5fd;border-left-color:#3b82f6;margin-top:0}
+    .ai-label{display:inline-flex;align-items:center;gap:6px;background:#3b82f6;color:#fff;font-size:0.72rem;font-weight:700;padding:3px 10px;border-radius:12px;margin-bottom:14px}
+    .ai-body{font-size:0.85rem;line-height:1.9;color:#cbd5e1;white-space:pre-wrap}
+    .ai-body strong{color:#e2e8f0}
     /* 取引所 */
     .no-ex{color:#64748b;font-size:0.85rem;padding:10px}
     /* 要請テンプレート */
@@ -53,13 +66,13 @@
     .print-bar p{font-size:0.83rem;color:#64748b}
     .print-btn{background:#1a1a2e;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:0.9rem;font-weight:700;cursor:pointer}
     .print-btn:hover{opacity:0.85}
-    .page-break{page-break-before:always}
     .footer-note{text-align:center;color:#94a3b8;font-size:0.78rem;margin-top:20px}
     @media print{
       body{background:#fff;padding:0}
       .print-bar{display:none}
       .tx-section{border:none;padding:0;margin-bottom:40px}
       .cover{border-radius:0}
+      .ai-section{background:#1a1a2e!important;-webkit-print-color-adjust:exact}
     }
     @media(max-width:600px){
       .cover{flex-direction:column}
@@ -108,34 +121,58 @@
       <tr><th>ブロック高</th><td>21,034,891</td></tr>
     </table>
 
-    <!-- フローマップ -->
-    <h3>📍 送金経路フローマップ</h3>
+    <!-- ビジュアルフロー（Mermaid） -->
+    <h3>🔗 送金経路ビジュアルフロー</h3>
+    <div class="mermaid-wrap">
+      <pre class="mermaid">graph LR
+  N0["🔴 被害者<br/>0xa1b2c3…b2c3<br/>残高: 9.9500 ETH<br/>TX: 122,024件"]
+  N1["🔵 中継1<br/>0xf0e1d2…c4d3<br/>残高: ≈$0.01<br/>TX: 3件"]
+  N2["🟢 Binance Hot Wallet<br/>0x28c6c0…1d60<br/>残高: 大量<br/>TX: 数百万件"]
+  N0 -->|"0.8490 ETH"| N1
+  N1 -->|"0.8485 ETH"| N2
+  style N0 fill:#fff5f5,stroke:#fca5a5,color:#dc2626
+  style N1 fill:#eff6ff,stroke:#93c5fd,color:#2563eb
+  style N2 fill:#f0fdf4,stroke:#86efac,color:#16a34a</pre>
+    </div>
+
+    <!-- 価格チャート（Chart.js + CoinGecko） -->
+    <h3>📈 ETH価格推移（送金前後30日）</h3>
+    <div class="chart-wrap">
+      <p class="tx-price-label" id="priceLabel"></p>
+      <canvas id="priceChart" data-coin="ethereum" data-time="1730592862000"></canvas>
+    </div>
+
+    <!-- 送金経路詳細 -->
+    <h3>📍 送金経路詳細</h3>
     <div class="flow-map">
 
-      <!-- 被害者ウォレット -->
       <div class="flow-node victim">
         <div class="node-role"><span class="node-icon">●</span>被害者ウォレット</div>
         <div class="node-address">0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3</div>
+        <div class="node-meta">💰 残高: 9.9500 ETH <span class="usd-val">≈ $24,380.00</span></div>
+        <div class="node-meta">📊 TX件数: 122,024件</div>
       </div>
 
       <div class="flow-arrow">▼</div>
 
-      <!-- 中継アドレス1 -->
       <div class="flow-node relay">
         <div class="node-role"><span class="node-icon">◆</span>中継アドレス（1次先）</div>
         <div class="node-address">0xf0e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3</div>
+        <div class="node-meta">💰 残高: 0.0000 ETH <span class="usd-val">≈ $0.01</span></div>
+        <div class="node-meta">📊 TX件数: 3件</div>
         <div class="node-meta">📅 2025/11/03 09:21:47</div>
-        <div class="node-meta">💰 0.84900000 ETH</div>
+        <div class="node-meta">💸 送金額: 0.84900000 ETH</div>
       </div>
 
       <div class="flow-arrow">▼</div>
 
-      <!-- 取引所到達 -->
       <div class="flow-node exchange">
         <div class="node-role"><span class="node-icon">★</span>取引所到達（2次先）<span class="badge">Binance Hot Wallet</span></div>
         <div class="node-address">0x28c6c06298d514db089934071355e5743bf21d60</div>
+        <div class="node-meta">💰 残高: 大量（取引所ホットウォレット）</div>
+        <div class="node-meta">📊 TX件数: 数百万件</div>
         <div class="node-meta">📅 2025/11/03 09:38:12</div>
-        <div class="node-meta">💰 0.84850000 ETH</div>
+        <div class="node-meta">💸 送金額: 0.84850000 ETH</div>
       </div>
 
     </div>
@@ -157,15 +194,41 @@
       <tr><th>対応メモ</th><td>法執行機関ポータルから凍結申請が可能</td></tr>
     </table>
 
+    <!-- AI分析コメント -->
+    <div class="ai-section">
+      <h3>🤖 AI調査分析レポート</h3>
+      <div class="ai-label">✦ Gemini AI 自動生成</div>
+      <div class="ai-body"><strong>【結論・特記事項】</strong>
+
+起点アドレスから送金された 0.85 ETH は、1つの中継ウォレットを経由し、
+2次先で Binance Hot Wallet（0x28c6…1d60）への到達が確認されました。
+
+<strong>■ 特記事項①：使い捨てウォレットの可能性</strong>
+中継アドレス（0xf0e1…c4d3）のTX件数はわずか 3件 であり、
+本件専用に作成された使い捨てウォレットの可能性が極めて高いです。
+残高もほぼゼロ（$0.01）で、送金完了後に放棄されています。
+
+<strong>■ 特記事項②：送金から着金まで約24分</strong>
+被害者ウォレットからの送金（09:14）から Binance への着金（09:38）まで
+約24分と短時間であり、事前に経路が設計された計画的な資金移動と考えられます。
+
+<strong>■ 特記事項③：Binanceへの申請について</strong>
+Binance は法執行機関向け専用ポータルを提供しており、
+凍結申請の成功率が比較的高い取引所です。
+下記の要請テンプレートを使用し、早急な申請をお勧めします。</div>
+    </div>
+
     <!-- 要請テンプレート -->
-    <h3>📝 取引所への要請テンプレート</h3>
-    <div class="template-box">【Binance サポートチームへ】
+    <h3>📝 取引所への要請テンプレート（AI生成）</h3>
+    <div class="template-box">【Binance コンプライアンスチームへ】
 
 件名：不正送金に関する緊急凍結要請
 
 拝啓
 
-不正な仮想通貨送金について、緊急のご対応をお願いいたします。
+私は仮想通貨詐欺の被害を受けた者です。
+被害資金がBinance取引所に流入したことがブロックチェーン調査により
+確認されましたので、緊急のご対応をお願いいたします。
 
 ■ 依頼者情報
 氏名：山田 太郎
@@ -176,21 +239,121 @@
 
 ■ チェーン：ETH（Ethereum）
 ■ 送金日時（JST）：2025/11/03 09:14:22
-■ 送金額：0.85000000 ETH
-■ 着金アドレス：0x28c6c06298d514db089934071355e5743bf21d60
+■ 送金額：0.85000000 ETH（約 $2,082 相当）
+■ 最終着金アドレス：0x28c6c06298d514db089934071355e5743bf21d60
+■ 中継アドレス：0xf0e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3
 
 上記は詐欺被害に起因する不正送金の疑いがあります。
+ブロックチェーン調査の結果、資金は上記アドレスを経由して
+御社取引所に流入したことが確認されております。
+
 以下について緊急のご対応をお願い申し上げます。
 
 ① 上記アドレスの即時凍結措置
 ② 関連する取引情報・KYC情報の保全
-③ 当局への情報提供へのご協力
+③ 捜査機関への情報提供へのご協力
 
-敬具</div>
+なお、本件については管轄警察署へ被害届を提出済みです。
+法執行機関ポータル（https://www.binance.com/en/support/law-enforcement）
+からの正式な要請も並行して行う予定です。
+
+ご対応をよろしくお願い申し上げます。
+
+敬具
+
+山田 太郎
+（連絡先は追って別途ご案内いたします）</div>
 
   </section>
 
   <p class="footer-note">本レポートは BitTo が自動生成した調査報告書です。参考資料としてご活用ください。</p>
 </div>
+
+<!-- Mermaid.js -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true, theme: 'base',
+    themeVariables: { fontSize: '13px', fontFamily: "'Courier New', monospace" }
+  });
+</script>
+
+<!-- Chart.js + CoinGecko 価格チャート -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+(async () => {
+  const canvas  = document.getElementById('priceChart');
+  const coinId  = canvas.dataset.coin;
+  const txTime  = parseInt(canvas.dataset.time);
+  const from    = Math.floor(txTime / 1000) - 30 * 86400;
+  const to      = Math.min(Math.floor(txTime / 1000) + 30 * 86400, Math.floor(Date.now() / 1000));
+  try {
+    const res = await fetch(
+      'https://api.coingecko.com/api/v3/coins/' + coinId +
+      '/market_chart/range?vs_currency=usd&from=' + from + '&to=' + to
+    );
+    const d = await res.json();
+    if (!d.prices || !d.prices.length) throw new Error('データなし');
+
+    const labels = d.prices.map(([ts]) => {
+      const dt = new Date(ts);
+      return (dt.getMonth() + 1) + '/' + dt.getDate();
+    });
+    const values = d.prices.map(([, p]) => p);
+
+    let txIdx = d.prices.findIndex(([ts]) => ts >= txTime);
+    if (txIdx < 0) txIdx = values.length - 1;
+    const txPrice = values[txIdx];
+
+    document.getElementById('priceLabel').textContent =
+      '● 送金時価格: $' + txPrice.toLocaleString('en-US', { maximumFractionDigits: 2 });
+
+    new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'ETH (USD)',
+            data: values,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59,130,246,0.07)',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.3,
+            fill: true,
+          },
+          {
+            label: '送金時 $' + txPrice.toLocaleString('en-US', { maximumFractionDigits: 2 }),
+            data: values.map((v, i) => i === txIdx ? v : null),
+            borderColor: 'transparent',
+            pointBackgroundColor: '#dc2626',
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2,
+            pointRadius: 8,
+            showLine: false,
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { position: 'top', labels: { font: { size: 11 }, boxWidth: 12 } } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8, font: { size: 10 }, color: '#64748b' }, grid: { display: false } },
+          y: {
+            ticks: {
+              callback: v => '$' + v.toLocaleString('en-US', { maximumFractionDigits: 0 }),
+              font: { size: 10 }, color: '#64748b'
+            },
+            grid: { color: '#f1f5f9' }
+          }
+        }
+      }
+    });
+  } catch (e) {
+    canvas.parentElement.innerHTML = '<p class="chart-error">価格データ取得失敗（' + e.message + '）</p>';
+  }
+})();
+</script>
 </body>
 </html>
