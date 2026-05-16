@@ -208,6 +208,71 @@ function isExchange(label) {
   return EX_KEYWORDS.some(k => label.toLowerCase().includes(k));
 }
 
+// ══ アドレス残高・TX件数取得 ══════════════════════════════════
+
+const priceCache = new Map(); // chain → { price, ts }
+
+async function getUSDPrice(chain) {
+  const key = chain.toLowerCase();
+  const cached = priceCache.get(key);
+  if (cached && Date.now() - cached.ts < 300000) return cached.price; // 5分キャッシュ
+  try {
+    const ids = { btc: 'bitcoin', eth: 'ethereum', xrp: 'ripple' }[key];
+    if (!ids) return 0;
+    const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`);
+    const j = await r.json();
+    const price = j[ids]?.usd || 0;
+    priceCache.set(key, { price, ts: Date.now() });
+    return price;
+  } catch { return 0; }
+}
+
+async function getAddressInfo(addr, chain) {
+  try {
+    if (chain === 'eth') {
+      const url = `https://api.blockchair.com/ethereum/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
+      const r = await fetch(url);
+      const j = await r.json();
+      const d = j.data?.[addr.toLowerCase()]?.address;
+      if (!d) return null;
+      const balNative = parseFloat(d.balance || 0) / 1e18;
+      const price     = await getUSDPrice('eth');
+      return { balance: balNative, txCount: d.transaction_count || 0, balanceUSD: balNative * price };
+    }
+    if (chain === 'btc') {
+      const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
+      const r = await fetch(url);
+      const j = await r.json();
+      const d = j.data?.[addr]?.address;
+      if (!d) return null;
+      const balNative = parseFloat(d.balance || 0) / 1e8;
+      const price     = await getUSDPrice('btc');
+      return { balance: balNative, txCount: d.transaction_count || 0, balanceUSD: balNative * price };
+    }
+    if (chain === 'xrp') {
+      const r = await fetch(`https://api.xrpscan.com/api/v1/account/${addr}`);
+      const j = await r.json();
+      const balNative = parseFloat(j.xrpBalance || 0);
+      const price     = await getUSDPrice('xrp');
+      return { balance: balNative, txCount: j.TxCount || 0, balanceUSD: balNative * price };
+    }
+  } catch (e) { console.error('[AddrInfo]', addr, e.message); }
+  return null;
+}
+
+async function enrichPathWithAddressInfo(path, chain) {
+  for (const node of path) {
+    if (!node.address) continue;
+    await new Promise(res => setTimeout(res, 250)); // レート制限対策
+    const info = await getAddressInfo(node.address, chain);
+    if (info) {
+      node.balance    = info.balance;
+      node.txCount    = info.txCount;
+      node.balanceUSD = info.balanceUSD;
+    }
+  }
+}
+
 // ══ チェーン自動判定 ══════════════════════════════════════════
 function detectChain(input) {
   const s = input.trim();
@@ -451,10 +516,15 @@ async function investigateXRP(txid) {
 }
 
 async function investigate(txid, chain) {
-  if (chain === 'btc') return investigateBTC(txid);
-  if (chain === 'eth') return investigateETH(txid);
-  if (chain === 'xrp') return investigateXRP(txid);
-  throw new Error('未対応チェーン');
+  let result;
+  if (chain === 'btc') result = await investigateBTC(txid);
+  else if (chain === 'eth') result = await investigateETH(txid);
+  else if (chain === 'xrp') result = await investigateXRP(txid);
+  else throw new Error('未対応チェーン');
+
+  // 各アドレスノードに残高・TX件数を付加
+  await enrichPathWithAddressInfo(result.path, chain);
+  return result;
 }
 
 // ══ レポート生成 ══════════════════════════════════════════════
@@ -514,16 +584,22 @@ function generateReportHTML(results, customerName, issuedAt) {
       else if (p.isExchange) { cls = 'exchange'; icon = '★'; roleLabel = `取引所到達（${i}次先）`; }
       else               { cls = 'relay';    icon = '◆'; roleLabel = `中継アドレス（${i}次先）`; }
 
-      const exBadge = p.label ? `<span class="badge">${p.label}</span>` : '';
-      const timeTd  = p.time  ? `<div class="node-meta">📅 ${fmtDate(p.time)}</div>` : '';
-      const amtTd   = (p.amount != null && !isNaN(p.amount) && p.amount > 0)
-        ? `<div class="node-meta">💰 ${p.amount.toFixed(8)} ${p.token || r.chain}</div>` : '';
+      const exBadge  = p.label ? `<span class="badge">${p.label}</span>` : '';
+      const timeTd   = p.time ? `<div class="node-meta">📅 ${fmtDate(p.time)}</div>` : '';
+      const amtTd    = (p.amount != null && !isNaN(p.amount) && p.amount > 0)
+        ? `<div class="node-meta">💸 送金額: ${p.amount.toFixed(8)} ${p.token || r.chain}</div>` : '';
+      const usdStr   = (p.balanceUSD != null && !isNaN(p.balanceUSD))
+        ? ` <span class="usd-val">≈ $${p.balanceUSD < 1 ? p.balanceUSD.toFixed(4) : p.balanceUSD.toLocaleString('en-US',{maximumFractionDigits:2})}</span>` : '';
+      const balTd    = (p.balance != null && !isNaN(p.balance))
+        ? `<div class="node-meta">💰 残高: ${p.balance < 0.0001 ? p.balance.toFixed(8) : p.balance.toFixed(4)} ${r.chain}${usdStr}</div>` : '';
+      const txCntTd  = (p.txCount != null)
+        ? `<div class="node-meta">📊 TX件数: ${p.txCount.toLocaleString()}件</div>` : '';
 
       return `
         <div class="flow-node ${cls}">
           <div class="node-role"><span class="node-icon">${icon}</span>${roleLabel}${exBadge}</div>
           <div class="node-address">${p.address}</div>
-          ${timeTd}${amtTd}
+          ${balTd}${txCntTd}${timeTd}${amtTd}
         </div>
         ${i < (r.path || []).length - 1 ? '<div class="flow-arrow">▼</div>' : ''}`;
     }).join('');
@@ -652,6 +728,7 @@ ${r.txid}
     .flow-node.exchange .node-role{color:#16a34a}
     .node-address{font-family:'Courier New',monospace;font-size:0.77rem;color:#374151;word-break:break-all;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;margin-bottom:4px}
     .node-meta{font-size:0.78rem;color:#64748b;margin-top:3px}
+    .usd-val{color:#059669;font-size:0.76rem;font-weight:600}
     .badge{background:#1a1a2e;color:#fff;font-size:0.72rem;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:400}
     .flow-arrow{font-size:1.4rem;color:#94a3b8;margin:4px 0;line-height:1}
     .no-ex{color:#64748b;font-size:0.85rem;padding:10px}
