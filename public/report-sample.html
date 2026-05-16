@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BitTo 詳細調査レポート（サンプル）</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Hiragino Kaku Gothic Pro','Meiryo',sans-serif;background:#f4f5f7;color:#1a1a2e;padding:24px 16px 60px;font-size:14px}
+    .container{max-width:760px;margin:0 auto}
+    /* カバー */
+    .cover{background:#1a1a2e;color:#fff;border-radius:12px;padding:32px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+    .cover-left h1{font-size:1.5rem;margin-bottom:4px}
+    .cover-left p{color:#94a3b8;font-size:0.85rem}
+    .cover-meta{text-align:right;font-size:0.82rem;color:#94a3b8;line-height:1.8}
+    .cover-meta strong{color:#e2e8f0;display:block}
+    /* サンプルバッジ */
+    .sample-badge{background:#f59e0b;color:#1a1a2e;font-size:0.72rem;font-weight:700;padding:3px 10px;border-radius:20px;margin-left:10px;vertical-align:middle}
+    /* セクション */
+    .tx-section{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:24px;margin-bottom:20px}
+    .tx-header{display:flex;align-items:center;gap:10px;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0}
+    .chain-badge{background:#1a1a2e;color:#fff;padding:4px 12px;border-radius:20px;font-weight:700;font-size:0.9rem}
+    .tx-num{color:#64748b;font-size:0.85rem}
+    h3{font-size:0.95rem;color:#1a1a2e;margin:20px 0 10px;padding-left:8px;border-left:3px solid #3b82f6}
+    h4{font-size:0.88rem;color:#374151}
+    /* テーブル */
+    .info-table{width:100%;border-collapse:collapse;margin-bottom:8px}
+    .info-table th{width:140px;background:#f8fafc;padding:8px 10px;text-align:left;font-size:0.82rem;color:#64748b;border:1px solid #e2e8f0;white-space:nowrap}
+    .info-table td{padding:8px 10px;border:1px solid #e2e8f0;font-size:0.85rem;word-break:break-all}
+    .info-table a{color:#3b82f6;text-decoration:none}
+    .mono{font-family:'Courier New',monospace;font-size:0.78rem;color:#1e3a5f;word-break:break-all}
+    /* フローマップ */
+    .flow-map{display:flex;flex-direction:column;align-items:center;gap:0;margin:12px 0}
+    .flow-node{width:100%;border-radius:10px;padding:14px 16px;border:2px solid}
+    .flow-node.victim  {background:#fff5f5;border-color:#fca5a5}
+    .flow-node.relay   {background:#eff6ff;border-color:#93c5fd}
+    .flow-node.exchange{background:#f0fdf4;border-color:#86efac}
+    .node-role{font-weight:700;font-size:0.85rem;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+    .node-icon{font-size:0.75rem}
+    .flow-node.victim   .node-role{color:#dc2626}
+    .flow-node.relay    .node-role{color:#2563eb}
+    .flow-node.exchange .node-role{color:#16a34a}
+    .node-address{font-family:'Courier New',monospace;font-size:0.77rem;color:#374151;word-break:break-all;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;margin-bottom:4px}
+    .node-meta{font-size:0.78rem;color:#64748b;margin-top:3px}
+    .badge{background:#1a1a2e;color:#fff;font-size:0.72rem;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:400}
+    .flow-arrow{font-size:1.4rem;color:#94a3b8;margin:4px 0;line-height:1}
+    /* 取引所 */
+    .no-ex{color:#64748b;font-size:0.85rem;padding:10px}
+    /* 要請テンプレート */
+    .template-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;font-size:0.82rem;white-space:pre-wrap;line-height:1.8;word-break:break-all;margin-top:10px}
+    /* 印刷ボタン */
+    .print-bar{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+    .print-bar p{font-size:0.83rem;color:#64748b}
+    .print-btn{background:#1a1a2e;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:0.9rem;font-weight:700;cursor:pointer}
+    .print-btn:hover{opacity:0.85}
+    .page-break{page-break-before:always}
+    .footer-note{text-align:center;color:#94a3b8;font-size:0.78rem;margin-top:20px}
+    @media print{
+      body{background:#fff;padding:0}
+      .print-bar{display:none}
+      .tx-section{border:none;padding:0;margin-bottom:40px}
+      .cover{border-radius:0}
+    }
+    @media(max-width:600px){
+      .cover{flex-direction:column}
+      .cover-meta{text-align:left}
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <!-- 印刷バー -->
+  <div class="print-bar">
+    <p>📄 このページを印刷 → 「PDFとして保存」でPDF化できます<br>
+    <span style="color:#f59e0b;font-size:0.78rem">※ これはサンプルです。実際のレポートには調査結果が入ります。</span></p>
+    <button class="print-btn" onclick="window.print()">🖨 PDF保存 / 印刷</button>
+  </div>
+
+  <!-- カバー -->
+  <div class="cover">
+    <div class="cover-left">
+      <h1>🔗 BitTo 詳細調査レポート <span class="sample-badge">SAMPLE</span></h1>
+      <p>ブロックチェーン送金経路・取引所特定 調査報告書</p>
+    </div>
+    <div class="cover-meta">
+      <strong>依頼者</strong>山田 太郎
+      <strong>発行日時</strong>2026/5/16 14:32:05
+      <strong>調査件数</strong>1件
+    </div>
+  </div>
+
+  <!-- TXID セクション -->
+  <section class="tx-section">
+    <div class="tx-header">
+      <span class="chain-badge">Ξ ETH</span>
+      <span class="tx-num">TXID 1</span>
+    </div>
+
+    <!-- 基本情報 -->
+    <h3>基本情報</h3>
+    <table class="info-table">
+      <tr><th>チェーン</th><td>ETH（Ethereum）</td></tr>
+      <tr><th>TXID</th><td class="mono">0x4e8b2f1a3c9d7e0f6a2b5c8d1e4f7a0b3c6d9e2f5a8b1c4d7e0f3a6b9c2d5e8f1a</td></tr>
+      <tr><th>送金日時（JST）</th><td>2025/11/03 09:14:22</td></tr>
+      <tr><th>送金額</th><td>0.85000000 ETH</td></tr>
+      <tr><th>手数料</th><td>0.00142300 ETH</td></tr>
+      <tr><th>ブロック高</th><td>21,034,891</td></tr>
+    </table>
+
+    <!-- フローマップ -->
+    <h3>📍 送金経路フローマップ</h3>
+    <div class="flow-map">
+
+      <!-- 被害者ウォレット -->
+      <div class="flow-node victim">
+        <div class="node-role"><span class="node-icon">●</span>被害者ウォレット</div>
+        <div class="node-address">0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3</div>
+      </div>
+
+      <div class="flow-arrow">▼</div>
+
+      <!-- 中継アドレス1 -->
+      <div class="flow-node relay">
+        <div class="node-role"><span class="node-icon">◆</span>中継アドレス（1次先）</div>
+        <div class="node-address">0xf0e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3</div>
+        <div class="node-meta">📅 2025/11/03 09:21:47</div>
+        <div class="node-meta">💰 0.84900000 ETH</div>
+      </div>
+
+      <div class="flow-arrow">▼</div>
+
+      <!-- 取引所到達 -->
+      <div class="flow-node exchange">
+        <div class="node-role"><span class="node-icon">★</span>取引所到達（2次先）<span class="badge">Binance Hot Wallet</span></div>
+        <div class="node-address">0x28c6c06298d514db089934071355e5743bf21d60</div>
+        <div class="node-meta">📅 2025/11/03 09:38:12</div>
+        <div class="node-meta">💰 0.84850000 ETH</div>
+      </div>
+
+    </div>
+
+    <!-- 取引所判定 -->
+    <h3>🏦 取引所判定</h3>
+    <table class="info-table">
+      <tr><th>取引所名</th><td>Binance Hot Wallet</td></tr>
+      <tr><th>着金アドレス</th><td class="mono">0x28c6c06298d514db089934071355e5743bf21d60</td></tr>
+      <tr><th>着金額</th><td>0.84850000 ETH</td></tr>
+    </table>
+
+    <h4 style="margin:18px 0 10px">📞 取引所連絡先・対応窓口</h4>
+    <table class="info-table">
+      <tr><th>公式サイト</th><td><a href="https://www.binance.com">https://www.binance.com</a></td></tr>
+      <tr><th>サポートメール</th><td>support@binance.com</td></tr>
+      <tr><th>サポートURL</th><td><a href="https://www.binance.com/en/chat">https://www.binance.com/en/chat</a></td></tr>
+      <tr><th>法執行機関窓口</th><td><a href="https://www.binance.com/en/support/law-enforcement">https://www.binance.com/en/support/law-enforcement</a></td></tr>
+      <tr><th>対応メモ</th><td>法執行機関ポータルから凍結申請が可能</td></tr>
+    </table>
+
+    <!-- 要請テンプレート -->
+    <h3>📝 取引所への要請テンプレート</h3>
+    <div class="template-box">【Binance サポートチームへ】
+
+件名：不正送金に関する緊急凍結要請
+
+拝啓
+
+不正な仮想通貨送金について、緊急のご対応をお願いいたします。
+
+■ 依頼者情報
+氏名：山田 太郎
+発行日：2026/5/16 14:32:05
+
+■ トランザクションID（TXID）
+0x4e8b2f1a3c9d7e0f6a2b5c8d1e4f7a0b3c6d9e2f5a8b1c4d7e0f3a6b9c2d5e8f1a
+
+■ チェーン：ETH（Ethereum）
+■ 送金日時（JST）：2025/11/03 09:14:22
+■ 送金額：0.85000000 ETH
+■ 着金アドレス：0x28c6c06298d514db089934071355e5743bf21d60
+
+上記は詐欺被害に起因する不正送金の疑いがあります。
+以下について緊急のご対応をお願い申し上げます。
+
+① 上記アドレスの即時凍結措置
+② 関連する取引情報・KYC情報の保全
+③ 当局への情報提供へのご協力
+
+敬具</div>
+
+  </section>
+
+  <p class="footer-note">本レポートは BitTo が自動生成した調査報告書です。参考資料としてご活用ください。</p>
+</div>
+</body>
+</html>
