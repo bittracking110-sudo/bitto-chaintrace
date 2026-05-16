@@ -610,7 +610,7 @@ function buildMermaidDiagram(path, chain) {
 
 // ══ 有料HTMLレポート生成 ══════════════════════════════════════
 
-function generateReportHTML(results, customerName, issuedAt) {
+function generateReportHTML(results, customerName, issuedAt, aiData = {}) {
   const chainFull = { BTC: 'Bitcoin', ETH: 'Ethereum', XRP: 'XRP Ledger' };
 
   const sectionsHTML = results.map((item, idx) => {
@@ -708,6 +708,14 @@ ${r.txid}
 ③ 当局への情報提供へのご協力
 
 敬具</div>`;
+
+      // AI生成の要請文があれば上書き
+      const aiReq = (aiData.requests || [])[idx];
+      if (aiReq) {
+        tplHTML = `
+        <h3>📝 取引所への要請テンプレート<span class="ai-req-badge">AI生成</span></h3>
+        <div class="template-box">${aiReq}</div>`;
+      }
     }
 
     return `
@@ -801,6 +809,13 @@ ${r.txid}
     .print-bar p{font-size:0.83rem;color:#64748b}
     .print-btn{background:#1a1a2e;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:0.9rem;font-weight:700;cursor:pointer}
     .print-btn:hover{opacity:0.85}
+    /* AI分析セクション */
+    .ai-overall{background:linear-gradient(135deg,#1e3a5f 0%,#1a1a2e 100%);border-radius:10px;padding:22px 24px;margin-bottom:20px;color:#e2e8f0}
+    .ai-header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+    .ai-title{font-size:1rem;font-weight:700;color:#93c5fd}
+    .ai-label{display:inline-flex;align-items:center;background:#3b82f6;color:#fff;font-size:0.7rem;font-weight:700;padding:3px 10px;border-radius:12px}
+    .ai-body{font-size:0.85rem;line-height:1.9;color:#cbd5e1;white-space:pre-wrap;word-break:break-word}
+    .ai-req-badge{background:#059669;color:#fff;font-size:0.68rem;padding:2px 8px;border-radius:10px;margin-left:8px;font-weight:700;vertical-align:middle}
     /* Mermaid フロー図 */
     .mermaid-wrap{background:#fafbfc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:8px;overflow-x:auto;text-align:center}
     .mermaid-wrap pre{display:inline-block;text-align:left}
@@ -835,6 +850,15 @@ ${r.txid}
       <strong>調査件数</strong>${results.length}件
     </div>
   </div>
+
+  ${aiData.analysis ? `
+  <div class="ai-overall">
+    <div class="ai-header">
+      <span class="ai-title">🤖 AI調査分析レポート</span>
+      <span class="ai-label">✦ Gemini AI 自動生成</span>
+    </div>
+    <div class="ai-body">${aiData.analysis}</div>
+  </div>` : ''}
 
   ${sectionsHTML}
 
@@ -942,6 +966,85 @@ ${r.txid}
 </script>
 </body>
 </html>`;
+}
+
+// ══ Gemini AI コンテンツ生成 ══════════════════════════════════
+
+async function generateAIContent(results, customerName) {
+  if (!GEMINI_KEY) return { analysis: null, requests: [] };
+  try {
+    // 調査データをテキスト化
+    const txData = results.map((item, idx) => {
+      const r = item.result;
+      const pathInfo = (r.path || []).map((p, i) => {
+        const role = i === 0 ? '起点（被害者）' : p.isExchange ? '★取引所到達' : `中継${i}`;
+        const bal  = p.balance  != null ? `残高:${p.balance.toFixed(4)}${r.chain}` : '';
+        const txc  = p.txCount  != null ? `TX:${p.txCount}件` : '';
+        return `  [${role}] ${p.address}${p.label ? '('+p.label+')':''} ${bal} ${txc}`;
+      }).join('\n');
+      return `【TXID ${idx+1}】チェーン:${r.chain} 金額:${r.amount?.toFixed(6)||'?'}${r.chain} 日時:${r.blockTime}\n最終到達:${r.exchanges?.[0]?.name||'不明'} 着金アドレス:${r.exchanges?.[0]?.address||'不明'}\n送金経路:\n${pathInfo}`;
+    }).join('\n---\n');
+
+    // 取引所ごとの要請文プロンプト
+    const requestBlocks = results.map((item, idx) => {
+      const r  = item.result;
+      const ex = r.exchanges?.[0];
+      return `[REQUEST_${idx}]（${ex?.name||'取引所'}宛。依頼者:${customerName} TXID:${r.txid} チェーン:${r.chain} 日時:${r.blockTime} 金額:${r.amount?.toFixed(6)||'?'}${r.chain} 着金アドレス:${ex?.address||'不明'} 送金経路の説明 凍結・保全・情報提供の3点を要請 取引所固有の申請窓口を明記した凍結要請メール全文）[/REQUEST_${idx}]`;
+    }).join('\n');
+
+    const prompt = `あなたはブロックチェーン調査の専門家です。仮想通貨詐欺被害の調査結果を分析し、被害者（${customerName}様）への報告書を作成してください。
+
+${txData}
+
+以下の形式で日本語で出力してください（区切りタグを正確に守ること）：
+
+[ANALYSIS]
+【結論】
+（送金フロー全体の分析、2〜3文）
+
+■ 特記事項①：（見出し）
+（アドレスのTX件数・残高から使い捨てウォレット等を指摘）
+
+■ 特記事項②：（見出し）
+（送金時間・パターンから計画性等を分析）
+
+■ 取引所への申請アドバイス
+（特定取引所名と具体的な申請窓口・手順を記載）
+[/ANALYSIS]
+
+${requestBlocks}
+
+分析ポイント：TX件数10件以下→専用ウォレット疑い、残高ほぼゼロ→使い捨て、短時間転送→計画的犯行、取引所ごとの窓口（法執行機関ポータル/メール/チケット）を明記`;
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 2500 },
+        }),
+      }
+    );
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error?.message || 'API error');
+    const text = j.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    const aMatch  = text.match(/\[ANALYSIS\]([\s\S]*?)\[\/ANALYSIS\]/);
+    const analysis = aMatch ? aMatch[1].trim() : null;
+
+    const requests = results.map((_, idx) => {
+      const m = text.match(new RegExp(`\\[REQUEST_${idx}\\]([\\s\\S]*?)\\[/REQUEST_${idx}\\]`));
+      return m ? m[1].trim() : null;
+    });
+
+    console.log('[AI] Gemini分析完了 analysis:', !!analysis, 'requests:', requests.map(r => !!r));
+    return { analysis, requests };
+  } catch (e) {
+    console.error('[AI] Gemini エラー:', e.message);
+    return { analysis: null, requests: [] };
+  }
 }
 
 // 調査後に送るサービス案内メッセージ
@@ -1184,11 +1287,15 @@ app.post('/stripe-webhook',
             text: `⚠️ 調査データが見つかりませんでした\nサポートまでご連絡ください`,
           });
         } else {
-          // 有料HTMLレポートを生成してURLを送付
+          // AI分析生成 → HTMLレポート生成 → URL送付
           const reportId  = crypto.randomUUID();
           const issuedAt  = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
           const cName     = customerName || '（お名前）';
-          reportCache.set(reportId, { results: list, customerName: cName, issuedAt });
+
+          console.log('[AI] Gemini分析開始...');
+          const aiData    = await generateAIContent(list, cName);
+          const reportHtml = generateReportHTML(list, cName, issuedAt, aiData);
+          reportCache.set(reportId, { html: reportHtml }); // HTMLを直接保存
           const reportUrl = `${BASE_URL}/report/${reportId}`;
 
           await lineClient.pushMessage(userId, {
@@ -1343,7 +1450,7 @@ h1{color:#f87171;font-size:1.3rem;margin-bottom:12px}.icon{font-size:3rem;margin
 <p>URLの有効期限が切れているか、リンクが正しくありません。<br><br>ご不明な点はLINEにてお問い合わせください。</p></div></body></html>`);
   }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(generateReportHTML(data.results, data.customerName, data.issuedAt));
+  res.send(data.html);
 });
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
