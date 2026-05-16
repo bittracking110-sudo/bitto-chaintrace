@@ -45,6 +45,7 @@ const lineClient = new line.Client(lineConfig);
 const userSessions  = new Map(); // userId → session
 const txidCache     = new Map(); // txid（小文字）→ { result, investigatedAt }
 const pendingSessions = new Map(); // sessionId → { userId, txidCount, stripeId }
+const reportCache    = new Map(); // reportId  → { results[], customerName, issuedAt }
 
 function getSession(userId) {
   if (!userSessions.has(userId)) {
@@ -106,6 +107,84 @@ const LABEL_DB = {
   'rhub8vrugtv4pmoxfrp4rp4svnfxe3j7vy': 'Gatehub',
   'razqnbmgaqrknxcvntxfwpsecmz39aagg':  'Bitstamp XRP',
 };
+
+// ══ 取引所連絡先DB ════════════════════════════════════════════
+const EXCHANGE_CONTACTS = {
+  binance: {
+    name: 'Binance', url: 'https://www.binance.com',
+    support: 'https://www.binance.com/en/chat',
+    leo: 'https://www.binance.com/en/support/law-enforcement',
+    email: 'support@binance.com',
+    note: '法執行機関ポータルから凍結申請が可能',
+  },
+  coinbase: {
+    name: 'Coinbase', url: 'https://www.coinbase.com',
+    support: 'https://help.coinbase.com',
+    leo: 'https://www.coinbase.com/legal/law_enforcement',
+    email: 'legal@coinbase.com',
+    note: '法執行機関向け専用フォームあり',
+  },
+  kraken: {
+    name: 'Kraken', url: 'https://www.kraken.com',
+    support: 'https://support.kraken.com',
+    email: 'support@kraken.com',
+    note: 'サポートチケット経由で法的要請を送付',
+  },
+  hitbtc: {
+    name: 'HitBTC', url: 'https://hitbtc.com',
+    support: 'https://support.hitbtc.com',
+    email: 'support@hitbtc.com',
+    note: 'サポートからフリーズ申請を行う',
+  },
+  bybit: {
+    name: 'Bybit', url: 'https://www.bybit.com',
+    support: 'https://www.bybit.com/en/help-center/',
+    leo: 'https://www.bybit.com/en/legal/law-enforcement-request',
+    email: 'support@bybit.com',
+    note: '法執行機関向けガイドラインあり',
+  },
+  okx: {
+    name: 'OKX', url: 'https://www.okx.com',
+    support: 'https://www.okx.com/support-center',
+    leo: 'https://www.okx.com/help/okxs-law-enforcement-response-guidelines',
+    email: 'law_enforcement@okx.com',
+    note: '法執行機関専用メールアドレスあり',
+  },
+  bitfinex: {
+    name: 'Bitfinex', url: 'https://www.bitfinex.com',
+    support: 'https://support.bitfinex.com',
+    email: 'support@bitfinex.com',
+    note: 'サポートチケット経由で申請',
+  },
+  huobi: {
+    name: 'HTX (旧Huobi)', url: 'https://www.htx.com',
+    support: 'https://www.htx.com/support',
+    email: 'support@htx.com',
+    note: 'サポートから法的要請フォームを申請',
+  },
+  kucoin: {
+    name: 'KuCoin', url: 'https://www.kucoin.com',
+    support: 'https://www.kucoin.com/support',
+    leo: 'https://www.kucoin.com/legal/law-enforcement',
+    email: 'law@kucoin.com',
+    note: '法執行機関向け専用窓口あり',
+  },
+  gemini: {
+    name: 'Gemini', url: 'https://www.gemini.com',
+    support: 'https://support.gemini.com',
+    email: 'support@gemini.com',
+    note: 'コンプライアンスチームへ直接連絡',
+  },
+};
+
+function getExchangeContact(exchangeName) {
+  if (!exchangeName) return null;
+  const lower = exchangeName.toLowerCase();
+  for (const [key, info] of Object.entries(EXCHANGE_CONTACTS)) {
+    if (lower.includes(key)) return info;
+  }
+  return null;
+}
 
 const EX_KEYWORDS = [
   'binance','okx','okex','coinbase','kraken','bitfinex','huobi',
@@ -419,6 +498,208 @@ function buildReport(result) {
   return `📊 BitTo 調査レポート\n━━━━━━━━━━━━━━━━━\n${em} チェーン：${result.chain}\n🔗 TXID：${txShort}\n📅 送金日時：${fmtDate(result.blockTime)}\n💰 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}\n\n📍 送金経路\n━━━━━━━━━━━━━━━━━\n${pathLines.join('\n　↓\n')}\n${exSection}${tplSection}\n\n🔒 BitTo が自動生成したレポートです`;
 }
 
+// ══ 有料HTMLレポート生成 ══════════════════════════════════════
+
+function generateReportHTML(results, customerName, issuedAt) {
+  const chainFull = { BTC: 'Bitcoin', ETH: 'Ethereum', XRP: 'XRP Ledger' };
+
+  const sectionsHTML = results.map((item, idx) => {
+    const r  = item.result;
+    const em = { BTC: '₿', ETH: 'Ξ', XRP: '✕' }[r.chain] || '🔗';
+
+    // ── フローマップ ──────────────────────────────────────
+    const flowNodes = (r.path || []).map((p, i) => {
+      let cls, icon, roleLabel;
+      if (i === 0)       { cls = 'victim';   icon = '●'; roleLabel = '被害者ウォレット'; }
+      else if (p.isExchange) { cls = 'exchange'; icon = '★'; roleLabel = `取引所到達（${i}次先）`; }
+      else               { cls = 'relay';    icon = '◆'; roleLabel = `中継アドレス（${i}次先）`; }
+
+      const exBadge = p.label ? `<span class="badge">${p.label}</span>` : '';
+      const timeTd  = p.time  ? `<div class="node-meta">📅 ${fmtDate(p.time)}</div>` : '';
+      const amtTd   = (p.amount != null && !isNaN(p.amount) && p.amount > 0)
+        ? `<div class="node-meta">💰 ${p.amount.toFixed(8)} ${p.token || r.chain}</div>` : '';
+
+      return `
+        <div class="flow-node ${cls}">
+          <div class="node-role"><span class="node-icon">${icon}</span>${roleLabel}${exBadge}</div>
+          <div class="node-address">${p.address}</div>
+          ${timeTd}${amtTd}
+        </div>
+        ${i < (r.path || []).length - 1 ? '<div class="flow-arrow">▼</div>' : ''}`;
+    }).join('');
+
+    // ── 取引所セクション ──────────────────────────────────
+    let exHTML = '<p class="no-ex">送金先は既知の取引所DBに一致しませんでした。</p>';
+    let tplHTML = '';
+    if (r.exchanges && r.exchanges.length > 0) {
+      const ex      = r.exchanges[0];
+      const contact = getExchangeContact(ex.name);
+
+      exHTML = `
+        <table class="info-table">
+          <tr><th>取引所名</th><td>${ex.name || '特定済み'}</td></tr>
+          <tr><th>着金アドレス</th><td class="mono">${ex.address}</td></tr>
+          <tr><th>着金額</th><td>${(ex.amount != null && !isNaN(ex.amount)) ? ex.amount.toFixed(8) : '不明'} ${r.chain}</td></tr>
+        </table>
+        ${contact ? `
+        <h4 style="margin:18px 0 10px">📞 取引所連絡先・対応窓口</h4>
+        <table class="info-table">
+          <tr><th>公式サイト</th><td><a href="${contact.url}">${contact.url}</a></td></tr>
+          ${contact.email ? `<tr><th>サポートメール</th><td>${contact.email}</td></tr>` : ''}
+          <tr><th>サポートURL</th><td><a href="${contact.support}">${contact.support}</a></td></tr>
+          ${contact.leo ? `<tr><th>法執行機関窓口</th><td><a href="${contact.leo}">${contact.leo}</a></td></tr>` : ''}
+          ${contact.note ? `<tr><th>対応メモ</th><td>${contact.note}</td></tr>` : ''}
+        </table>` : ''}`;
+
+      tplHTML = `
+        <h3>📝 取引所への要請テンプレート</h3>
+        <div class="template-box">【${ex.name || '取引所'} サポートチームへ】
+
+件名：不正送金に関する緊急凍結要請
+
+拝啓
+
+不正な仮想通貨送金について、緊急のご対応をお願いいたします。
+
+■ 依頼者情報
+氏名：${customerName}
+発行日：${issuedAt}
+
+■ トランザクションID（TXID）
+${r.txid}
+
+■ チェーン：${r.chain}（${chainFull[r.chain] || r.chain}）
+■ 送金日時（JST）：${fmtDate(r.blockTime)}
+■ 送金額：${(r.amount != null && !isNaN(r.amount)) ? r.amount.toFixed(8) : '不明'} ${r.chain}
+■ 着金アドレス：${ex.address}
+
+上記は詐欺被害に起因する不正送金の疑いがあります。
+以下について緊急のご対応をお願い申し上げます。
+
+① 上記アドレスの即時凍結措置
+② 関連する取引情報・KYC情報の保全
+③ 当局への情報提供へのご協力
+
+敬具</div>`;
+    }
+
+    return `
+      <section class="tx-section${idx > 0 ? ' page-break' : ''}">
+        <div class="tx-header">
+          <span class="chain-badge">${em} ${r.chain}</span>
+          <span class="tx-num">TXID ${idx + 1}</span>
+        </div>
+
+        <h3>基本情報</h3>
+        <table class="info-table">
+          <tr><th>チェーン</th><td>${r.chain}（${chainFull[r.chain] || r.chain}）</td></tr>
+          <tr><th>TXID</th><td class="mono">${r.txid}</td></tr>
+          <tr><th>送金日時（JST）</th><td>${fmtDate(r.blockTime)}</td></tr>
+          <tr><th>送金額</th><td>${(r.amount != null && !isNaN(r.amount)) ? r.amount.toFixed(8) : '不明'} ${r.chain}</td></tr>
+          ${(r.fee != null && !isNaN(r.fee)) ? `<tr><th>手数料</th><td>${r.fee.toFixed(8)} ${r.chain}</td></tr>` : ''}
+          ${r.destTag != null ? `<tr><th>宛先タグ</th><td>${r.destTag}</td></tr>` : ''}
+          ${r.blockHeight ? `<tr><th>ブロック高</th><td>${r.blockHeight}</td></tr>` : ''}
+        </table>
+
+        <h3>📍 送金経路フローマップ</h3>
+        <div class="flow-map">${flowNodes}</div>
+
+        <h3>🏦 取引所判定</h3>
+        ${exHTML}
+        ${tplHTML}
+      </section>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BitTo 詳細調査レポート</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Hiragino Kaku Gothic Pro','Meiryo',sans-serif;background:#f4f5f7;color:#1a1a2e;padding:24px 16px 60px;font-size:14px}
+    .container{max-width:760px;margin:0 auto}
+    /* カバー */
+    .cover{background:#1a1a2e;color:#fff;border-radius:12px;padding:32px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+    .cover-left h1{font-size:1.5rem;margin-bottom:4px}
+    .cover-left p{color:#94a3b8;font-size:0.85rem}
+    .cover-meta{text-align:right;font-size:0.82rem;color:#94a3b8;line-height:1.8}
+    .cover-meta strong{color:#e2e8f0;display:block}
+    /* セクション */
+    .tx-section{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:24px;margin-bottom:20px}
+    .tx-header{display:flex;align-items:center;gap:10px;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0}
+    .chain-badge{background:#1a1a2e;color:#fff;padding:4px 12px;border-radius:20px;font-weight:700;font-size:0.9rem}
+    .tx-num{color:#64748b;font-size:0.85rem}
+    h3{font-size:0.95rem;color:#1a1a2e;margin:20px 0 10px;padding-left:8px;border-left:3px solid #3b82f6}
+    h4{font-size:0.88rem;color:#374151}
+    /* テーブル */
+    .info-table{width:100%;border-collapse:collapse;margin-bottom:8px}
+    .info-table th{width:140px;background:#f8fafc;padding:8px 10px;text-align:left;font-size:0.82rem;color:#64748b;border:1px solid #e2e8f0;white-space:nowrap}
+    .info-table td{padding:8px 10px;border:1px solid #e2e8f0;font-size:0.85rem;word-break:break-all}
+    .info-table a{color:#3b82f6;text-decoration:none}
+    .mono{font-family:'Courier New',monospace;font-size:0.78rem;color:#1e3a5f;word-break:break-all}
+    /* フローマップ */
+    .flow-map{display:flex;flex-direction:column;align-items:center;gap:0;margin:12px 0}
+    .flow-node{width:100%;border-radius:10px;padding:14px 16px;border:2px solid}
+    .flow-node.victim  {background:#fff5f5;border-color:#fca5a5}
+    .flow-node.relay   {background:#eff6ff;border-color:#93c5fd}
+    .flow-node.exchange{background:#f0fdf4;border-color:#86efac}
+    .node-role{font-weight:700;font-size:0.85rem;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+    .node-icon{font-size:0.75rem}
+    .flow-node.victim   .node-role{color:#dc2626}
+    .flow-node.relay    .node-role{color:#2563eb}
+    .flow-node.exchange .node-role{color:#16a34a}
+    .node-address{font-family:'Courier New',monospace;font-size:0.77rem;color:#374151;word-break:break-all;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;margin-bottom:4px}
+    .node-meta{font-size:0.78rem;color:#64748b;margin-top:3px}
+    .badge{background:#1a1a2e;color:#fff;font-size:0.72rem;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:400}
+    .flow-arrow{font-size:1.4rem;color:#94a3b8;margin:4px 0;line-height:1}
+    .no-ex{color:#64748b;font-size:0.85rem;padding:10px}
+    /* 要請テンプレート */
+    .template-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;font-size:0.82rem;white-space:pre-wrap;line-height:1.8;word-break:break-all;margin-top:10px}
+    /* 印刷ボタン */
+    .print-bar{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between}
+    .print-bar p{font-size:0.83rem;color:#64748b}
+    .print-btn{background:#1a1a2e;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:0.9rem;font-weight:700;cursor:pointer}
+    .print-btn:hover{opacity:0.85}
+    .page-break{page-break-before:always}
+    @media print{
+      body{background:#fff;padding:0}
+      .print-bar{display:none}
+      .tx-section{border:none;padding:0;margin-bottom:40px}
+      .cover{border-radius:0}
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="print-bar">
+    <p>📄 このページを印刷 → 「PDFとして保存」でPDF化できます</p>
+    <button class="print-btn" onclick="window.print()">🖨 PDF保存 / 印刷</button>
+  </div>
+
+  <div class="cover">
+    <div class="cover-left">
+      <h1>🔗 BitTo 詳細調査レポート</h1>
+      <p>ブロックチェーン送金経路・取引所特定 調査報告書</p>
+    </div>
+    <div class="cover-meta">
+      <strong>依頼者</strong>${customerName}
+      <strong>発行日時</strong>${issuedAt}
+      <strong>調査件数</strong>${results.length}件
+    </div>
+  </div>
+
+  ${sectionsHTML}
+
+  <p style="text-align:center;color:#94a3b8;font-size:0.78rem;margin-top:20px">
+    本レポートは BitTo が自動生成した調査報告書です。参考資料としてご活用ください。
+  </p>
+</div>
+</body>
+</html>`;
+}
+
 // 調査後に送るサービス案内メッセージ
 function buildServiceMsg(applyUrl) {
   return `📋 BitTo 調査サービス
@@ -659,14 +940,16 @@ app.post('/stripe-webhook',
             text: `⚠️ 調査データが見つかりませんでした\nサポートまでご連絡ください`,
           });
         } else {
-          // 有料レポートを送付（ヘッダー付き）
-          const header = `📄 BitTo 正式調査レポート\n━━━━━━━━━━━━━━━━━\n依頼者：${customerName || '（お名前）'}\n発行日：${new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}\n━━━━━━━━━━━━━━━━━\n\n`;
-          for (const item of list) {
-            await lineClient.pushMessage(userId, { type: 'text', text: header + buildReport(item.result) });
-          }
+          // 有料HTMLレポートを生成してURLを送付
+          const reportId  = crypto.randomUUID();
+          const issuedAt  = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+          const cName     = customerName || '（お名前）';
+          reportCache.set(reportId, { results: list, customerName: cName, issuedAt });
+          const reportUrl = `${BASE_URL}/report/${reportId}`;
+
           await lineClient.pushMessage(userId, {
             type: 'text',
-            text: `✅ レポートの送付が完了しました\n\nご不明な点はLINEにてお問い合わせください`,
+            text: `✅ お支払いが確認されました\n\n📄 詳細調査レポートが完成しました\n\n${reportUrl}\n\nブラウザで開いて\n「印刷」→「PDFとして保存」\nでPDF化できます`,
           });
         }
 
@@ -802,6 +1085,22 @@ app.post('/api/ai/analyze', express.json(), async (req, res) => {
 
 // /apply → apply.html（クエリパラメータ付きでも対応）
 app.get('/apply', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'apply.html')));
+
+// 有料レポートページ（reportCache から HTML を配信）
+app.get('/report/:id', (req, res) => {
+  const data = reportCache.get(req.params.id);
+  if (!data) {
+    return res.status(404).send(`<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8"><title>レポートが見つかりません</title>
+<style>body{margin:0;background:#0a0c10;color:#e2e8f0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:20px}
+.card{background:#111318;border:1px solid #252d3d;border-radius:16px;padding:40px;max-width:400px}
+h1{color:#f87171;font-size:1.3rem;margin-bottom:12px}.icon{font-size:3rem;margin-bottom:16px}p{color:#94a3b8;line-height:1.7}</style></head>
+<body><div class="card"><div class="icon">⚠️</div><h1>レポートが見つかりません</h1>
+<p>URLの有効期限が切れているか、リンクが正しくありません。<br><br>ご不明な点はLINEにてお問い合わせください。</p></div></body></html>`);
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(generateReportHTML(data.results, data.customerName, data.issuedAt));
+});
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
