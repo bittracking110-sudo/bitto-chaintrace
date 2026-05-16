@@ -568,6 +568,46 @@ function buildReport(result) {
   return `📊 BitTo 調査レポート\n━━━━━━━━━━━━━━━━━\n${em} チェーン：${result.chain}\n🔗 TXID：${txShort}\n📅 送金日時：${fmtDate(result.blockTime)}\n💰 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}\n\n📍 送金経路\n━━━━━━━━━━━━━━━━━\n${pathLines.join('\n　↓\n')}\n${exSection}${tplSection}\n\n🔒 BitTo が自動生成したレポートです`;
 }
 
+// ══ Mermaid フロー図生成 ══════════════════════════════════════
+
+function buildMermaidDiagram(path, chain) {
+  if (!path || path.length === 0) return 'graph LR\n  A["データなし"]';
+  const lines = ['graph LR'];
+
+  path.forEach((node, i) => {
+    const id    = `N${i}`;
+    const short = node.address.slice(0, 8) + '…' + node.address.slice(-4);
+    const lbl   = node.label   ? `<br/>${node.label}` : '';
+    const bal   = (node.balance != null && !isNaN(node.balance))
+      ? `<br/>残高: ${node.balance < 0.0001 ? node.balance.toFixed(6) : node.balance.toFixed(4)} ${chain}` : '';
+    const txc   = node.txCount != null ? `<br/>TX: ${node.txCount.toLocaleString()}件` : '';
+
+    if (i === 0) {
+      lines.push(`  ${id}["🔴 被害者<br/>${short}${bal}${txc}"]`);
+    } else if (node.isExchange) {
+      lines.push(`  ${id}["🟢 ${node.label || '取引所'}<br/>${short}${bal}${txc}"]`);
+    } else {
+      lines.push(`  ${id}["🔵 中継${i}<br/>${short}${bal}${txc}"]`);
+    }
+
+    if (i > 0) {
+      const amt = (node.amount != null && !isNaN(node.amount) && node.amount > 0)
+        ? `${node.amount.toFixed(4)} ${node.token || chain}` : '→';
+      lines.push(`  N${i - 1} -->|"${amt}"| ${id}`);
+    }
+  });
+
+  // ノードスタイル
+  path.forEach((node, i) => {
+    const id = `N${i}`;
+    if (i === 0)              lines.push(`  style ${id} fill:#fff5f5,stroke:#fca5a5,color:#dc2626`);
+    else if (node.isExchange) lines.push(`  style ${id} fill:#f0fdf4,stroke:#86efac,color:#16a34a`);
+    else                      lines.push(`  style ${id} fill:#eff6ff,stroke:#93c5fd,color:#2563eb`);
+  });
+
+  return lines.join('\n');
+}
+
 // ══ 有料HTMLレポート生成 ══════════════════════════════════════
 
 function generateReportHTML(results, customerName, issuedAt) {
@@ -576,6 +616,17 @@ function generateReportHTML(results, customerName, issuedAt) {
   const sectionsHTML = results.map((item, idx) => {
     const r  = item.result;
     const em = { BTC: '₿', ETH: 'Ξ', XRP: '✕' }[r.chain] || '🔗';
+
+    // ── Mermaid・価格チャートデータ ──────────────────────
+    const mermaidDef  = buildMermaidDiagram(r.path, r.chain);
+    const coinId      = { BTC: 'bitcoin', ETH: 'ethereum', XRP: 'ripple' }[r.chain] || 'ethereum';
+    const blockTimeMs = (() => {
+      try {
+        const s = typeof r.blockTime === 'string'
+          ? r.blockTime.replace(' ', 'T').replace(/Z+$/, '') + 'Z' : r.blockTime;
+        return new Date(s).getTime() || 0;
+      } catch { return 0; }
+    })();
 
     // ── フローマップ ──────────────────────────────────────
     const flowNodes = (r.path || []).map((p, i) => {
@@ -677,7 +728,18 @@ ${r.txid}
           ${r.blockHeight ? `<tr><th>ブロック高</th><td>${r.blockHeight}</td></tr>` : ''}
         </table>
 
-        <h3>📍 送金経路フローマップ</h3>
+        <h3>🔗 送金経路ビジュアルフロー</h3>
+        <div class="mermaid-wrap">
+          <pre class="mermaid">${mermaidDef}</pre>
+        </div>
+
+        <h3>📈 ${r.chain}価格推移（送金前後30日）</h3>
+        <div class="chart-wrap">
+          <p class="tx-price-label"></p>
+          <canvas id="priceChart${idx}" data-coin="${coinId}" data-time="${blockTimeMs}"></canvas>
+        </div>
+
+        <h3>📍 送金経路詳細</h3>
         <div class="flow-map">${flowNodes}</div>
 
         <h3>🏦 取引所判定</h3>
@@ -739,6 +801,13 @@ ${r.txid}
     .print-bar p{font-size:0.83rem;color:#64748b}
     .print-btn{background:#1a1a2e;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:0.9rem;font-weight:700;cursor:pointer}
     .print-btn:hover{opacity:0.85}
+    /* Mermaid フロー図 */
+    .mermaid-wrap{background:#fafbfc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:8px;overflow-x:auto;text-align:center}
+    .mermaid-wrap pre{display:inline-block;text-align:left}
+    /* 価格チャート */
+    .chart-wrap{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:8px}
+    .tx-price-label{font-size:0.82rem;color:#dc2626;font-weight:600;margin-bottom:8px;text-align:right}
+    .chart-error{color:#94a3b8;font-size:0.82rem;text-align:center;padding:20px 0}
     .page-break{page-break-before:always}
     @media print{
       body{background:#fff;padding:0}
@@ -773,6 +842,104 @@ ${r.txid}
     本レポートは BitTo が自動生成した調査報告書です。参考資料としてご活用ください。
   </p>
 </div>
+
+<!-- Mermaid.js -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true, theme: 'base',
+    themeVariables: { fontSize: '13px', fontFamily: "'Courier New', monospace" }
+  });
+</script>
+
+<!-- Chart.js + 価格チャート描画 -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+(async () => {
+  for (const canvas of document.querySelectorAll('canvas[data-coin]')) {
+    const coinId = canvas.dataset.coin;
+    const txTime = parseInt(canvas.dataset.time);
+    if (!txTime) { canvas.parentElement.innerHTML = '<p class="chart-error">送金日時データなし</p>'; continue; }
+    const from = Math.floor(txTime / 1000) - 30 * 86400;
+    const to   = Math.min(Math.floor(txTime / 1000) + 30 * 86400, Math.floor(Date.now() / 1000));
+    try {
+      const res = await fetch(
+        'https://api.coingecko.com/api/v3/coins/' + coinId +
+        '/market_chart/range?vs_currency=usd&from=' + from + '&to=' + to
+      );
+      const d = await res.json();
+      if (!d.prices || !d.prices.length) throw new Error('データなし');
+
+      const labels = d.prices.map(([ts]) => {
+        const dt = new Date(ts);
+        return (dt.getMonth() + 1) + '/' + dt.getDate();
+      });
+      const values = d.prices.map(([, p]) => p);
+
+      // 送金時に最も近いインデックス
+      let txIdx = d.prices.findIndex(([ts]) => ts >= txTime);
+      if (txIdx < 0) txIdx = values.length - 1;
+      const txPrice = values[txIdx];
+
+      // 送金時価格をラベル表示
+      const lbl = canvas.parentElement.querySelector('.tx-price-label');
+      if (lbl && txPrice) {
+        lbl.textContent = '● 送金時価格: $' + txPrice.toLocaleString('en-US', { maximumFractionDigits: 2 });
+      }
+
+      new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: coinId.toUpperCase() + ' (USD)',
+              data: values,
+              borderColor: '#3b82f6',
+              backgroundColor: 'rgba(59,130,246,0.07)',
+              borderWidth: 1.5,
+              pointRadius: 0,
+              tension: 0.3,
+              fill: true,
+            },
+            {
+              label: '送金時 $' + (txPrice ? txPrice.toLocaleString('en-US', { maximumFractionDigits: 2 }) : ''),
+              data: values.map((v, i) => i === txIdx ? v : null),
+              borderColor: 'transparent',
+              pointBackgroundColor: '#dc2626',
+              pointBorderColor: '#fff',
+              pointBorderWidth: 2,
+              pointRadius: 8,
+              showLine: false,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { position: 'top', labels: { font: { size: 11 }, boxWidth: 12 } }
+          },
+          scales: {
+            x: {
+              ticks: { maxTicksLimit: 8, font: { size: 10 }, color: '#64748b' },
+              grid: { display: false }
+            },
+            y: {
+              ticks: {
+                callback: v => '$' + v.toLocaleString('en-US', { maximumFractionDigits: 0 }),
+                font: { size: 10 }, color: '#64748b'
+              },
+              grid: { color: '#f1f5f9' }
+            }
+          }
+        }
+      });
+    } catch (e) {
+      canvas.parentElement.innerHTML = '<p class="chart-error">価格データ取得失敗（CoinGecko APIレート制限の可能性）</p>';
+    }
+  }
+})();
+</script>
 </body>
 </html>`;
 }
