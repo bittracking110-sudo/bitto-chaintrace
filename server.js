@@ -222,9 +222,13 @@ const EX_KEYWORDS = [
   'hitbtc','hit btc','poloniex','gemini','bitget','lbank','whitebit',
   'phemex','bitmart','digifinex','xt.com','latoken','probit',
   // ブリッジ・スワップ・DEXアグリゲーター
-  'bridgers','transit finance','changenow','fixedfloat','simpleswap',
+  'bridgers','transit finance','transitswap','transitfinance',
+  'changenow','fixedfloat','simpleswap',
   'sideshift','stealthex','exolix','lifi','socket','squid','rango',
   'thorchain','rubic','xy finance','paraswap','1inch','0x protocol',
+  // DEX・ルーター・スワップ系コントラクト
+  'uniswap','sushiswap','pancakeswap','router','swap router',
+  'dex','aggregator','cross-chain','crosschain','bridge',
 ];
 
 function getLabel(addr) {
@@ -731,7 +735,11 @@ function buildReport(result) {
     exSection = `\n🏦 判明した取引所\n━━━━━━━━━━━━━━━━━\n取引所名：${ex.name || '特定済み'}\nアドレス：${ex.address.slice(0,12)}...${ex.address.slice(-6)}\n着金額　：${(ex.amount != null && !isNaN(ex.amount)) ? ex.amount.toFixed(8) : '不明'} ${result.chain}`;
     tplSection = `\n\n📝 取引所への要請テンプレート\n━━━━━━━━━━━━━━━━━\n【${ex.name || '取引所'} サポートチームへ】\n\n件名：不正送金に関する緊急凍結要請\n\n拝啓\n\n不正な仮想通貨送金について緊急のご対応をお願いいたします。\n\n■ トランザクションID\n${result.txid}\n\n■ チェーン：${result.chain}\n■ 送金日時（JST）：${fmtDate(result.blockTime)}\n■ 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}\n■ 着金アドレス：${ex.address}\n\n上記は詐欺被害に起因する不正送金の疑いがあります。\n①上記アドレスの凍結措置\n②関連する取引情報の保全\nについて緊急のご対応をお願い申し上げます。\n\n敬具\n━━━━━━━━━━━━━━━━━`;
   } else {
-    exSection = `\n⚠️ 取引所判定\n━━━━━━━━━━━━━━━━━\n送金先は既知の取引所DBに一致しませんでした。\n追加追跡が必要な場合はご連絡ください。`;
+    // 最後のノードのラベルを表示（DEX/ブリッジ等）
+    const lastNode = (result.path || []).filter(p => p.role !== 'sender').slice(-1)[0];
+    const lastLabel = lastNode?.label ? `\n最終到達先：${lastNode.label}` : '';
+    const lastAddr  = lastNode?.address ? `\nアドレス：${lastNode.address.slice(0,12)}...${lastNode.address.slice(-6)}` : '';
+    exSection = `\n⚠️ 取引所判定\n━━━━━━━━━━━━━━━━━\n送金先は既知の取引所DBに一致しませんでした。${lastLabel}${lastAddr}\n追加追跡が必要な場合はご連絡ください。`;
   }
 
   return `📊 BitTo 調査レポート\n━━━━━━━━━━━━━━━━━\n${em} チェーン：${result.chain}\n🔗 TXID：${txShort}\n📅 送金日時：${fmtDate(result.blockTime)}\n💰 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}\n\n📍 送金経路\n━━━━━━━━━━━━━━━━━\n${pathLines.join('\n　↓\n')}\n${exSection}${tplSection}\n\n🔒 BitTo が自動生成したレポートです`;
@@ -1077,7 +1085,11 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}) {
     }).join('');
 
     // ── 取引所セクション ──────────────────────────────────
-    let exHTML = '<p class="no-ex">送金先は既知の取引所DBに一致しませんでした。</p>';
+    const lastPathNode = (r.path || []).filter(p => p.role !== 'sender').slice(-1)[0];
+    const lastLabelHtml = lastPathNode?.label
+      ? `<br><span style="font-size:0.85em;color:#aaa">最終到達先：<strong>${lastPathNode.label}</strong>（${lastPathNode.address?.slice(0,12)}...${lastPathNode.address?.slice(-6)}）</span>`
+      : '';
+    let exHTML = `<p class="no-ex">送金先は既知の取引所DBに一致しませんでした。${lastLabelHtml}</p>`;
     let tplHTML = '';
     if (r.exchanges && r.exchanges.length > 0) {
       const ex      = r.exchanges[0];
