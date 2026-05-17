@@ -463,22 +463,32 @@ async function getNextTxETH(addr, afterTime) {
   const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
   console.log(`[HOP] ETH追跡: ${addr} / 基準: ${isNaN(refMs) ? '不明' : new Date(refMs).toISOString()}`);
 
-  // offset=1000 で大量取得 → afterTime以降で最も近いTXを確実に捕捉
-  // （追加API呼び出し不要・レート制限なし・シンプルで確実）
+  // offset=1000 で大量取得 → afterTime以降で最も近いTX、
+  // かつ取引所ラベル付きアドレスへの送金を優先して返す
   try {
     const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
     console.log(`[HOP] Etherscan TX: ${txs.length}件`);
+    const candidates = [];
     for (const tx of txs) {
       const txMs = parseInt(tx.timeStamp) * 1000;
       if (txMs < refMs) continue;
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       if (tx.isError === '1') continue;
+      if (!tx.to) continue;
       const db = getLabel(tx.to);
-      console.log(`[HOP] ETH送金先: ${tx.to} (${db.label || 'unknown'})`);
-      return { addr: tx.to, amount: parseFloat(tx.value)/1e18, time: new Date(txMs).toISOString(), txHash: tx.hash, label: db.label||'' };
+      const lbl = db.label || '';
+      const isEx = db.type === 'exchange' || isExchange(lbl);
+      candidates.push({ addr: tx.to, amount: parseFloat(tx.value)/1e18, time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, txMs });
+    }
+    if (candidates.length > 0) {
+      // 取引所ラベル付きを優先、次に最も早いTX
+      const exCand = candidates.find(c => c.isExchange);
+      const chosen = exCand || candidates[0];
+      console.log(`[HOP] ETH送金先選択: ${chosen.addr} label="${chosen.label}" exchange=${chosen.isExchange}`);
+      return chosen;
     }
   } catch(e) { console.error('[HOP] Etherscan ETH:', e.message); }
 
@@ -537,7 +547,7 @@ async function getNextTxXRP(addr, afterTime) {
   return null;
 }
 
-async function traceHops(startAddr, startTime, chain, maxHops = 5) {
+async function traceHops(startAddr, startTime, chain, maxHops = 10) {
   const hops = [];
   let currentAddr = startAddr;
   let currentTime = startTime;
@@ -551,13 +561,17 @@ async function traceHops(startAddr, startTime, chain, maxHops = 5) {
     if (visited.has(next.addr.toLowerCase())) break; // ループ防止
     visited.add(next.addr.toLowerCase());
     const db  = getLabel(next.addr);
-    // fetchAddressLabel で Etherscan/Blockchair/XRPScan ラベルも取得
+    // fetchAddressLabel で Etherscan/Blockchair/XRPScan ラベルも取得（取引所名を優先）
     const fetchedLabel = await fetchAddressLabel(next.addr, chain);
     const lbl = fetchedLabel || db.label || next.label || '';
+    // 取引所判定：ローカルDB / キーワード / Blockchairラベル のいずれかで判定
     const isEx = db.type === 'exchange' || isExchange(lbl);
-    if (lbl) console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... → "${lbl}" (exchange:${isEx})`);
+    console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... → label="${lbl}" exchange=${isEx}`);
     hops.push({ address: next.addr, label: lbl, amount: next.amount, isExchange: isEx, time: next.time, txHash: next.txHash });
-    if (isEx) break; // 取引所到達 → そこで追跡終了（取引所内TXは追跡対象外）
+    if (isEx) {
+      console.log(`[traceHops] 取引所到達 → 追跡終了: ${lbl}`);
+      break; // 取引所到達 → そこで追跡終了
+    }
     currentAddr = next.addr;
     currentTime = next.time;
   }
@@ -592,7 +606,7 @@ async function investigateBTC(txid) {
   // ※ 安全のため最大10件（一括送金TXでの過負荷防止）
   const nonExPaths = path.filter(p => !p.isExchange);
   for (const startNode of nonExPaths.slice(0, 10)) {
-    const hops = await traceHops(startNode.address, tx.time, 'btc', 5);
+    const hops = await traceHops(startNode.address, tx.time, 'btc', 10);
     for (const hop of hops) {
       if (!path.some(p => p.address === hop.address)) {
         path.push(hop);
@@ -645,7 +659,7 @@ async function investigateETH(hash) {
 
   // 直接送金先が取引所でない場合 → 送金先からホップ追跡
   if (!isRecipEx) {
-    const hops = await traceHops(tx.recipient, tx.time, 'eth', 5);
+    const hops = await traceHops(tx.recipient, tx.time, 'eth', 10);
     for (const hop of hops) {
       if (!path.some(p => p.address?.toLowerCase() === hop.address?.toLowerCase())) {
         path.push(hop);
@@ -675,7 +689,7 @@ async function investigateXRP(txid) {
   ];
   const exchanges = isDestEx ? [{ name: destLbl, address: tx.Destination, amount: parseFloat(tx.Amount)/1e6 }] : [];
   if (!isDestEx) {
-    const hops = await traceHops(tx.Destination, tx.date, 'xrp', 5);
+    const hops = await traceHops(tx.Destination, tx.date, 'xrp', 10);
     for (const hop of hops) {
       if (!path.some(p => p.address === hop.address)) {
         path.push(hop);
