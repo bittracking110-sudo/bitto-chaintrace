@@ -114,6 +114,19 @@ const LABEL_DB = {
   '0x6cc5f688a315f3dc28a7781717a9a798a59fda7b': 'OKX Hot',
   '0xd551234ae421e3bcba99a0da6d736074f22192ff': 'Binance',
   '0xbe0eb53f46cd790cd13851d5eff43d12404d33e8': 'Binance Cold',
+  '0x4976a4a02f38326660d17bf34b431dc6e2eb2327': 'Binance',
+  '0x0681d8db095565fe8a346fa0277bffd65d716b4': 'Binance',
+  '0xfe9e8709d3215310075d67e3ed32a380ccf451c8': 'Binance',
+  '0x85b931a32a0725be14285b66f1a22178c672d69b': 'Binance',
+  '0x708396f17127c42383e3b9014072679b2f60b82f': 'OKX',
+  '0x69b9f9b28f4fdd3b8b9b52a4b4f3a0b7f26e3f6e': 'OKX',
+  '0x2b5634c42055806a59e9107ed44d43c426e58258': 'KuCoin',
+  '0x689c56aef474df92d44a1b70850f808488f9769c': 'KuCoin',
+  '0xa7efae728d2936e78bda97dc267687568dd593f3': 'Kraken',
+  '0x267be1c1d684f78cb4f6a176c4911b741e4ffdc0': 'Kraken',
+  '0xcdc195b84cbadbb4f76beab0bd28e95ebf0f1b03': 'Bybit',
+  '0xf89d7b9c864f589bbf53a82105107622b35eaa40': 'OKX',
+  '0x9c19b0497997fe9e75862688a295168070456951': 'Binance Hot Wallet',
   // ─── HitBTC ───
   '0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c': 'HitBTC',
   '0x0a98fb70939162725ae863267f8b056e9d890906': 'HitBTC',
@@ -248,13 +261,13 @@ function isExchange(label) {
 // txCount・balance・transferTime を使用（enrichPathWithAddressInfo 後に呼び出す）
 function inferExchangeByBehavior(node) {
   // 1. TX件数が非常に多い → 大型取引所 or ミキサーの可能性
-  if (node.txCount != null && node.txCount >= 50000) return '大型取引所候補（TX多数）';
+  if (node.txCount != null && node.txCount >= 500000) return '大型取引所 Hot Wallet（推定）';
+  if (node.txCount != null && node.txCount >= 100000) return '主要取引所 Hot Wallet（推定）';
+  if (node.txCount != null && node.txCount >= 50000)  return '取引所系ウォレット（推定）';
   // 2. 残高ほぼゼロ かつ TX件数が多い → ホットウォレット / 使い捨て
   if (node.txCount != null && node.txCount >= 500 && node.balance != null && node.balance < 0.001) {
     return 'ホットウォレット候補（残高0・TX多数）';
   }
-  // 3. 受信後10分以内に全額転送 → 自動転送ウォレット（ミキサー・DEX）
-  // ※ timeとparent timeの差で判定（呼び出し元で計算）
   return null;
 }
 
@@ -1252,10 +1265,14 @@ ${r.txid}
     /* 要請テンプレート */
     .template-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;font-size:0.82rem;white-space:pre-wrap;line-height:1.8;word-break:break-all;margin-top:10px}
     /* 印刷ボタン */
-    .print-bar{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between}
-    .print-bar p{font-size:0.83rem;color:#64748b}
-    .print-btn{background:#1a1a2e;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:0.9rem;font-weight:700;cursor:pointer}
+    .print-bar{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 20px;margin-bottom:20px}
+    .print-bar p{font-size:0.83rem;color:#64748b;margin:0 0 10px}
+    .print-btn{background:#1a1a2e;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:0.9rem;font-weight:700;cursor:pointer;margin-right:8px}
     .print-btn:hover{opacity:0.85}
+    .open-btn{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer}
+    .open-btn:hover{opacity:0.85}
+    .print-hint{font-size:0.75rem;color:#94a3b8;margin-top:8px;display:none}
+    @media(max-width:640px){.print-hint{display:block}}
     /* AI分析セクション */
     .ai-overall{background:linear-gradient(135deg,#1e3a5f 0%,#1a1a2e 100%);border-radius:10px;padding:22px 24px;margin-bottom:20px;color:#e2e8f0}
     .ai-header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
@@ -1314,8 +1331,27 @@ ${r.txid}
 <div class="container">
   <div class="print-bar">
     <p>📄 このページを印刷 → 「PDFとして保存」でPDF化できます</p>
-    <button class="print-btn" onclick="window.print()">🖨 PDF保存 / 印刷</button>
+    <div>
+      <button class="print-btn" onclick="doPrint()">🖨 PDF保存 / 印刷</button>
+      <button class="open-btn" onclick="openExternal()">🌐 ブラウザで開く</button>
+    </div>
+    <p class="print-hint">⚠️ LINEアプリ内ではPDF保存できません。「ブラウザで開く」→ Safari/Chrome で印刷してください。</p>
   </div>
+  <script>
+    function doPrint(){
+      try{ window.print(); }
+      catch(e){ alert('印刷できませんでした。\\n「ブラウザで開く」ボタンでSafari/Chromeを開いてからPDF保存してください。'); }
+    }
+    function openExternal(){
+      var url = window.location.href;
+      // LINE内ブラウザの場合は外部ブラウザで開くよう誘導
+      if(navigator.userAgent.indexOf('Line') !== -1){
+        alert('以下のURLをコピーしてSafari/Chromeで開いてください:\\n\\n' + url);
+      } else {
+        window.open(url, '_blank');
+      }
+    }
+  </script>
 
   <div class="cover">
     <div class="cover-left">
