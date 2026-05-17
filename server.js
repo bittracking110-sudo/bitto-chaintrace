@@ -1854,11 +1854,39 @@ app.post('/api/create-checkout', express.json(), async (req, res) => {
 app.get('/payment/success', (_req, res) => res.send(`<!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>決済完了 — BitTo</title>
-<style>body{margin:0;background:#0a0c10;color:#e2e8f0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:20px}
-.card{background:#111318;border:1px solid #252d3d;border-radius:16px;padding:40px;max-width:380px}
-h1{color:#34d399;font-size:1.5rem;margin-bottom:12px}.icon{font-size:3rem;margin-bottom:16px}p{color:#94a3b8;line-height:1.6}</style></head>
-<body><div class="card"><div class="icon">✅</div><h1>決済が完了しました</h1>
-<p>レポートを生成中です。<br>LINEにレポートをお送りしますので<br>しばらくお待ちください。</p></div></body></html>`));
+<style>
+body{margin:0;background:#0a0c10;color:#e2e8f0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.card{background:#111318;border:1px solid #252d3d;border-radius:16px;padding:36px 28px;max-width:420px;width:100%;text-align:center}
+h1{color:#34d399;font-size:1.4rem;margin:12px 0 8px}.icon{font-size:3rem;margin-bottom:4px}
+.sub{color:#94a3b8;line-height:1.7;margin-bottom:24px;font-size:0.95rem}
+.steps{text-align:left;background:#0d1117;border-radius:12px;padding:20px 20px;margin-bottom:20px}
+.steps h2{font-size:0.85rem;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 14px}
+.step{display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;font-size:0.92rem;color:#cbd5e1;line-height:1.5}
+.step:last-child{margin-bottom:0}
+.badge{background:#1e3a5f;color:#60a5fa;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:0.78rem;font-weight:700;flex-shrink:0;margin-top:1px}
+.check{color:#34d399;font-weight:700;font-size:1rem}
+.note{background:#1a1f2e;border:1px solid #2d3748;border-radius:10px;padding:14px 16px;font-size:0.85rem;color:#94a3b8;line-height:1.6;text-align:left}
+.note strong{color:#fbbf24}
+</style></head>
+<body><div class="card">
+  <div class="icon">✅</div>
+  <h1>決済が完了しました</h1>
+  <p class="sub">お支払いありがとうございます。<br>以下の手順で調査をお進めください。</p>
+
+  <div class="steps">
+    <h2>📋 次のステップ</h2>
+    <div class="step"><div class="badge">1</div><div>LINEに <strong>TXID入力フォームのURL</strong> をお送りします。<br>数秒〜1分ほどお待ちください。</div></div>
+    <div class="step"><div class="badge">2</div><div>届いたURLを開き、<strong>調査対象のTXID</strong>（トランザクションID）を入力してください。</div></div>
+    <div class="step"><div class="badge">3</div><div>調査完了後、<strong>レポートURLをLINEとメール</strong>にお送りします。</div></div>
+  </div>
+
+  <div class="note">
+    <strong>⚠️ ご確認ください</strong><br>
+    ✅ TXIDはブロックチェーン上の取引IDです（64文字の英数字）<br>
+    ✅ 入力後の変更・キャンセルはできません<br>
+    ✅ フォームURLは1回のみ使用可能です
+  </div>
+</div></body></html>`));
 
 app.get('/payment/cancel', (_req, res) => res.send(`<!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
