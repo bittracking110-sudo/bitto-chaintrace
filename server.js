@@ -3,12 +3,16 @@
 // BTC / ETH / XRP 対応 | LINE Messaging API + Stripe 決済
 // ============================================================
 require('dotenv').config();
-const express  = require('express');
-const crypto   = require('crypto');
-const fetch    = require('node-fetch');
-const cors     = require('cors');
-const path     = require('path');
-const line     = require('@line/bot-sdk');
+const express      = require('express');
+const crypto       = require('crypto');
+const fetch        = require('node-fetch');
+const fs           = require('fs');
+const fsp          = require('fs').promises;
+const cors         = require('cors');
+const path         = require('path');
+const line         = require('@line/bot-sdk');
+const { google }   = require('googleapis');
+const nodemailer   = require('nodemailer');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +25,9 @@ const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const LINE_CHANNEL_SECRET       = process.env.LINE_CHANNEL_SECRET;
 const STRIPE_SECRET_KEY         = process.env.STRIPE_SECRET_KEY;
 const STRIPE_WEBHOOK_SECRET     = process.env.STRIPE_WEBHOOK_SECRET;
+const GOOGLE_SHEET_ID           = process.env.GOOGLE_SHEET_ID;
+const SMTP_USER                 = process.env.SMTP_USER;
+const SMTP_PASS                 = process.env.SMTP_PASS;
 // Railway は RAILWAY_PUBLIC_DOMAIN を自動設定する → https:// を付けて使用
 const BASE_URL = process.env.BASE_URL
   || (process.env.RAILWAY_PUBLIC_DOMAIN
@@ -42,10 +49,31 @@ const lineClient = new line.Client(lineConfig);
 
 // ══ セッション管理 ════════════════════════════════════════════
 // state: idle → waiting_txid → investigating → done
-const userSessions  = new Map(); // userId → session
-const txidCache     = new Map(); // txid（小文字）→ { result, investigatedAt }
+const userSessions    = new Map(); // userId → session
+const txidCache       = new Map(); // txid（小文字）→ { result, investigatedAt }
 const pendingSessions = new Map(); // sessionId → { userId, txidCount, stripeId }
-const reportCache    = new Map(); // reportId  → { results[], customerName, issuedAt }
+const reportCache     = new Map(); // reportId  → { html }（メモリキャッシュ）
+const txidFormTokens  = new Map();
+
+// ── レポートのファイル永続化 ───────────────────────────────────
+const REPORTS_DIR = path.join(__dirname, 'public', 'reports');
+if (!fs.existsSync(REPORTS_DIR)) fs.mkdirSync(REPORTS_DIR, { recursive: true });
+
+async function saveReport(reportId, html) {
+  reportCache.set(reportId, { html });
+  try {
+    await fsp.writeFile(path.join(REPORTS_DIR, `${reportId}.html`), html, 'utf8');
+  } catch (e) { console.error('[Report] ファイル保存失敗:', e.message); }
+}
+
+async function loadReport(reportId) {
+  if (reportCache.has(reportId)) return reportCache.get(reportId).html;
+  try {
+    const html = await fsp.readFile(path.join(REPORTS_DIR, `${reportId}.html`), 'utf8');
+    reportCache.set(reportId, { html }); // メモリにも載せる
+    return html;
+  } catch { return null; }
+} // token → { sessionId, userId, count, customerName, email, used, createdAt }
 
 function getSession(userId) {
   if (!userSessions.has(userId)) {
@@ -193,6 +221,10 @@ const EX_KEYWORDS = [
   'cold wallet','bitbank','mexc','crypto.com','hot','cold',
   'hitbtc','hit btc','poloniex','gemini','bitget','lbank','whitebit',
   'phemex','bitmart','digifinex','xt.com','latoken','probit',
+  // ブリッジ・スワップ・DEXアグリゲーター
+  'bridgers','transit finance','changenow','fixedfloat','simpleswap',
+  'sideshift','stealthex','exolix','lifi','socket','squid','rango',
+  'thorchain','rubic','xy finance','paraswap','1inch','0x protocol',
 ];
 
 function getLabel(addr) {
@@ -206,6 +238,20 @@ function getLabel(addr) {
 function isExchange(label) {
   if (!label) return false;
   return EX_KEYWORDS.some(k => label.toLowerCase().includes(k));
+}
+
+// アドレスの「振る舞い」から取引所・ホットウォレットを推定
+// txCount・balance・transferTime を使用（enrichPathWithAddressInfo 後に呼び出す）
+function inferExchangeByBehavior(node) {
+  // 1. TX件数が非常に多い → 大型取引所 or ミキサーの可能性
+  if (node.txCount != null && node.txCount >= 50000) return '大型取引所候補（TX多数）';
+  // 2. 残高ほぼゼロ かつ TX件数が多い → ホットウォレット / 使い捨て
+  if (node.txCount != null && node.txCount >= 500 && node.balance != null && node.balance < 0.001) {
+    return 'ホットウォレット候補（残高0・TX多数）';
+  }
+  // 3. 受信後10分以内に全額転送 → 自動転送ウォレット（ミキサー・DEX）
+  // ※ timeとparent timeの差で判定（呼び出し元で計算）
+  return null;
 }
 
 // ══ アドレス残高・TX件数取得 ══════════════════════════════════
@@ -237,7 +283,9 @@ async function getAddressInfo(addr, chain) {
       if (!d) return null;
       const balNative = parseFloat(d.balance || 0) / 1e18;
       const price     = await getUSDPrice('eth');
-      return { balance: balNative, txCount: d.transaction_count || 0, balanceUSD: balNative * price };
+      // Blockchairが持つアドレスラベル・コントラクト名を取得
+      const bcLabel   = d.label || d.contract_name || '';
+      return { balance: balNative, txCount: d.transaction_count || 0, balanceUSD: balNative * price, bcLabel };
     }
     if (chain === 'btc') {
       const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
@@ -247,14 +295,17 @@ async function getAddressInfo(addr, chain) {
       if (!d) return null;
       const balNative = parseFloat(d.balance || 0) / 1e8;
       const price     = await getUSDPrice('btc');
-      return { balance: balNative, txCount: d.transaction_count || 0, balanceUSD: balNative * price };
+      const bcLabel   = d.label || '';
+      return { balance: balNative, txCount: d.transaction_count || 0, balanceUSD: balNative * price, bcLabel };
     }
     if (chain === 'xrp') {
       const r = await fetch(`https://api.xrpscan.com/api/v1/account/${addr}`);
       const j = await r.json();
       const balNative = parseFloat(j.xrpBalance || 0);
       const price     = await getUSDPrice('xrp');
-      return { balance: balNative, txCount: j.TxCount || 0, balanceUSD: balNative * price };
+      // XRPScanのアカウント名（取引所名が入ることが多い）
+      const bcLabel   = j.accountName?.name || j.username || '';
+      return { balance: balNative, txCount: j.TxCount || 0, balanceUSD: balNative * price, bcLabel };
     }
   } catch (e) { console.error('[AddrInfo]', addr, e.message); }
   return null;
@@ -269,6 +320,24 @@ async function enrichPathWithAddressInfo(path, chain) {
       node.balance    = info.balance;
       node.txCount    = info.txCount;
       node.balanceUSD = info.balanceUSD;
+
+      // ① Blockchairのラベルを優先適用（最も信頼性が高い）
+      if (info.bcLabel && !node.label) {
+        node.label      = info.bcLabel;
+        const isEx      = isExchange(info.bcLabel);
+        if (isEx) node.isExchange = true;
+        console.log(`[Label] ${node.address.slice(0,10)}... → "${info.bcLabel}" (isExchange:${isEx})`);
+      }
+    }
+
+    // ② 振る舞いから取引所候補を推定（ラベルが付かなかった場合のみ）
+    if (!node.label && !node.isExchange) {
+      const inferred = inferExchangeByBehavior(node);
+      if (inferred) {
+        node.label      = inferred;
+        node.isExchange = true;
+        node.inferred   = true;
+      }
     }
   }
 }
@@ -281,6 +350,72 @@ function detectChain(input) {
   if (/^[0-9A-F]{64}$/.test(s))       return 'xrp';
   if (/^[0-9a-fA-F]{64}$/.test(s))    return 'btc';
   return null;
+}
+
+// ══ 外部ラベル取得（Etherscan / Blockchair） ══════════════════
+
+const labelFetchCache = new Map(); // addr → label（二重取得防止）
+
+async function fetchAddressLabel(addr, chain) {
+  const key = addr.toLowerCase();
+  if (labelFetchCache.has(key)) return labelFetchCache.get(key);
+
+  // ① ローカルDB（最速・最優先）
+  const local = getLabel(addr);
+  if (local.label) {
+    labelFetchCache.set(key, local.label);
+    return local.label;
+  }
+
+  let label = '';
+
+  // ② Etherscan コントラクト名（ETH のみ）
+  if (chain === 'eth' && ETHERSCAN_KEY) {
+    try {
+      const url = `https://api.etherscan.io/v2/api?chainid=1&module=contract&action=getsourcecode&address=${addr}&apikey=${ETHERSCAN_KEY}`;
+      const r = await fetch(url);
+      const j = await r.json();
+      const name = j.result?.[0]?.ContractName || '';
+      // 意味のあるコントラクト名のみ採用（"Vyper_contract"などは除外）
+      if (name && name.length > 2 && !['Vyper_contract','0x','_'].some(s => name.startsWith(s))) {
+        label = name;
+        console.log(`[ExLabel] Etherscan契約名: ${addr.slice(0,10)}... → "${name}"`);
+      }
+    } catch {}
+  }
+
+  // ③ Blockchair アドレスラベル（BTC / ETH）
+  if (!label && (chain === 'btc' || chain === 'eth') && BLOCKCHAIR_KEY) {
+    try {
+      const chain2 = chain === 'btc' ? 'bitcoin' : 'ethereum';
+      const addrKey = chain === 'eth' ? addr.toLowerCase() : addr;
+      const url = `https://api.blockchair.com/${chain2}/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
+      const r = await fetch(url);
+      const j = await r.json();
+      const d = j.data?.[addrKey]?.address;
+      const bcLbl = d?.label || d?.contract_name || '';
+      if (bcLbl) {
+        label = bcLbl;
+        console.log(`[ExLabel] Blockchairラベル: ${addr.slice(0,10)}... → "${bcLbl}"`);
+      }
+    } catch {}
+  }
+
+  // ④ XRPScan アカウント名（XRP のみ）
+  if (!label && chain === 'xrp') {
+    try {
+      const r = await fetch(`https://api.xrpscan.com/api/v1/account/${addr}`);
+      const j = await r.json();
+      const xrpName = j.accountName?.name || j.username || '';
+      if (xrpName) {
+        label = xrpName;
+        console.log(`[ExLabel] XRPScanラベル: ${addr.slice(0,10)}... → "${xrpName}"`);
+      }
+    } catch {}
+  }
+
+  labelFetchCache.set(key, label);
+  return label;
 }
 
 // ══ マルチホップ追跡 ══════════════════════════════════════════
@@ -324,8 +459,10 @@ async function getNextTxETH(addr, afterTime) {
   const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
   console.log(`[HOP] ETH追跡: ${addr} / 基準: ${isNaN(refMs) ? '不明' : new Date(refMs).toISOString()}`);
 
+  // offset=1000 で大量取得 → afterTime以降で最も近いTXを確実に捕捉
+  // （追加API呼び出し不要・レート制限なし・シンプルで確実）
   try {
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=100&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
@@ -342,7 +479,7 @@ async function getNextTxETH(addr, afterTime) {
   } catch(e) { console.error('[HOP] Etherscan ETH:', e.message); }
 
   try {
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=50&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=500&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
@@ -396,21 +533,27 @@ async function getNextTxXRP(addr, afterTime) {
   return null;
 }
 
-async function traceHops(startAddr, startTime, chain, maxHops = 3) {
+async function traceHops(startAddr, startTime, chain, maxHops = 5) {
   const hops = [];
   let currentAddr = startAddr;
   let currentTime = startTime;
+  const visited = new Set([startAddr.toLowerCase()]);
   for (let i = 0; i < maxHops; i++) {
     let next = null;
     if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime);
     else if (chain === 'eth') next = await getNextTxETH(currentAddr, currentTime);
     else if (chain === 'xrp') next = await getNextTxXRP(currentAddr, currentTime);
     if (!next) break;
+    if (visited.has(next.addr.toLowerCase())) break; // ループ防止
+    visited.add(next.addr.toLowerCase());
     const db  = getLabel(next.addr);
-    const lbl = db.label || next.label || '';
+    // fetchAddressLabel で Etherscan/Blockchair/XRPScan ラベルも取得
+    const fetchedLabel = await fetchAddressLabel(next.addr, chain);
+    const lbl = fetchedLabel || db.label || next.label || '';
     const isEx = db.type === 'exchange' || isExchange(lbl);
+    if (lbl) console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... → "${lbl}" (exchange:${isEx})`);
     hops.push({ address: next.addr, label: lbl, amount: next.amount, isExchange: isEx, time: next.time, txHash: next.txHash });
-    if (isEx) break;
+    if (isEx) break; // 取引所到達 → そこで追跡終了（取引所内TXは追跡対象外）
     currentAddr = next.addr;
     currentTime = next.time;
   }
@@ -435,16 +578,22 @@ async function investigateBTC(txid) {
   for (const out of outputs) {
     if (changeAddrs.has(out.recipient)) continue;
     const db = getLabel(out.recipient);
-    const lbl = db.label || out.recipient_label || '';
+    const fetchedLabel = await fetchAddressLabel(out.recipient, 'btc');
+    const lbl = fetchedLabel || db.label || out.recipient_label || '';
     const isEx = db.type === 'exchange' || isExchange(lbl);
     path.push({ address: out.recipient, label: lbl, amount: out.value/1e8, isExchange: isEx });
     if (isEx) exchanges.push({ name: lbl, address: out.recipient, amount: out.value/1e8 });
   }
-  if (exchanges.length === 0 && path.length > 0) {
-    const hops = await traceHops(path[0].address, tx.time, 'btc', 3);
+  // 全ての送金先アドレスからホップ追跡（取引所が見つかっていない送金先のみ）
+  // ※ 安全のため最大10件（一括送金TXでの過負荷防止）
+  const nonExPaths = path.filter(p => !p.isExchange);
+  for (const startNode of nonExPaths.slice(0, 10)) {
+    const hops = await traceHops(startNode.address, tx.time, 'btc', 5);
     for (const hop of hops) {
-      path.push(hop);
-      if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
+      if (!path.some(p => p.address === hop.address)) {
+        path.push(hop);
+        if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
+      }
     }
   }
   return { chain: 'BTC', txid, blockTime: tx.time, blockHeight: tx.block_id,
@@ -463,7 +612,8 @@ async function investigateETH(hash) {
   const calls = data.calls || [];
   const senderDb = getLabel(tx.sender);
   const recipDb  = getLabel(tx.recipient);
-  const recipLbl = recipDb.label || tx.recipient_label || '';
+  const recipFetchedLabel = await fetchAddressLabel(tx.recipient, 'eth');
+  const recipLbl = recipFetchedLabel || recipDb.label || tx.recipient_label || '';
   const isRecipEx = recipDb.type === 'exchange' || isExchange(recipLbl);
   const path = [
     { address: tx.sender,    label: senderDb.label || tx.sender_label || '', role: 'sender' },
@@ -471,19 +621,32 @@ async function investigateETH(hash) {
   ];
   const exchanges = [];
   if (isRecipEx) exchanges.push({ name: recipLbl, address: tx.recipient, amount: parseFloat(tx.value)/1e18 });
+
+  // 内部呼び出し（calls）を全て追加 — 金額あり または 既知アドレス
   for (const call of calls) {
+    if (!call.recipient) continue;
+    const callRecipLower = call.recipient.toLowerCase();
+    if (callRecipLower === tx.sender?.toLowerCase()) continue; // 送信者へのコールはスキップ
+    if (path.some(p => p.address?.toLowerCase() === callRecipLower)) continue; // 重複スキップ
     const db = getLabel(call.recipient);
-    const lbl = db.label || call.recipient_label || '';
-    if (db.type === 'exchange' || isExchange(lbl)) {
-      exchanges.push({ name: lbl, address: call.recipient, amount: parseFloat(call.value||'0')/1e18 });
-      path.push({ address: call.recipient, label: lbl, role: 'internal', isExchange: true });
+    const fetchedLabel = await fetchAddressLabel(call.recipient, 'eth');
+    const lbl = fetchedLabel || db.label || call.recipient_label || '';
+    const isEx = db.type === 'exchange' || isExchange(lbl);
+    const callAmt = parseFloat(call.value || '0') / 1e18;
+    if (callAmt > 0.000001 || isEx) { // 実質送金額ありまたは既知取引所
+      path.push({ address: call.recipient, label: lbl, role: 'internal', isExchange: isEx, amount: callAmt });
+      if (isEx) exchanges.push({ name: lbl, address: call.recipient, amount: callAmt });
     }
   }
-  if (exchanges.length === 0) {
-    const hops = await traceHops(tx.recipient, tx.time, 'eth', 3);
+
+  // 直接送金先が取引所でない場合 → 送金先からホップ追跡
+  if (!isRecipEx) {
+    const hops = await traceHops(tx.recipient, tx.time, 'eth', 5);
     for (const hop of hops) {
-      path.push(hop);
-      if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
+      if (!path.some(p => p.address?.toLowerCase() === hop.address?.toLowerCase())) {
+        path.push(hop);
+        if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
+      }
     }
   }
   return { chain: 'ETH', txid: h, blockTime: tx.time, blockHeight: tx.block_id,
@@ -499,16 +662,22 @@ async function investigateXRP(txid) {
   const tx = JSON.parse(t);
   const senderDb = getLabel(tx.Account);
   const destDb   = getLabel(tx.Destination);
-  const destLbl  = destDb.label || tx.destinationName || '';
+  const destFetchedLabel = await fetchAddressLabel(tx.Destination, 'xrp');
+  const destLbl  = destFetchedLabel || destDb.label || tx.destinationName || '';
   const isDestEx = destDb.type === 'exchange' || isExchange(destLbl);
   const path = [
     { address: tx.Account,     label: senderDb.label, role: 'sender' },
     { address: tx.Destination, label: destLbl, role: 'recipient', isExchange: isDestEx },
   ];
   const exchanges = isDestEx ? [{ name: destLbl, address: tx.Destination, amount: parseFloat(tx.Amount)/1e6 }] : [];
-  if (exchanges.length === 0) {
-    const hops = await traceHops(tx.Destination, tx.date, 'xrp', 3);
-    for (const hop of hops) { path.push(hop); if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount }); }
+  if (!isDestEx) {
+    const hops = await traceHops(tx.Destination, tx.date, 'xrp', 5);
+    for (const hop of hops) {
+      if (!path.some(p => p.address === hop.address)) {
+        path.push(hop);
+        if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
+      }
+    }
   }
   return { chain: 'XRP', txid: h, blockTime: tx.date, blockHeight: tx.ledger_index,
     amount: parseFloat(tx.Amount)/1e6, sender: tx.Account, senderLabel: senderDb.label,
@@ -566,6 +735,255 @@ function buildReport(result) {
   }
 
   return `📊 BitTo 調査レポート\n━━━━━━━━━━━━━━━━━\n${em} チェーン：${result.chain}\n🔗 TXID：${txShort}\n📅 送金日時：${fmtDate(result.blockTime)}\n💰 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}\n\n📍 送金経路\n━━━━━━━━━━━━━━━━━\n${pathLines.join('\n　↓\n')}\n${exSection}${tplSection}\n\n🔒 BitTo が自動生成したレポートです`;
+}
+
+// ══ Google Sheets 連携 ════════════════════════════════════════
+// スプレッドシートの列構成（A〜J）:
+// A:申込日時 B:お名前 C:電話番号 D:メールアドレス E:ご住所
+// F:件数 G:合計金額(¥) H:セッションID I:レポートURL J:ステータス
+
+function getSheets() {
+  const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  if (!keyJson || !GOOGLE_SHEET_ID) return null;
+  try {
+    const credentials = JSON.parse(keyJson);
+    const auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    return google.sheets({ version: 'v4', auth });
+  } catch (e) {
+    console.error('[Sheets] 認証エラー:', e.message);
+    return null;
+  }
+}
+
+async function appendToSheet(rowData) {
+  try {
+    const sheets = getSheets();
+    if (!sheets) { console.log('[Sheets] 未設定（スキップ）'); return; }
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: 'シート1!A:J',
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: { values: [rowData] },
+    });
+    console.log('[Sheets] 行追記完了');
+  } catch (e) {
+    console.error('[Sheets] appendToSheet エラー:', e.message);
+  }
+}
+
+async function updateSheetReportUrl(sessionId, reportUrl) {
+  try {
+    const sheets = getSheets();
+    if (!sheets) return;
+    // H列（セッションID）からマッチする行を検索
+    const getRes = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: 'シート1!H:H',
+    });
+    const rows = getRes.data.values || [];
+    const rowIdx = rows.findIndex(row => row[0] === sessionId);
+    if (rowIdx === -1) { console.log('[Sheets] sessionId 未検出:', sessionId); return; }
+    const sheetRow = rowIdx + 1; // 1-indexed
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      requestBody: {
+        valueInputOption: 'USER_ENTERED',
+        data: [
+          { range: `シート1!I${sheetRow}`, values: [[reportUrl]] },
+          { range: `シート1!J${sheetRow}`, values: [['支払い完了']] },
+        ],
+      },
+    });
+    console.log('[Sheets] レポートURL更新完了 row:', sheetRow);
+  } catch (e) {
+    console.error('[Sheets] updateSheetReportUrl エラー:', e.message);
+  }
+}
+
+// ══ メール送信 ════════════════════════════════════════════════
+
+function getMailer() {
+  if (!SMTP_USER || !SMTP_PASS) return null;
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
+  });
+}
+
+async function sendEmail(to, subject, html) {
+  try {
+    const mailer = getMailer();
+    if (!mailer) { console.log('[Mail] SMTP未設定（スキップ）'); return; }
+
+    // 提供者（SMTP_USER）にもBCCで送信
+    const bcc = SMTP_USER && SMTP_USER !== to ? SMTP_USER : undefined;
+
+    const info = await mailer.sendMail({
+      from: `"BitTo 調査サービス" <${SMTP_USER}>`,
+      to, bcc, subject, html,
+    });
+    console.log('[Mail] 送信完了 → to:', to, '/ bcc:', bcc || 'なし', '/ messageId:', info.messageId);
+  } catch (e) {
+    console.error('[Mail] 送信エラー詳細:', e.message);
+    console.error('[Mail] エラーコード:', e.code, '/ 応答:', e.response || '');
+  }
+}
+
+function buildTOSEmailHTML(name, count, amount, submittedAt) {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ご利用規約同意の確認 — BitTo</title>
+<style>
+body{margin:0;background:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,'Hiragino Kaku Gothic Pro','Meiryo',sans-serif;color:#1a1a2e;font-size:14px}
+.wrap{max-width:560px;margin:0 auto;padding:24px 16px}
+.header{background:#1a1a2e;border-radius:12px;padding:24px 28px;margin-bottom:16px;color:#fff;text-align:center}
+.header h1{font-size:1.2rem;margin:0 0 4px}
+.header p{color:#94a3b8;font-size:0.83rem;margin:0}
+.card{background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:28px;margin-bottom:16px}
+h2{font-size:0.95rem;color:#1a1a2e;margin:0 0 14px;padding-bottom:8px;border-bottom:1px solid #e2e8f0}
+table{width:100%;border-collapse:collapse}
+th{width:130px;background:#f8fafc;padding:8px 10px;text-align:left;font-size:0.82rem;color:#64748b;border:1px solid #e2e8f0;white-space:nowrap}
+td{padding:8px 10px;border:1px solid #e2e8f0;font-size:0.85rem}
+.tos-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;font-size:0.79rem;color:#64748b;line-height:1.8;white-space:pre-line;margin-top:10px}
+.footer{text-align:center;color:#94a3b8;font-size:0.78rem;line-height:1.7;margin-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <h1>🔗 BitTo 詳細調査レポート</h1>
+    <p>ご利用規約同意の確認メール</p>
+  </div>
+  <div class="card">
+    <h2>📋 お申し込み内容</h2>
+    <table>
+      <tr><th>お名前</th><td>${name} 様</td></tr>
+      <tr><th>申し込み日時</th><td>${submittedAt}</td></tr>
+      <tr><th>調査TXID件数</th><td>${count}件</td></tr>
+      <tr><th>お支払い金額</th><td>¥${Number(amount).toLocaleString()}（税込）</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h2>📄 ご同意いただいた利用規約</h2>
+    <div class="tos-box">■ サービス内容
+ブロックチェーン公開データを解析し送金先取引所を特定する調査サービスです。
+公的機関への提出資料を作成します。
+
+■ 料金
+・送金経路・取引所特定：無料
+・詳細調査レポート 1TXID：¥6,600（税込）
+・複数TXIDは件数 × ¥6,600
+
+■ 返金について
+本サービスはデジタル調査コンテンツの提供のため、調査開始後の返金はいたしかねます。
+・取引所への凍結・資金回収を保証しません
+・調査結果に法的効力はありません
+・結果に関わらず返金対応は行いません
+
+■ 免責事項
+・全追跡の成功を保証しません
+・取引所の対応結果は当社管理外です
+・本レポートは被害申告・警察相談の参考資料としてご活用ください
+
+■ 個人情報の取扱い
+収集情報は調査業務のみに使用し、第三者への提供はしません。</div>
+  </div>
+  <div class="footer">
+    <p>このメールはお申し込み内容の確認として自動送信されました。</p>
+    <p>ご不明な点はLINEにてお問い合わせください。</p>
+    <p>© BitTo 詳細調査サービス</p>
+  </div>
+</div>
+</body>
+</html>`;
+}
+
+function buildReportEmailHTML(name, reportUrl, issuedAt) {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>詳細調査レポート完成のお知らせ — BitTo</title>
+<style>
+body{margin:0;background:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,'Hiragino Kaku Gothic Pro','Meiryo',sans-serif;color:#1a1a2e;font-size:14px}
+.wrap{max-width:560px;margin:0 auto;padding:24px 16px}
+.header{background:#1a1a2e;border-radius:12px;padding:24px 28px;margin-bottom:16px;color:#fff;text-align:center}
+.header h1{font-size:1.2rem;margin:0 0 4px}
+.header p{color:#94a3b8;font-size:0.83rem;margin:0}
+.card{background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:28px;margin-bottom:16px}
+h2{font-size:0.95rem;color:#1a1a2e;margin:0 0 14px;padding-bottom:8px;border-bottom:1px solid #e2e8f0}
+.note{font-size:0.85rem;color:#374151;line-height:1.75}
+.btn{display:block;background:#1a73e8;color:#fff;text-align:center;padding:14px 24px;border-radius:10px;font-size:1rem;font-weight:700;text-decoration:none;margin:18px 0}
+.url-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;font-size:0.82rem;word-break:break-all;color:#3b82f6}
+.footer{text-align:center;color:#94a3b8;font-size:0.78rem;line-height:1.7;margin-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <h1>🔗 BitTo 詳細調査レポート</h1>
+    <p>レポート完成のお知らせ</p>
+  </div>
+  <div class="card">
+    <h2>✅ 詳細調査レポートが完成しました</h2>
+    <p class="note">${name} 様<br><br>
+お支払いが確認され、ブロックチェーン詳細調査レポートの生成が完了しました。<br>
+発行日時：${issuedAt}<br><br>
+下記のボタンからレポートをご確認ください。</p>
+    <a class="btn" href="${reportUrl}">📄 レポートを開く</a>
+    <p class="note" style="font-size:0.82rem;color:#64748b">またはブラウザで以下のURLを開いてください：</p>
+    <div class="url-box">${reportUrl}</div>
+    <p class="note" style="margin-top:14px;font-size:0.82rem;color:#64748b">
+💡 <strong>PDFとして保存するには</strong><br>
+ブラウザの印刷メニュー（Ctrl+P / ⌘P）を開き、「PDFとして保存」を選択してください。</p>
+  </div>
+  <div class="footer">
+    <p>このメールはお支払い確認後に自動送信されました。</p>
+    <p>ご不明な点はLINEにてお問い合わせください。</p>
+    <p>© BitTo 詳細調査サービス</p>
+  </div>
+</div>
+</body>
+</html>`;
+}
+
+function buildTxidFormEmailHTML(name, formUrl, count) {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TXID入力のお願い — BitTo</title>
+<style>
+body{margin:0;background:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,'Hiragino Kaku Gothic Pro','Meiryo',sans-serif;color:#1a1a2e;font-size:14px}
+.wrap{max-width:560px;margin:0 auto;padding:24px 16px}
+.header{background:#1a1a2e;border-radius:12px;padding:24px 28px;margin-bottom:16px;color:#fff;text-align:center}
+.header h1{font-size:1.2rem;margin:0 0 4px}.header p{color:#94a3b8;font-size:0.83rem;margin:0}
+.card{background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:28px;margin-bottom:16px}
+h2{font-size:0.95rem;color:#1a1a2e;margin:0 0 14px;padding-bottom:8px;border-bottom:1px solid #e2e8f0}
+.note{font-size:0.85rem;color:#374151;line-height:1.75}
+.btn{display:block;background:#1a73e8;color:#fff;text-align:center;padding:14px 24px;border-radius:10px;font-size:1rem;font-weight:700;text-decoration:none;margin:18px 0}
+.url-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;font-size:0.82rem;word-break:break-all;color:#3b82f6}
+.warn{background:#fff8e1;border:1px solid #fdd663;border-radius:8px;padding:10px 14px;font-size:0.82rem;color:#78600a;margin-top:12px}
+.footer{text-align:center;color:#94a3b8;font-size:0.78rem;line-height:1.7;margin-top:16px}
+</style></head>
+<body><div class="wrap">
+  <div class="header"><h1>🔗 BitTo 詳細調査レポート</h1><p>TXID入力フォームのご案内</p></div>
+  <div class="card">
+    <h2>📝 調査するTXIDを入力してください</h2>
+    <p class="note">${name} 様<br><br>
+お支払いが確認されました。<br>
+以下のボタンから調査するTXIDを入力してください。<br><br>
+入力できる件数：<strong>${count}件</strong></p>
+    <a class="btn" href="${formUrl}">🔗 TXID入力フォームを開く</a>
+    <p class="note" style="font-size:0.82rem;color:#64748b">またはブラウザで以下のURLを開いてください：</p>
+    <div class="url-box">${formUrl}</div>
+    <div class="warn">⚠️ このURLは1回のみ使用可能です。入力後は無効になります。</div>
+  </div>
+  <div class="footer"><p>ご不明な点はLINEにてお問い合わせください。</p><p>© BitTo 詳細調査サービス</p></div>
+</div></body></html>`;
 }
 
 // ══ Mermaid フロー図生成 ══════════════════════════════════════
@@ -631,11 +1049,14 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}) {
     // ── フローマップ ──────────────────────────────────────
     const flowNodes = (r.path || []).map((p, i) => {
       let cls, icon, roleLabel;
-      if (i === 0)       { cls = 'victim';   icon = '●'; roleLabel = '被害者ウォレット'; }
-      else if (p.isExchange) { cls = 'exchange'; icon = '★'; roleLabel = `取引所到達（${i}次先）`; }
-      else               { cls = 'relay';    icon = '◆'; roleLabel = `中継アドレス（${i}次先）`; }
+      if (i === 0)           { cls = 'victim';   icon = '●'; roleLabel = '被害者ウォレット（起点）'; }
+      else if (p.isExchange && p.inferred) { cls = 'exchange'; icon = '★'; roleLabel = `🏦 取引所候補（${i}次先・推定）`; }
+      else if (p.isExchange) { cls = 'exchange'; icon = '★'; roleLabel = `🏦 取引所到達（${i}次先）`; }
+      else if (p.role === 'internal') { cls = 'relay'; icon = '◆'; roleLabel = `内部コール（${i}次先）`; }
+      else                   { cls = 'relay';    icon = '◆'; roleLabel = `中継アドレス（${i}次先）`; }
 
-      const exBadge  = p.label ? `<span class="badge">${p.label}</span>` : '';
+      const inferredBadge = p.inferred ? `<span class="badge" style="background:#d97706">推定</span>` : '';
+      const exBadge  = p.label ? `<span class="badge">${p.label}</span>${inferredBadge}` : '';
       const timeTd   = p.time ? `<div class="node-meta">📅 ${fmtDate(p.time)}</div>` : '';
       const amtTd    = (p.amount != null && !isNaN(p.amount) && p.amount > 0)
         ? `<div class="node-meta">💸 送金額: ${p.amount.toFixed(8)} ${p.token || r.chain}</div>` : '';
@@ -824,6 +1245,37 @@ ${r.txid}
     .tx-price-label{font-size:0.82rem;color:#dc2626;font-weight:600;margin-bottom:8px;text-align:right}
     .chart-error{color:#94a3b8;font-size:0.82rem;text-align:center;padding:20px 0}
     .page-break{page-break-before:always}
+    /* ── スマホ対応 ── */
+    @media (max-width:640px){
+      body{padding:8px 6px 40px;font-size:13px}
+      .container{max-width:100%}
+      .cover{flex-direction:column;gap:10px;padding:18px 14px}
+      .cover-left h1{font-size:1.1rem}
+      .cover-left p{font-size:0.78rem}
+      .cover-meta{text-align:left;font-size:0.78rem}
+      .print-bar{flex-direction:column;gap:8px;text-align:center;padding:12px 14px}
+      .print-bar p{font-size:0.78rem}
+      .print-btn{width:100%;padding:10px}
+      .tx-section{padding:14px 10px}
+      .tx-header{flex-wrap:wrap;gap:6px}
+      .chain-badge{font-size:0.82rem;padding:3px 10px}
+      h3{font-size:0.88rem;margin:14px 0 8px}
+      h4{font-size:0.82rem}
+      .info-table th{width:78px;font-size:0.73rem;padding:6px 7px;white-space:normal;word-break:keep-all}
+      .info-table td{font-size:0.78rem;padding:6px 7px;word-break:break-all}
+      .mono{font-size:0.68rem}
+      .node-address{font-size:0.63rem;padding:5px 6px}
+      .node-role{font-size:0.8rem}
+      .node-meta{font-size:0.73rem}
+      .badge{font-size:0.67rem;padding:2px 6px}
+      .mermaid-wrap{padding:10px 8px;overflow-x:auto}
+      .chart-wrap{padding:10px 8px}
+      .template-box{font-size:0.75rem;padding:12px 10px}
+      .ai-overall{padding:16px 14px}
+      .ai-title{font-size:0.9rem}
+      .ai-body{font-size:0.8rem}
+      .flow-node{padding:10px 10px}
+    }
     @media print{
       body{background:#fff;padding:0}
       .print-bar{display:none}
@@ -1017,7 +1469,7 @@ ${requestBlocks}
 分析ポイント：TX件数10件以下→専用ウォレット疑い、残高ほぼゼロ→使い捨て、短時間転送→計画的犯行、取引所ごとの窓口（法執行機関ポータル/メール/チケット）を明記`;
 
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+      `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1268,47 +1720,42 @@ app.post('/stripe-webhook',
     if (event.type === 'checkout.session.completed') {
       const s = event.data.object;
       const { sessionId, userId, txidCount, customerName } = s.metadata;
-      const userSession = getSession(userId);
       const count = parseInt(txidCount) || 1;
+      const cName = customerName || '（お名前）';
+      const customerEmail = s.customer_details?.email || s.customer_email || '';
 
       try {
+        // ワンタイムTXID入力フォームのトークンを生成
+        const formToken  = crypto.randomUUID();
+        txidFormTokens.set(formToken, {
+          sessionId, userId, count, customerName: cName,
+          email: customerEmail, used: false, createdAt: Date.now(),
+        });
+        const txidFormUrl = `${BASE_URL}/txid-form/${formToken}`;
+
+        // LINEにTXID入力リンクを送信
         await lineClient.pushMessage(userId, {
           type: 'text',
-          text: `✅ お支払いを確認しました！\n\n📄 詳細レポートを生成中...\n通常1〜2分でお届けします`,
+          text: `✅ お支払いありがとうございます！\n\n📝 以下のURLから調査するTXIDを入力してください\n（${count}件まで入力できます）\n\n${txidFormUrl}\n\n⚠️ このURLは1回のみ使用可能です`,
         });
 
-        // 調査済みリストから最新N件を取得
-        const list = (userSession.investigatedList || []).slice(-count);
+        // Sheetsに支払い確認を記録
+        updateSheetReportUrl(sessionId, `[TXID待ち] ${txidFormUrl}`).catch(console.error);
 
-        if (list.length === 0) {
-          // セッションが失われた場合（サーバー再起動等）→ キャッシュから試行
-          await lineClient.pushMessage(userId, {
-            type: 'text',
-            text: `⚠️ 調査データが見つかりませんでした\nサポートまでご連絡ください`,
-          });
-        } else {
-          // AI分析生成 → HTMLレポート生成 → URL送付
-          const reportId  = crypto.randomUUID();
-          const issuedAt  = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
-          const cName     = customerName || '（お名前）';
-
-          console.log('[AI] Gemini分析開始...');
-          const aiData    = await generateAIContent(list, cName);
-          const reportHtml = generateReportHTML(list, cName, issuedAt, aiData);
-          reportCache.set(reportId, { html: reportHtml }); // HTMLを直接保存
-          const reportUrl = `${BASE_URL}/report/${reportId}`;
-
-          await lineClient.pushMessage(userId, {
-            type: 'text',
-            text: `✅ お支払いが確認されました\n\n📄 詳細調査レポートが完成しました\n\n${reportUrl}\n\nブラウザで開いて\n「印刷」→「PDFとして保存」\nでPDF化できます`,
-          });
+        // メールでもTXID入力フォームURLを送信
+        if (customerEmail) {
+          sendEmail(
+            customerEmail,
+            '【BitTo】TXIDの入力をお願いします',
+            buildTxidFormEmailHTML(cName, txidFormUrl, count)
+          ).catch(console.error);
         }
 
         pendingSessions.delete(sessionId);
       } catch (e) {
-        console.error('レポート生成エラー:', e);
+        console.error('Stripe webhook エラー:', e);
         await lineClient.pushMessage(userId, {
-          type: 'text', text: `⚠️ レポート生成エラー\n${e.message}\nサポートにご連絡ください`,
+          type: 'text', text: `⚠️ エラーが発生しました\n${e.message}\nサポートにご連絡ください`,
         });
       }
     }
@@ -1318,12 +1765,30 @@ app.post('/stripe-webhook',
 
 // 申し込みフォームからの決済セッション作成
 app.post('/api/create-checkout', express.json(), async (req, res) => {
-  if (!stripe) return res.status(503).json({ error: 'Stripe未設定（テストモード）' });
   try {
     const { uid, name, phone, email, address, txid_count } = req.body;
     const count  = Math.max(1, Math.min(10, parseInt(txid_count) || 1));
     const amount = 6600 * count;
     const sessionId = crypto.randomUUID();
+
+    // Stripe未設定でも Sheets保存・確認メールだけ先に実行
+    const submittedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+    appendToSheet([
+      submittedAt, name || '', phone || '', email || '', address || '',
+      String(count), String(amount), sessionId, '', '申込済み',
+    ]).catch(console.error);
+    if (email) {
+      sendEmail(
+        email,
+        '【BitTo】ご利用規約同意の確認',
+        buildTOSEmailHTML(name || '', count, amount, submittedAt)
+      ).catch(console.error);
+    }
+
+    // Stripe未設定の場合はテスト用成功ページへ
+    if (!stripe) {
+      return res.json({ url: `${BASE_URL}/payment/success?sid=${sessionId}&test=1` });
+    }
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -1424,7 +1889,7 @@ app.get('/api/xrp/tx/:txid', async (req, res) => {
 app.post('/api/ai/analyze', express.json(), async (req, res) => {
   try { const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: 'promptが必要です' });
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`, {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 1000 } }),
     });
@@ -1434,13 +1899,247 @@ app.post('/api/ai/analyze', express.json(), async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// メール送信テスト（ブラウザで /api/test-email?to=xxx を開くと確認できる）
+app.get('/api/test-email', async (req, res) => {
+  const to = req.query.to || SMTP_USER;
+  if (!to) return res.status(400).json({ error: 'to パラメータが必要です' });
+  try {
+    const mailer = getMailer();
+    if (!mailer) return res.status(503).json({ error: 'SMTP未設定（SMTP_USER / SMTP_PASSを確認）' });
+    const info = await mailer.sendMail({
+      from: `"BitTo テスト" <${SMTP_USER}>`,
+      to,
+      subject: '【BitTo】メール送信テスト',
+      html: '<p>このメールが届いていればSMTP設定は正常です。</p>',
+    });
+    res.json({ ok: true, messageId: info.messageId, to });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message, code: e.code, response: e.response });
+  }
+});
+
+// 管理用レポート生成API（LINE・決済不要）
+app.post('/api/admin/generate-report', express.json(), async (req, res) => {
+  try {
+    const { customerName, txids } = req.body;
+    if (!customerName) return res.status(400).json({ error: 'customerNameが必要です' });
+    if (!Array.isArray(txids) || txids.length === 0) return res.status(400).json({ error: 'TXIDが必要です' });
+
+    const list = [];
+    const errors = [];
+
+    for (const item of txids) {
+      const txid  = (item.txid || '').trim();
+      const chain = item.chain || detectChain(txid);
+      if (!txid)  { errors.push('空のTXIDをスキップ'); continue; }
+      if (!chain) { errors.push(`チェーン不明: ${txid.slice(0,16)}...`); continue; }
+      try {
+        console.log(`[Admin] 調査開始: ${txid} (${chain})`);
+        const cacheKey = txid.toLowerCase();
+        let result = txidCache.get(cacheKey)?.result;
+        if (!result) {
+          result = await investigate(txid, chain);
+          txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
+        }
+        list.push({ txid, chain, result });
+        console.log(`[Admin] 調査完了: ${txid}`);
+      } catch (e) {
+        errors.push(`${txid.slice(0,16)}...: ${e.message}`);
+      }
+    }
+
+    if (list.length === 0) return res.status(400).json({ error: '調査できたTXIDが0件です', errors });
+
+    const issuedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+    console.log('[Admin] AI分析開始...');
+    const aiData = await generateAIContent(list, customerName).catch(() => ({ analysis: null, requests: [] }));
+    const reportHtml = generateReportHTML(list, customerName, issuedAt, aiData);
+    const reportId   = crypto.randomUUID();
+    await saveReport(reportId, reportHtml);
+
+    const reportUrl = `${BASE_URL}/report/${reportId}`;
+    console.log('[Admin] レポート生成完了:', reportUrl);
+    res.json({ ok: true, url: reportUrl, errors });
+  } catch (e) {
+    console.error('[Admin] エラー:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // /apply → apply.html（クエリパラメータ付きでも対応）
 app.get('/apply', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'apply.html')));
 
-// 有料レポートページ（reportCache から HTML を配信）
-app.get('/report/:id', (req, res) => {
-  const data = reportCache.get(req.params.id);
-  if (!data) {
+// 管理ページ
+app.get('/admin', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+
+// テスト用：決済スキップでTXID入力フォームを生成
+// 使い方: /api/test-txid-form?name=山田太郎&count=2&email=test@gmail.com
+app.get('/api/test-txid-form', (req, res) => {
+  const customerName = req.query.name  || 'テストユーザー';
+  const count        = parseInt(req.query.count) || 1;
+  const email        = req.query.email || '';
+  const formToken    = crypto.randomUUID();
+  txidFormTokens.set(formToken, {
+    sessionId: 'test-' + formToken,
+    userId:    null,
+    count, customerName, email,
+    used: false, createdAt: Date.now(),
+  });
+  const url = `${BASE_URL}/txid-form/${formToken}`;
+  console.log('[Test] TXIDフォーム生成:', url);
+  res.json({ ok: true, url, formToken });
+});
+
+// TXID入力フォーム（ワンタイムリンク）
+app.get('/txid-form/:token', (req, res) => {
+  const data = txidFormTokens.get(req.params.token);
+  if (!data) return res.status(404).sendFile(path.join(__dirname, 'public', 'form-expired.html'));
+  if (data.used) return res.status(410).sendFile(path.join(__dirname, 'public', 'form-used.html'));
+  res.sendFile(path.join(__dirname, 'public', 'txid-form.html'));
+});
+
+// TXID入力フォーム情報取得API
+app.get('/api/txid-form-info/:token', (req, res) => {
+  const data = txidFormTokens.get(req.params.token);
+  if (!data) return res.status(404).json({ error: 'リンクが無効または期限切れです' });
+  if (data.used) return res.status(410).json({ error: 'このリンクはすでに使用済みです', used: true });
+  res.json({ ok: true, count: data.count, customerName: data.customerName });
+});
+
+// TXID送信・調査開始API
+app.post('/api/submit-txids', express.json(), async (req, res) => {
+  const { token, txids } = req.body;
+  const formData = txidFormTokens.get(token);
+  if (!formData)       return res.status(404).json({ error: 'リンクが無効または期限切れです' });
+  if (formData.used)   return res.status(410).json({ error: 'このリンクはすでに使用済みです' });
+  if (!Array.isArray(txids) || txids.length === 0) return res.status(400).json({ error: 'TXIDが必要です' });
+  if (txids.length > formData.count) return res.status(400).json({ error: `件数が超過しています（最大${formData.count}件）` });
+
+  // 即座に使用済みにして二重送信を防ぐ
+  formData.used = true;
+  res.json({ ok: true });
+
+  // バックグラウンドで調査・レポート生成
+  (async () => {
+    try {
+      if (formData.userId) {
+        await lineClient.pushMessage(formData.userId, {
+          type: 'text',
+          text: `🔍 TXIDを受け付けました！\n${txids.length}件の調査を開始します\n通常1〜3分でレポートをお届けします`,
+        });
+      }
+
+      const list = [];
+      for (const item of txids) {
+        try {
+          console.log(`[Submit] 調査中: ${item.txid} (${item.chain})`);
+          const cacheKey = item.txid.toLowerCase();
+          let result = txidCache.get(cacheKey)?.result;
+          if (!result) {
+            result = await investigate(item.txid, item.chain);
+            txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
+          }
+          list.push({ txid: item.txid, chain: item.chain, result });
+        } catch (e) {
+          console.error(`[Submit] 調査失敗: ${item.txid}`, e.message);
+        }
+      }
+
+      if (list.length === 0) throw new Error('全てのTXIDの調査に失敗しました');
+
+      const issuedAt   = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+      const aiData     = await generateAIContent(list, formData.customerName).catch(() => ({ analysis: null, requests: [] }));
+      const reportHtml = generateReportHTML(list, formData.customerName, issuedAt, aiData);
+      const reportId   = crypto.randomUUID();
+      await saveReport(reportId, reportHtml);
+      const reportUrl  = `${BASE_URL}/report/${reportId}`;
+
+      // SheetsにレポートURLを記録
+      updateSheetReportUrl(formData.sessionId, reportUrl).catch(console.error);
+
+      // LINEにレポートURL送信
+      if (formData.userId) {
+        await lineClient.pushMessage(formData.userId, {
+          type: 'text',
+          text: `✅ レポートが完成しました！\n\n📄 ${reportUrl}\n\nブラウザで開いて「印刷」→「PDFとして保存」でPDF化できます`,
+        });
+      }
+
+      // メールにレポートURL送信
+      if (formData.email) {
+        sendEmail(
+          formData.email,
+          '【BitTo】詳細調査レポートが完成しました',
+          buildReportEmailHTML(formData.customerName, reportUrl, issuedAt)
+        ).catch(console.error);
+      }
+
+    } catch (e) {
+      console.error('[Submit] エラー:', e.message);
+      if (formData.userId) {
+        lineClient.pushMessage(formData.userId, {
+          type: 'text', text: `⚠️ レポート生成エラー\n${e.message}\nサポートにご連絡ください`,
+        }).catch(() => {});
+      }
+    }
+  })();
+});
+
+// テスト用プレビューレポート（決済・LINE不要）
+// アクセス: /report/preview
+// Gemini AIをスキップ: /report/preview?ai=0
+app.get('/report/preview', async (req, res) => {
+  const issuedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  const mockList = [{
+    txid: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+    chain: 'btc',
+    result: {
+      chain: 'BTC',
+      txid: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+      blockTime: '2024-11-03 12:34:56',
+      blockHeight: 868421,
+      amount: 0.52341200,
+      fee: 0.00003210,
+      sender: '1A2B3C4D5E6F7G8H9I0Jabcdefghijkl123456',
+      senderLabel: '',
+      path: [
+        {
+          address: '1A2B3C4D5E6F7G8H9I0Jabcdefghijkl123456',
+          label: '', role: 'sender', isExchange: false,
+          balance: 0.00012340, txCount: 3, balanceUSD: 8.45,
+        },
+        {
+          address: '1RelayMidAddr9XXXXXXXXXXXXXXXXXXXXXXXX',
+          label: '', role: 'relay', isExchange: false,
+          amount: 0.52341200, time: '2024-11-03 12:41:00',
+          balance: 0.00000120, txCount: 2, balanceUSD: 0.08,
+        },
+        {
+          address: '34xp4vRocGJym3xR7yCVpFHoCNxv4twsEo',
+          label: 'Binance Hot Wallet', role: 'exchange', isExchange: true,
+          amount: 0.52338000, time: '2024-11-03 13:02:15',
+          balance: 12500.85, txCount: 1250000, balanceUSD: 857083200,
+        },
+      ],
+      exchanges: [{ name: 'Binance Hot Wallet', address: '34xp4vRocGJym3xR7yCVpFHoCNxv4twsEo', amount: 0.52338000 }],
+    },
+  }];
+
+  let aiData = { analysis: null, requests: [] };
+  if (req.query.ai !== '0' && GEMINI_KEY) {
+    console.log('[Preview] Gemini AI 生成中...');
+    aiData = await generateAIContent(mockList, 'テストユーザー').catch(() => ({ analysis: null, requests: [] }));
+  }
+
+  const html = generateReportHTML(mockList, 'テストユーザー（プレビュー）', issuedAt, aiData);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
+
+// 有料レポートページ（ファイル優先 → メモリキャッシュのフォールバック）
+app.get('/report/:id', async (req, res) => {
+  const html = await loadReport(req.params.id);
+  if (!html) {
     return res.status(404).send(`<!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><title>レポートが見つかりません</title>
 <style>body{margin:0;background:#0a0c10;color:#e2e8f0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:20px}
@@ -1450,7 +2149,7 @@ h1{color:#f87171;font-size:1.3rem;margin-bottom:12px}.icon{font-size:3rem;margin
 <p>URLの有効期限が切れているか、リンクが正しくありません。<br><br>ご不明な点はLINEにてお問い合わせください。</p></div></body></html>`);
   }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(data.html);
+  res.send(html);
 });
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
@@ -1462,5 +2161,8 @@ app.listen(PORT, () => {
   console.log(`🔑 Blockchair : ${BLOCKCHAIR_KEY ? '✓' : '⚠ 未設定'}`);
   console.log(`🔑 LINE       : ${LINE_CHANNEL_ACCESS_TOKEN ? '✓' : '⚠ 未設定'}`);
   console.log(`🔑 Stripe     : ${stripe ? '✓ 本番モード' : '⚠ テストモード（決済スキップ）'}`);
+  console.log(`🔑 Sheets     : ${GOOGLE_SHEET_ID && process.env.GOOGLE_SERVICE_ACCOUNT_KEY ? '✓' : '⚠ 未設定'}`);
+  console.log(`🔑 Mail(SMTP) : ${SMTP_USER && SMTP_PASS ? '✓' : '⚠ 未設定'}`);
+  console.log(`🧪 プレビュー : ${BASE_URL}/report/preview`);
   console.log();
 });

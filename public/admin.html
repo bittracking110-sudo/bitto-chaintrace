@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BitTo 管理レポート作成</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #2a2b2e;
+      color: #e8eaed;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      padding: 24px 16px 60px;
+    }
+
+    .container { max-width: 620px; margin: 0 auto; }
+
+    .header { text-align: center; margin-bottom: 28px; }
+    .header .logo { font-size: 2.2rem; margin-bottom: 8px; }
+    .header h1 { font-size: 1.4rem; color: #f0f2f5; font-weight: 700; }
+    .header p  { color: #9aa0a6; font-size: 0.88rem; margin-top: 6px; }
+
+    .card {
+      background: #3c3d41;
+      border: 1px solid #4a4b50;
+      border-radius: 14px;
+      padding: 22px;
+      margin-bottom: 14px;
+    }
+    .card h2 {
+      font-size: 0.95rem;
+      color: #bdc1c6;
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #4a4b50;
+    }
+
+    .field { margin-bottom: 14px; }
+    .field label {
+      display: block;
+      font-size: 0.83rem;
+      color: #9aa0a6;
+      margin-bottom: 5px;
+    }
+    .field input {
+      width: 100%;
+      background: #2a2b2e;
+      border: 1px solid #4a4b50;
+      border-radius: 8px;
+      padding: 11px 13px;
+      color: #e8eaed;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+      font-family: 'Courier New', monospace;
+    }
+    .field input:focus { border-color: #8ab4f8; }
+    .field input::placeholder { color: #5f6368; font-family: sans-serif; }
+    #customerName { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+    .txid-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+    .txid-row input { flex: 1; }
+    .chain-tag {
+      background: #174ea6;
+      color: #8ab4f8;
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 6px;
+      white-space: nowrap;
+      min-width: 38px;
+      text-align: center;
+      transition: background 0.2s;
+    }
+    .chain-tag.eth { background: #1e3a5a; color: #60a5fa; }
+    .chain-tag.xrp { background: #1e3045; color: #7dd3fc; }
+    .chain-tag.unknown { background: #3c3d41; color: #5f6368; }
+
+    .remove-btn {
+      background: none;
+      border: 1px solid #4a4b50;
+      border-radius: 6px;
+      color: #9aa0a6;
+      cursor: pointer;
+      padding: 6px 10px;
+      font-size: 0.85rem;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+    .remove-btn:hover { border-color: #f28b82; color: #f28b82; }
+
+    .add-btn {
+      background: none;
+      border: 1px dashed #4a4b50;
+      border-radius: 8px;
+      color: #8ab4f8;
+      cursor: pointer;
+      padding: 10px;
+      width: 100%;
+      font-size: 0.88rem;
+      margin-top: 4px;
+      transition: all 0.18s;
+    }
+    .add-btn:hover { border-color: #8ab4f8; background: rgba(138,180,248,0.05); }
+
+    .submit-btn {
+      width: 100%;
+      background: #1a73e8;
+      border: none;
+      border-radius: 10px;
+      padding: 15px;
+      color: #fff;
+      font-size: 1.02rem;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 6px;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .submit-btn:hover   { background: #1557b0; }
+    .submit-btn:active  { transform: scale(0.98); }
+    .submit-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .progress-box {
+      background: #2a2b2e;
+      border: 1px solid #4a4b50;
+      border-radius: 10px;
+      padding: 16px;
+      margin-top: 14px;
+      display: none;
+    }
+    .progress-title { font-size: 0.88rem; color: #9aa0a6; margin-bottom: 10px; }
+    .progress-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.85rem;
+      color: #bdc1c6;
+      padding: 5px 0;
+      border-bottom: 1px solid #3c3d41;
+    }
+    .progress-item:last-child { border-bottom: none; }
+    .spin { animation: spin 1s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .result-box {
+      background: #1e3a1e;
+      border: 1px solid #2d5a2d;
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 14px;
+      display: none;
+      text-align: center;
+    }
+    .result-box h3 { color: #81c995; font-size: 1rem; margin-bottom: 12px; }
+    .report-btn {
+      display: inline-block;
+      background: #1a73e8;
+      color: #fff;
+      padding: 12px 28px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 0.95rem;
+      margin-bottom: 12px;
+    }
+    .report-url {
+      font-size: 0.78rem;
+      color: #5f6368;
+      word-break: break-all;
+      margin-top: 8px;
+    }
+
+    .error-msg {
+      background: #3c2020;
+      border: 1px solid #7f1d1d;
+      border-radius: 8px;
+      padding: 11px 13px;
+      color: #f28b82;
+      font-size: 0.83rem;
+      margin-top: 10px;
+      display: none;
+      white-space: pre-line;
+    }
+
+    .warn-box {
+      background: #2d2a14;
+      border: 1px solid #5a4e1d;
+      border-radius: 8px;
+      padding: 10px 13px;
+      color: #fdd663;
+      font-size: 0.8rem;
+      margin-bottom: 10px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <div class="header">
+      <div class="logo">🔗</div>
+      <h1>BitTo 管理レポート作成</h1>
+      <p>TXID を入力してレポートを生成（LINE・決済不要）</p>
+    </div>
+
+    <!-- お客様名 -->
+    <div class="card">
+      <h2>👤 お客様情報</h2>
+      <div class="field">
+        <label>お客様名（レポートに記載されます）</label>
+        <input type="text" id="customerName" placeholder="山田 太郎">
+      </div>
+    </div>
+
+    <!-- TXID 入力 -->
+    <div class="card">
+      <h2>🔢 調査 TXID を入力（1〜10件）</h2>
+      <div class="warn-box">
+        ⚠️ BTC・ETH・XRP の TXID を貼り付けてください。チェーンは自動判定されます。<br>
+        調査には1件あたり30秒〜2分かかります。
+      </div>
+      <div id="txidList"></div>
+      <button class="add-btn" id="addBtn" onclick="addRow()">＋ TXID を追加</button>
+    </div>
+
+    <button class="submit-btn" id="generateBtn" onclick="generate()">
+      🔍 レポートを生成する
+    </button>
+
+    <!-- 進捗 -->
+    <div class="progress-box" id="progressBox">
+      <div class="progress-title">⚙️ 調査・レポート生成中...</div>
+      <div id="progressList"></div>
+    </div>
+
+    <!-- 結果 -->
+    <div class="result-box" id="resultBox">
+      <h3>✅ レポートが完成しました</h3>
+      <a id="reportLink" href="#" target="_blank" class="report-btn">📄 レポートを開く</a>
+      <div class="report-url" id="reportUrl"></div>
+    </div>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+  </div>
+
+  <script>
+    // チェーン自動判定
+    function detectChain(txid) {
+      const s = txid.trim();
+      if (/^0x[0-9a-fA-F]{64}$/.test(s)) return 'eth';
+      if (/^[0-9a-fA-F]{64}$/.test(s)) return s === s.toUpperCase() ? 'xrp' : 'btc';
+      return null;
+    }
+
+    function addRow(value = '') {
+      const list = document.getElementById('txidList');
+      if (list.children.length >= 10) return;
+
+      const row = document.createElement('div');
+      row.className = 'txid-row';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'TXID を貼り付け（BTC / ETH / XRP 自動判定）';
+      input.value = value;
+
+      const tag = document.createElement('span');
+      tag.className = 'chain-tag unknown';
+      tag.textContent = '?';
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'remove-btn';
+      removeBtn.textContent = '✕';
+      removeBtn.onclick = () => {
+        row.remove();
+        updateAddBtn();
+      };
+
+      input.addEventListener('input', () => {
+        const chain = detectChain(input.value);
+        tag.className = 'chain-tag ' + (chain || 'unknown');
+        tag.textContent = chain ? chain.toUpperCase() : '?';
+      });
+
+      row.appendChild(input);
+      row.appendChild(tag);
+      if (list.children.length > 0) row.appendChild(removeBtn);
+
+      list.appendChild(row);
+      updateAddBtn();
+      input.focus();
+    }
+
+    function updateAddBtn() {
+      const count = document.getElementById('txidList').children.length;
+      document.getElementById('addBtn').style.display = count >= 10 ? 'none' : 'block';
+    }
+
+    async function generate() {
+      const errorEl = document.getElementById('errorMsg');
+      const resultBox = document.getElementById('resultBox');
+      const progressBox = document.getElementById('progressBox');
+      errorEl.style.display = 'none';
+      resultBox.style.display = 'none';
+
+      const customerName = document.getElementById('customerName').value.trim();
+      if (!customerName) {
+        errorEl.textContent = 'お客様名を入力してください。';
+        errorEl.style.display = 'block';
+        return;
+      }
+
+      const rows = document.getElementById('txidList').querySelectorAll('.txid-row');
+      const txids = [];
+      for (const row of rows) {
+        const val = row.querySelector('input').value.trim();
+        if (!val) continue;
+        const chain = detectChain(val);
+        if (!chain) {
+          errorEl.textContent = `チェーンを認識できないTXIDがあります:\n${val.slice(0,20)}...`;
+          errorEl.style.display = 'block';
+          return;
+        }
+        txids.push({ txid: val, chain });
+      }
+
+      if (txids.length === 0) {
+        errorEl.textContent = 'TXIDを1件以上入力してください。';
+        errorEl.style.display = 'block';
+        return;
+      }
+
+      // ボタン無効化
+      const btn = document.getElementById('generateBtn');
+      btn.disabled = true;
+      btn.textContent = '⚙️ 調査・生成中...';
+
+      // 進捗表示
+      progressBox.style.display = 'block';
+      const progressList = document.getElementById('progressList');
+      progressList.innerHTML = txids.map((t, i) =>
+        `<div class="progress-item" id="prog${i}">
+          <span class="spin">⏳</span>
+          TXID ${i+1}: ${t.txid.slice(0,14)}...${t.txid.slice(-6)} (${t.chain.toUpperCase()})
+        </div>`
+      ).join('') +
+      `<div class="progress-item" id="progAI">
+        <span>⏳</span> AI分析・レポート生成中...
+      </div>`;
+
+      // 進捗アニメーション（調査時間の目安）
+      for (let i = 0; i < txids.length; i++) {
+        setTimeout(() => {
+          const el = document.getElementById(`prog${i}`);
+          if (el) el.innerHTML = `<span>🔍</span> TXID ${i+1}: 調査中...`;
+        }, i * 1500);
+      }
+
+      try {
+        const res = await fetch('/api/admin/generate-report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ customerName, txids }),
+        });
+        const data = await res.json();
+
+        if (!res.ok || !data.url) throw new Error(data.error || 'レポート生成に失敗しました');
+
+        // 成功
+        progressBox.style.display = 'none';
+        resultBox.style.display = 'block';
+        document.getElementById('reportLink').href = data.url;
+        document.getElementById('reportUrl').textContent = data.url;
+
+        if (data.errors && data.errors.length > 0) {
+          errorEl.textContent = '⚠️ 一部スキップ:\n' + data.errors.join('\n');
+          errorEl.style.display = 'block';
+        }
+      } catch (e) {
+        progressBox.style.display = 'none';
+        errorEl.textContent = 'エラー: ' + e.message;
+        errorEl.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🔍 レポートを生成する';
+      }
+    }
+
+    // 初期化：最初の1行を追加
+    addRow();
+  </script>
+</body>
+</html>

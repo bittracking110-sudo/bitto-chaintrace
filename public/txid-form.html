@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BitTo TXID入力フォーム</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #2a2b2e; color: #e8eaed;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh; padding: 24px 16px 60px;
+    }
+    .container { max-width: 560px; margin: 0 auto; }
+    .header { text-align: center; margin-bottom: 28px; }
+    .header .logo { font-size: 2.2rem; margin-bottom: 8px; }
+    .header h1 { font-size: 1.4rem; color: #f0f2f5; font-weight: 700; }
+    .header p { color: #9aa0a6; font-size: 0.88rem; margin-top: 6px; }
+    .card { background: #3c3d41; border: 1px solid #4a4b50; border-radius: 14px; padding: 22px; margin-bottom: 14px; }
+    .card h2 { font-size: 0.95rem; color: #bdc1c6; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1px solid #4a4b50; }
+    .info-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #4a4b50; }
+    .info-row:last-child { border-bottom: none; }
+    .info-label { color: #9aa0a6; font-size: 0.83rem; }
+    .info-value { color: #e8eaed; font-size: 0.9rem; font-weight: 600; }
+    .count-badge { background: #174ea6; color: #8ab4f8; padding: 4px 12px; border-radius: 20px; font-weight: 700; }
+    .field { margin-bottom: 12px; }
+    .field label { display: block; font-size: 0.83rem; color: #9aa0a6; margin-bottom: 5px; }
+    .txid-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
+    .txid-row input {
+      flex: 1; background: #2a2b2e; border: 1px solid #4a4b50;
+      border-radius: 8px; padding: 11px 13px; color: #e8eaed;
+      font-size: 0.83rem; outline: none; font-family: 'Courier New', monospace;
+      transition: border-color 0.2s;
+    }
+    .txid-row input:focus { border-color: #8ab4f8; }
+    .txid-row input::placeholder { color: #5f6368; font-family: sans-serif; font-size: 0.82rem; }
+    .chain-tag {
+      background: #174ea6; color: #8ab4f8; font-size: 0.75rem; font-weight: 700;
+      padding: 3px 9px; border-radius: 6px; white-space: nowrap; min-width: 38px;
+      text-align: center;
+    }
+    .chain-tag.eth { background: #1e3a5a; color: #60a5fa; }
+    .chain-tag.xrp { background: #1e3045; color: #7dd3fc; }
+    .chain-tag.unknown { background: #3c3d41; color: #5f6368; border: 1px solid #4a4b50; }
+    .warn-box { background: #2d2a14; border: 1px solid #5a4e1d; border-radius: 8px; padding: 10px 14px; color: #fdd663; font-size: 0.82rem; margin-bottom: 14px; line-height: 1.6; }
+    .submit-btn {
+      width: 100%; background: #1a73e8; border: none; border-radius: 10px;
+      padding: 15px; color: #fff; font-size: 1.02rem; font-weight: 700;
+      cursor: pointer; margin-top: 6px; transition: background 0.2s;
+    }
+    .submit-btn:hover { background: #1557b0; }
+    .submit-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .success-box {
+      background: #1e3a1e; border: 1px solid #2d5a2d; border-radius: 12px;
+      padding: 28px; text-align: center; display: none;
+    }
+    .success-box .icon { font-size: 3rem; margin-bottom: 12px; }
+    .success-box h2 { color: #81c995; font-size: 1.1rem; margin-bottom: 10px; }
+    .success-box p { color: #9aa0a6; font-size: 0.88rem; line-height: 1.7; }
+    .error-msg { background: #3c2020; border: 1px solid #7f1d1d; border-radius: 8px; padding: 11px 13px; color: #f28b82; font-size: 0.83rem; margin-top: 10px; display: none; }
+    .loading { text-align: center; padding: 40px; color: #9aa0a6; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">🔗</div>
+      <h1>BitTo TXID入力フォーム</h1>
+      <p>調査するトランザクションIDを入力してください</p>
+    </div>
+
+    <div id="loadingState" class="loading">読み込み中...</div>
+
+    <div id="mainForm" style="display:none">
+      <!-- お客様情報 -->
+      <div class="card">
+        <h2>📋 お申し込み内容</h2>
+        <div class="info-row">
+          <span class="info-label">お客様名</span>
+          <span class="info-value" id="displayName">—</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">入力できるTXID件数</span>
+          <span class="info-value"><span class="count-badge" id="displayCount">—</span></span>
+        </div>
+      </div>
+
+      <!-- TXID入力 -->
+      <div class="card">
+        <h2>🔢 TXIDを入力してください</h2>
+        <div class="warn-box">
+          ⚠️ このフォームは<strong>1回のみ</strong>使用可能です。<br>
+          BTC・ETH・XRP のTXIDを貼り付けてください。チェーンは自動判定されます。
+        </div>
+        <div id="txidList"></div>
+      </div>
+
+      <button class="submit-btn" id="submitBtn" onclick="submitTxids()">
+        🔍 調査を開始する
+      </button>
+      <div class="error-msg" id="errorMsg"></div>
+    </div>
+
+    <!-- 送信完了 -->
+    <div class="success-box" id="successBox">
+      <div class="icon">✅</div>
+      <h2>調査を開始しました！</h2>
+      <p>TXIDを受け付けました。<br>
+      調査完了後、LINEとメールにレポートURLをお送りします。<br><br>
+      通常1〜3分でお届けします。</p>
+    </div>
+  </div>
+
+  <script>
+    const token = location.pathname.split('/').pop();
+    let maxCount = 1;
+
+    function detectChain(txid) {
+      const s = txid.trim();
+      if (/^0x[0-9a-fA-F]{64}$/.test(s)) return 'eth';
+      if (/^[0-9a-fA-F]{64}$/.test(s)) return s === s.toUpperCase() ? 'xrp' : 'btc';
+      return null;
+    }
+
+    function createTxidRow(index) {
+      const row = document.createElement('div');
+      row.className = 'txid-row';
+      row.id = `row-${index}`;
+
+      const label = document.createElement('div');
+      label.style.cssText = 'font-size:0.8rem;color:#9aa0a6;margin-bottom:4px';
+      label.textContent = `TXID ${index + 1}`;
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'TXIDを貼り付け（BTC / ETH / XRP 自動判定）';
+      input.id = `txid-${index}`;
+
+      const tag = document.createElement('span');
+      tag.className = 'chain-tag unknown';
+      tag.textContent = '?';
+      tag.id = `tag-${index}`;
+
+      input.addEventListener('input', () => {
+        const chain = detectChain(input.value);
+        tag.className = 'chain-tag ' + (chain || 'unknown');
+        tag.textContent = chain ? chain.toUpperCase() : '?';
+      });
+
+      const wrap = document.createElement('div');
+      wrap.style.marginBottom = '12px';
+      wrap.appendChild(label);
+      const inputRow = document.createElement('div');
+      inputRow.style.cssText = 'display:flex;gap:8px;align-items:center';
+      inputRow.appendChild(input);
+      inputRow.appendChild(tag);
+      wrap.appendChild(inputRow);
+      return wrap;
+    }
+
+    async function init() {
+      try {
+        const res = await fetch(`/api/txid-form-info/${token}`);
+        const data = await res.json();
+
+        if (!res.ok) {
+          document.getElementById('loadingState').innerHTML =
+            `<div style="text-align:center;padding:40px;color:#f28b82">
+              <div style="font-size:3rem;margin-bottom:12px">⚠️</div>
+              <p>${data.error || 'このリンクは無効です'}</p>
+            </div>`;
+          return;
+        }
+
+        maxCount = data.count;
+        document.getElementById('displayName').textContent = data.customerName + ' 様';
+        document.getElementById('displayCount').textContent = `${data.count}件`;
+
+        const list = document.getElementById('txidList');
+        for (let i = 0; i < data.count; i++) {
+          list.appendChild(createTxidRow(i));
+        }
+
+        document.getElementById('loadingState').style.display = 'none';
+        document.getElementById('mainForm').style.display = 'block';
+      } catch (e) {
+        document.getElementById('loadingState').textContent = 'エラーが発生しました。ページを再読み込みしてください。';
+      }
+    }
+
+    async function submitTxids() {
+      const errorEl = document.getElementById('errorMsg');
+      errorEl.style.display = 'none';
+
+      const txids = [];
+      for (let i = 0; i < maxCount; i++) {
+        const input = document.getElementById(`txid-${i}`);
+        if (!input) continue;
+        const val = input.value.trim();
+        if (!val) continue;
+        const chain = detectChain(val);
+        if (!chain) {
+          errorEl.textContent = `TXID ${i+1} のチェーンを認識できません。\nBTC/ETH/XRPのTXIDを確認してください。`;
+          errorEl.style.display = 'block';
+          return;
+        }
+        txids.push({ txid: val, chain });
+      }
+
+      if (txids.length === 0) {
+        errorEl.textContent = 'TXIDを1件以上入力してください。';
+        errorEl.style.display = 'block';
+        return;
+      }
+
+      const btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.textContent = '送信中...';
+
+      try {
+        const res = await fetch('/api/submit-txids', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, txids }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '送信に失敗しました');
+
+        document.getElementById('mainForm').style.display = 'none';
+        document.getElementById('successBox').style.display = 'block';
+      } catch (e) {
+        errorEl.textContent = 'エラー: ' + e.message;
+        errorEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = '🔍 調査を開始する';
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
