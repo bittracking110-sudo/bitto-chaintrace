@@ -1412,7 +1412,17 @@ ${r.txid}
 <div class="container">
   <div class="print-bar">
     <p>📄 このページを印刷 → 「PDFとして保存」でPDF化できます</p>
-    <button class="print-btn" onclick="window.print()">🖨 PDF保存 / 印刷</button>
+    <button class="print-btn" onclick="doPrint()" id="pdfBtn">🖨 PDF保存 / 印刷</button>
+    <div id="chromeGuide" style="display:none;margin-top:12px;background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:14px;font-size:0.82rem;color:#334155;line-height:1.9">
+      <p style="font-weight:700;margin:0 0 6px;color:#c2410c">📌 Chrome(iOS)でのPDF保存手順</p>
+      <ol style="margin:0;padding-left:18px">
+        <li>画面下部の <strong>共有ボタン（↑）</strong> をタップ</li>
+        <li>下にスクロールして <strong>「印刷」</strong> を選択</li>
+        <li>印刷プレビュー画面で <strong>2本指でピンチアウト</strong>（拡大）</li>
+        <li>左上の <strong>「PDFとして保存」</strong> をタップ</li>
+      </ol>
+      <p style="margin:8px 0 0;color:#64748b;font-size:0.75rem">💡 QRコードでSafariから開くと、ボタン1つで保存できます</p>
+    </div>
     <p class="print-hint">⚠️ LINEアプリ内ではPDF保存できません</p>
     <div class="mobile-open-section">
       <p style="font-size:0.83rem;font-weight:700;color:#1a1a2e;margin:0 0 10px">📸 カメラでQRコードを読み取ってSafariで開く</p>
@@ -1436,6 +1446,18 @@ ${r.txid}
   </div>
   <script>
     var _url = '__REPORT_URL__';
+    function doPrint(){
+      var isChromeIOS = /CriOS/.test(navigator.userAgent);
+      if(isChromeIOS){
+        var g = document.getElementById('chromeGuide');
+        var b = document.getElementById('pdfBtn');
+        g.style.display = 'block';
+        b.textContent = '📌 手順を確認してください';
+        b.style.background = '#ea580c';
+      } else {
+        window.print();
+      }
+    }
     function selectUrl(inp){
       inp.removeAttribute('readonly'); inp.focus(); inp.select(); inp.setSelectionRange(0,99999); inp.setAttribute('readonly','');
     }
