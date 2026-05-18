@@ -1276,6 +1276,11 @@ ${r.txid}
     .open-btn:hover{opacity:0.85}
     .print-hint{font-size:0.75rem;color:#94a3b8;margin-top:8px;display:none}
     @media(max-width:640px){.print-hint{display:block}}
+    .browser-btns{display:none;gap:8px;margin-top:10px;flex-wrap:wrap}
+    @media(max-width:640px){.browser-btns{display:flex}}
+    .safari-btn{background:#006cff;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer;flex:1}
+    .chrome-btn{background:#34a853;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer;flex:1}
+    .copy-btn{background:#64748b;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer;flex:1}
     /* AI分析セクション */
     .ai-overall{background:linear-gradient(135deg,#1e3a5f 0%,#1a1a2e 100%);border-radius:10px;padding:22px 24px;margin-bottom:20px;color:#e2e8f0}
     .ai-header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
@@ -1338,20 +1343,38 @@ ${r.txid}
       <button class="print-btn" onclick="doPrint()">🖨 PDF保存 / 印刷</button>
       <button class="open-btn" onclick="openExternal()">🌐 ブラウザで開く</button>
     </div>
-    <p class="print-hint">⚠️ LINEアプリ内ではPDF保存できません。「ブラウザで開く」→ Safari/Chrome で印刷してください。</p>
+    <p class="print-hint">⚠️ LINEアプリ内ではPDF保存できません。下のボタンで外部ブラウザを開いてください。</p>
+    <div class="browser-btns">
+      <button class="safari-btn" onclick="openSafari()">🧭 Safariで開く</button>
+      <button class="chrome-btn" onclick="openChrome()">🌐 Chromeで開く</button>
+      <button class="copy-btn" onclick="copyUrl()">📋 URLをコピー</button>
+    </div>
   </div>
   <script>
+    var _url = window.location.href;
     function doPrint(){
       try{ window.print(); }
-      catch(e){ alert('印刷できませんでした。\\n「ブラウザで開く」ボタンでSafari/Chromeを開いてからPDF保存してください。'); }
+      catch(e){ alert('印刷できませんでした。\n下の「Safariで開く」ボタンをお試しください。'); }
     }
-    function openExternal(){
-      var url = window.location.href;
-      // LINE内ブラウザの場合は外部ブラウザで開くよう誘導
-      if(navigator.userAgent.indexOf('Line') !== -1){
-        alert('以下のURLをコピーしてSafari/Chromeで開いてください:\\n\\n' + url);
+    function openExternal(){ window.open(_url, '_blank'); }
+    function openSafari(){
+      window.location.href = _url.replace('https://', 'x-safari-https://');
+      setTimeout(function(){ window.open(_url, '_blank'); }, 800);
+    }
+    function openChrome(){
+      window.location.href = _url.replace('https://', 'googlechromes://');
+      setTimeout(function(){ window.open(_url, '_blank'); }, 800);
+    }
+    function copyUrl(){
+      if(navigator.clipboard){
+        navigator.clipboard.writeText(_url).then(function(){
+          alert('URLをコピーしました！\nSafari/ChromeのアドレスバーにペーストしてPDF保存してください。');
+        });
       } else {
-        window.open(url, '_blank');
+        var t = document.createElement('textarea');
+        t.value = _url; document.body.appendChild(t);
+        t.select(); document.execCommand('copy'); document.body.removeChild(t);
+        alert('URLをコピーしました！\nSafari/ChromeのアドレスバーにペーストしてPDF保存してください。');
       }
     }
   </script>
