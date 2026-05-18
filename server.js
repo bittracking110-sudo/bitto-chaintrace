@@ -1940,6 +1940,14 @@ app.post('/api/create-checkout', express.json(), async (req, res) => {
       ).catch(console.error);
     }
 
+    // LINEに申込確認メッセージを送信
+    if (uid) {
+      lineClient.pushMessage(uid, {
+        type: 'text',
+        text: `📋 申し込みを受け付けました\n━━━━━━━━━━━━━━━\n👤 お名前：${name || '不明'}\n📊 調査件数：${count}件\n💰 合計金額：¥${amount.toLocaleString()}（税込）\n📅 申込日時：${submittedAt}\n━━━━━━━━━━━━━━━\nこのままお支払い画面へお進みください。\n決済完了後にTXID入力フォームをお送りします。`,
+      }).catch(e => console.error('[LINE] 申込確認送信エラー:', e.message));
+    }
+
     // Stripe未設定の場合はテスト用成功ページへ
     if (!stripe) {
       return res.json({ url: `${BASE_URL}/payment/success?sid=${sessionId}&test=1` });
