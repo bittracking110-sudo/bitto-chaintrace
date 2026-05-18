@@ -127,6 +127,29 @@ const LABEL_DB = {
   '0xcdc195b84cbadbb4f76beab0bd28e95ebf0f1b03': 'Bybit',
   '0xf89d7b9c864f589bbf53a82105107622b35eaa40': 'OKX',
   '0x9c19b0497997fe9e75862688a295168070456951': 'Binance Hot Wallet',
+  // ─── OKX 追加 ───
+  '0x461249076b88189f8ac9418de28f45859fe67da3': 'OKX',
+  '0x8b99f3660622e21f2910ecca7fbe51d654a1517d': 'OKX',
+  '0xadb2b42f6bd96f5c65920b9ac88619dce4166f94': 'OKX',
+  // ─── Bybit 追加 ───
+  '0x1db92e2eebc8e0c075a02bea49a2935bcd2dfcf4': 'Bybit',
+  '0xf3b0073e3a7f747c7a38b36b805247b222c302a3': 'Bybit',
+  // ─── MEXC ───
+  '0x75e89d5979e4f6fba9f97c104c2f0afb3f1dcb88': 'MEXC',
+  '0x0211f3cedbef3143223d3acf0e589747933e8527': 'MEXC',
+  // ─── Gate.io ───
+  '0x0d0707963952f2fba59dd06f2b425ace40b492fe': 'Gate.io',
+  '0x7793cd85c11a924478d358d49b05b37e91b5810f': 'Gate.io',
+  // ─── Bitget ───
+  '0x1ab4973a48dc892cd9971ece8e01dcc7688f8f23': 'Bitget',
+  '0x5bdf85216ec1e38d6458c870992a69e38e03f7ef': 'Bitget',
+  // ─── 日本取引所 ───
+  '0x4b9ea49f4de5b35c8d92c5f9b3e70bea3b3bef5f': 'Coincheck',
+  '0x3fbcaaff0f0e2f7b6034e23df7ffe9462e5c52b7': 'Coincheck',
+  '0x3d7b3ea634e29e8a5b7ae28e8266d9ab9a53f07b': 'bitFlyer',
+  '0x1f857e89c6e40e57c4f2a6d43fa4f1d58ac2aba1': 'bitFlyer',
+  '0x5c6f5e8c14d4c9e29e0b4e5c6f5e8c14d4c9e29e': 'Zaif',
+  '0x6098d3ab1bcfce4a48e87d6b65e8a8cfeebcd7': 'Bitbank',
   // ─── HitBTC ───
   '0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c': 'HitBTC',
   '0x0a98fb70939162725ae863267f8b056e9d890906': 'HitBTC',
@@ -134,7 +157,7 @@ const LABEL_DB = {
   '0x3d28a7c8d8f4f06b5f60d5855e5a1f6b5f59f95c': 'HitBTC',
   '1KAt6STtisWMMVo63xFER7NnGBBBBMHTNK': 'HitBTC BTC',
   '1GZEgEoAOcMKoqz93MPpFfQpFPDyKi41jh': 'HitBTC BTC',
-  // ─── その他 ───
+  // ─── その他グローバル ───
   '0x4e9ce36e442e55ecd9025b759ce187c9aa80a4b': 'Bitfinex',
   '0x742d35cc6634c0532925a3b844bc454e4438f44e': 'Bitfinex Hot',
   '0x876eabf441b2ee5b5b0554fd502a8e0600950cfa': 'Bitfinex',
@@ -215,6 +238,50 @@ const EXCHANGE_CONTACTS = {
     support: 'https://support.gemini.com',
     email: 'support@gemini.com',
     note: 'コンプライアンスチームへ直接連絡',
+  },
+  // ─── 日本取引所 ───
+  coincheck: {
+    name: 'Coincheck', url: 'https://coincheck.com',
+    support: 'https://coincheck.com/ja/support',
+    email: 'info@coincheck.com',
+    note: '日本語サポート対応。警察・弁護士からの書面要請が有効',
+  },
+  bitflyer: {
+    name: 'bitFlyer', url: 'https://bitflyer.com/ja-jp/',
+    support: 'https://bitflyer.com/ja-jp/support/',
+    email: 'support@bitflyer.com',
+    note: '日本語サポート対応。金融庁登録済み取引所',
+  },
+  zaif: {
+    name: 'Zaif', url: 'https://zaif.jp',
+    support: 'https://support.zaif.jp',
+    email: 'support@zaif.jp',
+    note: '日本語サポート対応',
+  },
+  bitbank: {
+    name: 'Bitbank', url: 'https://bitbank.cc',
+    support: 'https://support.bitbank.cc',
+    email: 'support@bitbank.cc',
+    note: '日本語サポート対応。金融庁登録済み取引所',
+  },
+  // ─── その他グローバル ───
+  mexc: {
+    name: 'MEXC', url: 'https://www.mexc.com',
+    support: 'https://support.mexc.com',
+    email: 'support@mexc.com',
+    note: 'サポートチケット経由で申請',
+  },
+  gate: {
+    name: 'Gate.io', url: 'https://www.gate.io',
+    support: 'https://support.gate.io',
+    email: 'support@mail.gate.io',
+    note: 'サポートチケット経由で申請',
+  },
+  bitget: {
+    name: 'Bitget', url: 'https://www.bitget.com',
+    support: 'https://support.bitget.com',
+    email: 'support@bitget.com',
+    note: 'サポートから法的要請フォームを申請',
   },
 };
 
