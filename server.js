@@ -1133,7 +1133,7 @@ function buildMermaidDiagram(path, chain) {
 
 // ══ 有料HTMLレポート生成 ══════════════════════════════════════
 
-function generateReportHTML(results, customerName, issuedAt, aiData = {}) {
+function generateReportHTML(results, customerName, issuedAt, aiData = {}, reportUrl = '') {
   const chainFull = { BTC: 'Bitcoin', ETH: 'Ethereum', XRP: 'XRP Ledger' };
 
   const sectionsHTML = results.map((item, idx) => {
@@ -1343,16 +1343,17 @@ ${r.txid}
     .open-btn:hover{opacity:0.85}
     .print-hint{font-size:0.75rem;color:#94a3b8;margin-top:8px;display:none}
     @media(max-width:640px){.print-hint{display:block}}
-    .mobile-open-section{display:none;margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0}
+    .mobile-open-section{display:none;margin-top:14px;padding-top:14px;border-top:2px dashed #e2e8f0}
     @media(max-width:640px){.mobile-open-section{display:block}}
-    .step-label{font-size:0.78rem;font-weight:700;color:#475569;margin:10px 0 6px}
-    .browser-btns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
-    .safari-btn{background:#006cff;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer;flex:1}
-    .google-btn{background:#ea4335;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer;flex:1}
-    .url-box{display:flex;gap:6px;align-items:center;margin-top:4px}
+    .qr-wrap{display:flex;gap:16px;align-items:flex-start;margin-bottom:14px}
+    .qr-img{width:130px;height:130px;border:2px solid #e2e8f0;border-radius:8px;flex-shrink:0}
+    .qr-steps{margin:0;padding-left:18px;font-size:0.82rem;color:#334155;line-height:2}
+    .qr-steps li{margin-bottom:2px}
+    .qr-steps strong{color:#1a1a2e}
+    .url-box{display:flex;gap:6px;align-items:center;margin-top:8px}
     .url-input{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:9px 10px;font-size:0.72rem;color:#334155;background:#f8fafc;word-break:break-all;-webkit-user-select:all;user-select:all;outline:none}
     .copy-btn{background:#64748b;color:#fff;border:none;border-radius:8px;padding:10px 14px;font-size:0.82rem;font-weight:700;cursor:pointer;white-space:nowrap}
-    .copy-hint{font-size:0.72rem;color:#94a3b8;margin-top:6px}
+    .copy-hint{font-size:0.72rem;color:#94a3b8;margin-top:6px;line-height:1.6}
     /* AI分析セクション */
     .ai-overall{background:linear-gradient(135deg,#1e3a5f 0%,#1a1a2e 100%);border-radius:10px;padding:22px 24px;margin-bottom:20px;color:#e2e8f0}
     .ai-header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
@@ -1411,78 +1412,41 @@ ${r.txid}
 <div class="container">
   <div class="print-bar">
     <p>📄 このページを印刷 → 「PDFとして保存」でPDF化できます</p>
-    <div>
-      <button class="print-btn" onclick="doPrint()">🖨 PDF保存 / 印刷</button>
-      <button class="open-btn" onclick="openExternal()">🌐 ブラウザで開く</button>
-    </div>
+    <button class="print-btn" onclick="window.print()">🖨 PDF保存 / 印刷</button>
     <p class="print-hint">⚠️ LINEアプリ内ではPDF保存できません</p>
     <div class="mobile-open-section">
-      <p class="step-label">① 外部ブラウザで開く</p>
-      <div class="browser-btns">
-        <button class="safari-btn" onclick="openSafari()">🧭 Safariで開く</button>
-        <button class="google-btn" onclick="openGoogle()">🌐 Googleで開く</button>
+      <p style="font-size:0.83rem;font-weight:700;color:#1a1a2e;margin:0 0 10px">📸 カメラでQRコードを読み取ってSafariで開く</p>
+      <div class="qr-wrap">
+        <img class="qr-img" src="https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=__REPORT_URL__" alt="QRコード" />
+        <ol class="qr-steps">
+          <li><strong>カメラアプリ</strong>を開く</li>
+          <li>QRコードに<strong>かざす</strong></li>
+          <li>通知をタップ →<strong>Safariで開く</strong></li>
+          <li>画面下の<strong>共有ボタン</strong>をタップ</li>
+          <li>「<strong>PDFとして保存</strong>」を選択</li>
+        </ol>
       </div>
-      <p class="step-label">② 開けない場合はURLをコピーして貼り付け</p>
+      <p style="font-size:0.78rem;color:#64748b;margin:4px 0 8px">▼ QRが読めない場合はURLをコピーしてSafariに貼り付け</p>
       <div class="url-box">
-        <input type="text" id="urlInput" class="url-input" readonly onclick="selectUrl(this)" />
+        <input type="text" id="urlInput" class="url-input" readonly value="__REPORT_URL__" onclick="selectUrl(this)" />
         <button class="copy-btn" id="copyBtn" onclick="copyUrl()">📋 コピー</button>
       </div>
-      <p class="copy-hint">↑ URLをタップして長押し→「全て選択」→「コピー」でもOK</p>
-      <p class="copy-hint">コピー後、SafariまたはGoogleのアドレスバーに貼り付けてください</p>
+      <p class="copy-hint">コピー後、SafariのURLバーに貼り付けてください</p>
     </div>
   </div>
   <script>
-    var _url = window.location.href;
-    (function(){ var inp = document.getElementById('urlInput'); if(inp) inp.value = _url; })();
-    function doPrint(){
-      try{ window.print(); }
-      catch(e){ alert('印刷できませんでした。\n下の「Safariで開く」ボタンをお試しください。'); }
-    }
-    function openExternal(){ window.open(_url, '_blank'); }
-    function openSafari(){
-      try{ window.location.href = _url.replace(/^https:\/\//, 'x-safari-https://'); } catch(e){}
-      setTimeout(function(){ try{ window.open(_url, '_blank'); }catch(e){} }, 1200);
-    }
-    function openGoogle(){
-      try{ window.location.href = _url.replace(/^https:\/\//, 'googlechromes://'); } catch(e){}
-      setTimeout(function(){
-        var host = _url.replace(/^https:\/\//, '');
-        try{ window.location.href = 'intent://'+host+'#Intent;scheme=https;package=com.android.chrome;end'; }catch(e){}
-        setTimeout(function(){ try{ window.open(_url,'_blank'); }catch(e){} }, 800);
-      }, 1200);
-    }
+    var _url = '__REPORT_URL__';
     function selectUrl(inp){
-      inp.removeAttribute('readonly');
-      inp.focus();
-      inp.select();
-      inp.setSelectionRange(0, 99999);
-      inp.setAttribute('readonly','');
+      inp.removeAttribute('readonly'); inp.focus(); inp.select(); inp.setSelectionRange(0,99999); inp.setAttribute('readonly','');
     }
     function copyUrl(){
-      var inp = document.getElementById('urlInput');
-      var btn = document.getElementById('copyBtn');
-      inp.removeAttribute('readonly');
-      inp.focus();
-      inp.select();
-      inp.setSelectionRange(0, 99999);
-      var ok = false;
-      try{ ok = document.execCommand('copy'); }catch(e){}
+      var inp=document.getElementById('urlInput'); var btn=document.getElementById('copyBtn');
+      inp.removeAttribute('readonly'); inp.focus(); inp.select(); inp.setSelectionRange(0,99999);
+      var ok=false; try{ ok=document.execCommand('copy'); }catch(e){}
       inp.setAttribute('readonly','');
-      if(ok){
-        btn.textContent = '✅ コピー済み';
-        btn.style.background = '#16a34a';
-        setTimeout(function(){ btn.textContent = '📋 コピー'; btn.style.background = ''; }, 3000);
-        return;
-      }
-      if(navigator.clipboard && navigator.clipboard.writeText){
-        navigator.clipboard.writeText(_url).then(function(){
-          btn.textContent = '✅ コピー済み';
-          btn.style.background = '#16a34a';
-          setTimeout(function(){ btn.textContent = '📋 コピー'; btn.style.background = ''; }, 3000);
-        }).catch(function(){ prompt('URLをコピーしてください：', _url); });
-        return;
-      }
-      prompt('URLをコピーしてください：', _url);
+      if(ok){ btn.textContent='✅ コピー済み'; btn.style.background='#16a34a'; setTimeout(function(){btn.textContent='📋 コピー';btn.style.background='';},3000); return; }
+      if(navigator.clipboard){ navigator.clipboard.writeText(_url).then(function(){ btn.textContent='✅ コピー済み'; btn.style.background='#16a34a'; setTimeout(function(){btn.textContent='📋 コピー';btn.style.background='';},3000); }).catch(function(){ prompt('URLをコピーしてください：',_url); }); return; }
+      prompt('URLをコピーしてください：',_url);
     }
   </script>
 
@@ -1612,7 +1576,7 @@ ${r.txid}
 })();
 </script>
 </body>
-</html>`;
+</html>`.replace(/__REPORT_URL__/g, reportUrl);
 }
 
 // ══ Gemini AI コンテンツ生成 ══════════════════════════════════
@@ -2184,11 +2148,11 @@ app.post('/api/admin/generate-report', express.json(), async (req, res) => {
     const issuedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
     console.log('[Admin] AI分析開始...');
     const aiData = await generateAIContent(list, customerName).catch(() => ({ analysis: null, requests: [] }));
-    const reportHtml = generateReportHTML(list, customerName, issuedAt, aiData);
     const reportId   = crypto.randomUUID();
+    const reportUrl  = `${BASE_URL}/report/${reportId}`;
+    const reportHtml = generateReportHTML(list, customerName, issuedAt, aiData, reportUrl);
     await saveReport(reportId, reportHtml);
 
-    const reportUrl = `${BASE_URL}/report/${reportId}`;
     console.log('[Admin] レポート生成完了:', reportUrl);
     res.json({ ok: true, url: reportUrl, errors });
   } catch (e) {
@@ -2280,10 +2244,10 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
 
       const issuedAt   = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
       const aiData     = await generateAIContent(list, formData.customerName).catch(() => ({ analysis: null, requests: [] }));
-      const reportHtml = generateReportHTML(list, formData.customerName, issuedAt, aiData);
       const reportId   = crypto.randomUUID();
-      await saveReport(reportId, reportHtml);
       const reportUrl  = `${BASE_URL}/report/${reportId}`;
+      const reportHtml = generateReportHTML(list, formData.customerName, issuedAt, aiData, reportUrl);
+      await saveReport(reportId, reportHtml);
 
       // SheetsにレポートURLを記録
       updateSheetReportUrl(formData.sessionId, reportUrl).catch(console.error);
@@ -2292,7 +2256,7 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
       if (formData.userId) {
         await lineClient.pushMessage(formData.userId, {
           type: 'text',
-          text: `✅ レポートが完成しました！\n\n📄 ${reportUrl}\n\nブラウザで開いて「印刷」→「PDFとして保存」でPDF化できます`,
+          text: `✅ 調査レポートが完成しました！\n\n📄 ${reportUrl}\n\n━━━━━━━━━━━━━━━\n📱 PDFとして保存する方法\n━━━━━━━━━━━━━━━\n① 上のURLを「長押し」\n② 「ブラウザで開く」を選択\n③ レポート内のQRコードを\n　 カメラで読み取ってもOK\n④ Safari画面下の共有ボタン\n⑤「PDFとして保存」を選択\n━━━━━━━━━━━━━━━`,
         });
       }
 
