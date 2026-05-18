@@ -1343,11 +1343,16 @@ ${r.txid}
     .open-btn:hover{opacity:0.85}
     .print-hint{font-size:0.75rem;color:#94a3b8;margin-top:8px;display:none}
     @media(max-width:640px){.print-hint{display:block}}
-    .browser-btns{display:none;gap:8px;margin-top:10px;flex-wrap:wrap}
-    @media(max-width:640px){.browser-btns{display:flex}}
+    .mobile-open-section{display:none;margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0}
+    @media(max-width:640px){.mobile-open-section{display:block}}
+    .step-label{font-size:0.78rem;font-weight:700;color:#475569;margin:10px 0 6px}
+    .browser-btns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
     .safari-btn{background:#006cff;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer;flex:1}
-    .chrome-btn{background:#34a853;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer;flex:1}
-    .copy-btn{background:#64748b;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer;flex:1}
+    .google-btn{background:#ea4335;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer;flex:1}
+    .url-box{display:flex;gap:6px;align-items:center;margin-top:4px}
+    .url-input{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:9px 10px;font-size:0.72rem;color:#334155;background:#f8fafc;word-break:break-all;-webkit-user-select:all;user-select:all;outline:none}
+    .copy-btn{background:#64748b;color:#fff;border:none;border-radius:8px;padding:10px 14px;font-size:0.82rem;font-weight:700;cursor:pointer;white-space:nowrap}
+    .copy-hint{font-size:0.72rem;color:#94a3b8;margin-top:6px}
     /* AI分析セクション */
     .ai-overall{background:linear-gradient(135deg,#1e3a5f 0%,#1a1a2e 100%);border-radius:10px;padding:22px 24px;margin-bottom:20px;color:#e2e8f0}
     .ai-header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
@@ -1410,39 +1415,74 @@ ${r.txid}
       <button class="print-btn" onclick="doPrint()">🖨 PDF保存 / 印刷</button>
       <button class="open-btn" onclick="openExternal()">🌐 ブラウザで開く</button>
     </div>
-    <p class="print-hint">⚠️ LINEアプリ内ではPDF保存できません。下のボタンで外部ブラウザを開いてください。</p>
-    <div class="browser-btns">
-      <button class="safari-btn" onclick="openSafari()">🧭 Safariで開く</button>
-      <button class="chrome-btn" onclick="openChrome()">🌐 Chromeで開く</button>
-      <button class="copy-btn" onclick="copyUrl()">📋 URLをコピー</button>
+    <p class="print-hint">⚠️ LINEアプリ内ではPDF保存できません</p>
+    <div class="mobile-open-section">
+      <p class="step-label">① 外部ブラウザで開く</p>
+      <div class="browser-btns">
+        <button class="safari-btn" onclick="openSafari()">🧭 Safariで開く</button>
+        <button class="google-btn" onclick="openGoogle()">🌐 Googleで開く</button>
+      </div>
+      <p class="step-label">② 開けない場合はURLをコピーして貼り付け</p>
+      <div class="url-box">
+        <input type="text" id="urlInput" class="url-input" readonly onclick="selectUrl(this)" />
+        <button class="copy-btn" id="copyBtn" onclick="copyUrl()">📋 コピー</button>
+      </div>
+      <p class="copy-hint">↑ URLをタップして長押し→「全て選択」→「コピー」でもOK</p>
+      <p class="copy-hint">コピー後、SafariまたはGoogleのアドレスバーに貼り付けてください</p>
     </div>
   </div>
   <script>
     var _url = window.location.href;
+    (function(){ var inp = document.getElementById('urlInput'); if(inp) inp.value = _url; })();
     function doPrint(){
       try{ window.print(); }
       catch(e){ alert('印刷できませんでした。\n下の「Safariで開く」ボタンをお試しください。'); }
     }
     function openExternal(){ window.open(_url, '_blank'); }
     function openSafari(){
-      window.location.href = _url.replace('https://', 'x-safari-https://');
-      setTimeout(function(){ window.open(_url, '_blank'); }, 800);
+      try{ window.location.href = _url.replace(/^https:\/\//, 'x-safari-https://'); } catch(e){}
+      setTimeout(function(){ try{ window.open(_url, '_blank'); }catch(e){} }, 1200);
     }
-    function openChrome(){
-      window.location.href = _url.replace('https://', 'googlechromes://');
-      setTimeout(function(){ window.open(_url, '_blank'); }, 800);
+    function openGoogle(){
+      try{ window.location.href = _url.replace(/^https:\/\//, 'googlechromes://'); } catch(e){}
+      setTimeout(function(){
+        var host = _url.replace(/^https:\/\//, '');
+        try{ window.location.href = 'intent://'+host+'#Intent;scheme=https;package=com.android.chrome;end'; }catch(e){}
+        setTimeout(function(){ try{ window.open(_url,'_blank'); }catch(e){} }, 800);
+      }, 1200);
+    }
+    function selectUrl(inp){
+      inp.removeAttribute('readonly');
+      inp.focus();
+      inp.select();
+      inp.setSelectionRange(0, 99999);
+      inp.setAttribute('readonly','');
     }
     function copyUrl(){
-      if(navigator.clipboard){
-        navigator.clipboard.writeText(_url).then(function(){
-          alert('URLをコピーしました！\nSafari/ChromeのアドレスバーにペーストしてPDF保存してください。');
-        });
-      } else {
-        var t = document.createElement('textarea');
-        t.value = _url; document.body.appendChild(t);
-        t.select(); document.execCommand('copy'); document.body.removeChild(t);
-        alert('URLをコピーしました！\nSafari/ChromeのアドレスバーにペーストしてPDF保存してください。');
+      var inp = document.getElementById('urlInput');
+      var btn = document.getElementById('copyBtn');
+      inp.removeAttribute('readonly');
+      inp.focus();
+      inp.select();
+      inp.setSelectionRange(0, 99999);
+      var ok = false;
+      try{ ok = document.execCommand('copy'); }catch(e){}
+      inp.setAttribute('readonly','');
+      if(ok){
+        btn.textContent = '✅ コピー済み';
+        btn.style.background = '#16a34a';
+        setTimeout(function(){ btn.textContent = '📋 コピー'; btn.style.background = ''; }, 3000);
+        return;
       }
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(_url).then(function(){
+          btn.textContent = '✅ コピー済み';
+          btn.style.background = '#16a34a';
+          setTimeout(function(){ btn.textContent = '📋 コピー'; btn.style.background = ''; }, 3000);
+        }).catch(function(){ prompt('URLをコピーしてください：', _url); });
+        return;
+      }
+      prompt('URLをコピーしてください：', _url);
     }
   </script>
 
