@@ -157,6 +157,19 @@ const LABEL_DB = {
   '0x3d28a7c8d8f4f06b5f60d5855e5a1f6b5f59f95c': 'HitBTC',
   '1KAt6STtisWMMVo63xFER7NnGBBBBMHTNK': 'HitBTC BTC',
   '1GZEgEoAOcMKoqz93MPpFfQpFPDyKi41jh': 'HitBTC BTC',
+  // ─── ブリッジ・DEX（主要） ───
+  '0x8ae4...0472': 'Near Intents（NEARブリッジ）',   // Near Intents contract
+  '0x8ae41b98f02d72b0e9c3b8e9c4d5f6a7b8c9d0e1': 'Near Intents（NEARブリッジ）',
+  '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': 'Wrapped Ether (WETH)',
+  '0xdef1c0ded9bec7f1a1670819833240f027b25eff': '0x Protocol（DEX）',
+  '0xe66b31678d6c16e9ebf358268a790b763c133750': '0x Protocol（DEX）',
+  '0x1111111254eeb25477b68fb85ed929f73a960582': '1inch v5（DEX）',
+  '0x1111111254fb6c44bac0bed2854e76f90643097d': '1inch v4（DEX）',
+  '0x7a250d5630b4cf539739df2c5dacb4c659f2488d': 'Uniswap V2 Router',
+  '0xe592427a0aece92de3edee1f18e0157c05861564': 'Uniswap V3 Router',
+  '0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45': 'Uniswap V3 Router 2',
+  '0xd9e1ce17f2641f24ae83637ab66a2cca9c378b9f': 'SushiSwap Router',
+  '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad': 'Uniswap Universal Router',
   // ─── その他グローバル ───
   '0x4e9ce36e442e55ecd9025b759ce187c9aa80a4b': 'Bitfinex',
   '0x742d35cc6634c0532925a3b844bc454e4438f44e': 'Bitfinex Hot',
@@ -309,6 +322,11 @@ const EX_KEYWORDS = [
   // DEX・ルーター・スワップ系コントラクト
   'uniswap','sushiswap','pancakeswap','router','swap router',
   'dex','aggregator','cross-chain','crosschain','bridge',
+  // ブリッジ先チェーン・ラップトークン
+  'near intents','near bridge','rainbow bridge','wrapped ether','weth',
+  'wbtc','wrapped bitcoin','arbitrum bridge','optimism bridge',
+  'polygon bridge','stargate','layerzero','hop protocol','across',
+  'celer','multichain','anyswap','synapse','connext',
 ];
 
 function getLabel(addr) {
@@ -543,8 +561,7 @@ async function getNextTxETH(addr, afterTime) {
   const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
   console.log(`[HOP] ETH追跡: ${addr} / 基準: ${isNaN(refMs) ? '不明' : new Date(refMs).toISOString()}`);
 
-  // offset=1000 で大量取得 → afterTime以降で最も近いTX、
-  // かつ取引所ラベル付きアドレスへの送金を優先して返す
+  // ① 通常TX（EOAからの送金）
   try {
     const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
@@ -564,13 +581,42 @@ async function getNextTxETH(addr, afterTime) {
       candidates.push({ addr: tx.to, amount: parseFloat(tx.value)/1e18, time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, txMs });
     }
     if (candidates.length > 0) {
-      // 取引所ラベル付きを優先、次に最も早いTX
       const exCand = candidates.find(c => c.isExchange);
       const chosen = exCand || candidates[0];
-      console.log(`[HOP] ETH送金先選択: ${chosen.addr} label="${chosen.label}" exchange=${chosen.isExchange}`);
+      console.log(`[HOP] ETH送金先: ${chosen.addr} label="${chosen.label}" exchange=${chosen.isExchange}`);
       return chosen;
     }
   } catch(e) { console.error('[HOP] Etherscan ETH:', e.message); }
+
+  // ② 内部TX（スマートコントラクト・プロキシ経由の資金移動）
+  try {
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlistinternal&address=${addr}&startblock=0&endblock=latest&page=1&offset=500&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    const txs = Array.isArray(j.result) ? j.result : [];
+    console.log(`[HOP] Internal TX: ${txs.length}件`);
+    const intCandidates = [];
+    for (const tx of txs) {
+      const txMs = parseInt(tx.timeStamp) * 1000;
+      if (txMs < refMs) continue;
+      if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
+      if (tx.isError === '1') continue;
+      if (!tx.to) continue;
+      const amt = parseFloat(tx.value) / 1e18;
+      if (amt < 0.0001) continue; // 微小金額は除外
+      const db  = getLabel(tx.to);
+      const fetchedLbl = await fetchAddressLabel(tx.to, 'eth').catch(() => '');
+      const lbl = fetchedLbl || db.label || '';
+      const isEx = db.type === 'exchange' || isExchange(lbl);
+      intCandidates.push({ addr: tx.to, amount: amt, time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, txMs });
+    }
+    if (intCandidates.length > 0) {
+      const exCand = intCandidates.find(c => c.isExchange);
+      const chosen = exCand || intCandidates[0];
+      console.log(`[HOP] 内部TX送金先: ${chosen.addr} label="${chosen.label}" exchange=${chosen.isExchange}`);
+      return chosen;
+    }
+  } catch(e) { console.error('[HOP] Internal TX:', e.message); }
 
   try {
     const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=500&sort=asc&apikey=${ETHERSCAN_KEY}`;
