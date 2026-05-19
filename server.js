@@ -1684,23 +1684,48 @@ ${requestBlocks}
   }
 }
 
-// 調査後に送るサービス案内メッセージ
-function buildServiceMsg(applyUrl) {
-  return `📋 BitTo 調査サービス
+// 調査後に送るサービス案内メッセージ（調査結果に応じて文面を切り替え）
+function buildServiceMsg(applyUrl, result = null) {
+  const hasExchange = result?.exchanges?.length > 0;
+  const exName      = result?.exchanges?.[0]?.name;
+  const amountStr   = (result?.amount != null && !isNaN(result.amount) && result.amount > 0)
+    ? `💰 被害額：${result.amount.toFixed(6)} ${result?.chain || ''}\n` : '';
+
+  if (hasExchange) {
+    // 取引所が特定できた場合 → 凍結要請の緊急性を強調
+    const nameTag = exName ? `【${exName}】への着金が確認されました\n` : '';
+    return `🏦 取引所が特定されました！
 ━━━━━━━━━━━━━━━━━
-ブロックチェーン公開データを解析し
-送金先取引所を特定する調査サービスです。
-公的機関への提出資料を作成します。
+${nameTag}${amountStr}
+詳細調査レポートでは
+✅ 取引所への正式な凍結要請状
+✅ KYC照会・警察提出用の調査報告書
+✅ AI による総合分析・証拠資料
+✅ 複数TXIDもまとめて対応可能
 
-■ 料金
-・送金経路・取引所特定：無料
-・詳細調査レポート 1TXID：¥6,600（税込）
-・複数TXIDもまとめて対応可能
+早急な調査で被害回復に向けての
+進展を目指してください！
 
-📝 詳細レポートをご希望の場合は
-下記フォームよりお申し込みください
-
+📋 1件 ¥6,600（税込）
 🔗 ${applyUrl}`;
+  } else {
+    // 取引所が見つからなかった場合 → さらなる追跡を訴求
+    return `🔍 詳細調査で取引所を特定できる
+可能性があります
+━━━━━━━━━━━━━━━━━
+${amountStr}
+詳細調査レポートでは
+✅ AIによるさらに深い追跡・分析
+✅ DEX・ブリッジ経由の資金追跡
+✅ 取引所特定後の凍結要請テンプレート
+✅ 警察・弁護士提出用の調査報告書
+
+早急な調査で被害回復に向けての
+進展を目指してください！
+
+📋 1件 ¥6,600（税込）
+🔗 ${applyUrl}`;
+  }
 }
 
 // ══ 調査バックグラウンド実行 ══════════════════════════════════
@@ -1726,9 +1751,9 @@ async function runInvestigation(userId, txid, chain) {
     // 無料調査レポートを送信
     await lineClient.pushMessage(userId, { type: 'text', text: buildReport(result) });
 
-    // サービス案内＋フォームURL
+    // サービス案内＋フォームURL（調査結果に応じて文面切り替え）
     const applyUrl = `${BASE_URL}/apply?uid=${encodeURIComponent(userId)}`;
-    await lineClient.pushMessage(userId, { type: 'text', text: buildServiceMsg(applyUrl) });
+    await lineClient.pushMessage(userId, { type: 'text', text: buildServiceMsg(applyUrl, result) });
 
     session.state = 'done';
 
@@ -1857,7 +1882,7 @@ async function handleLineEvent(event) {
           });
           await lineClient.pushMessage(userId, { type: 'text', text: buildReport(cached.result) });
           const applyUrl = `${BASE_URL}/apply?uid=${encodeURIComponent(userId)}`;
-          await lineClient.pushMessage(userId, { type: 'text', text: buildServiceMsg(applyUrl) });
+          await lineClient.pushMessage(userId, { type: 'text', text: buildServiceMsg(applyUrl, cached.result) });
         }
         return;
       }
