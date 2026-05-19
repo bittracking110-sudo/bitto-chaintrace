@@ -577,13 +577,22 @@ async function getNextTxETH(addr, afterTime) {
     const r = await fetch(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
+    const tokenCandidates = [];
     for (const tx of txs) {
       const txMs = parseInt(tx.timeStamp) * 1000;
       if (txMs < refMs) continue;
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
-      const db = getLabel(tx.to);
-      const dec = parseInt(tx.tokenDecimal) || 18;
-      return { addr: tx.to, amount: parseFloat(tx.value)/Math.pow(10,dec), time: new Date(txMs).toISOString(), txHash: tx.hash, label: db.label||'', token: tx.tokenSymbol };
+      const db  = getLabel(tx.to);
+      const lbl = db.label || '';
+      const isEx = db.type === 'exchange' || isExchange(lbl);
+      const dec  = parseInt(tx.tokenDecimal) || 18;
+      tokenCandidates.push({ addr: tx.to, amount: parseFloat(tx.value)/Math.pow(10,dec), time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, token: tx.tokenSymbol, txMs });
+    }
+    if (tokenCandidates.length > 0) {
+      const exCand = tokenCandidates.find(c => c.isExchange);
+      const chosen = exCand || tokenCandidates[0];
+      console.log(`[HOP] ERC-20送金先: ${chosen.addr} token=${chosen.token} exchange=${chosen.isExchange}`);
+      return chosen;
     }
   } catch(e) { console.error('[HOP] ERC20:', e.message); }
 
@@ -737,9 +746,39 @@ async function investigateETH(hash) {
     }
   }
 
+  // ERC-20トークン送金の検出（送金額0の場合）
+  let tokenSymbol = null;
+  let tokenAmount = 0;
+  let tokenRecipient = null;
+  if (parseFloat(tx.value) === 0 && tx.block_id) {
+    try {
+      const etUrl = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${tx.sender}&startblock=${tx.block_id}&endblock=${tx.block_id}&sort=asc&apikey=${ETHERSCAN_KEY}`;
+      const etR = await fetch(etUrl);
+      const etJ = await etR.json();
+      const tokenTxs = Array.isArray(etJ.result) ? etJ.result : [];
+      const matchTx = tokenTxs.find(t => t.hash.toLowerCase() === h.toLowerCase());
+      if (matchTx) {
+        const dec = parseInt(matchTx.tokenDecimal) || 18;
+        tokenSymbol = matchTx.tokenSymbol;
+        tokenAmount = parseFloat(matchTx.value) / Math.pow(10, dec);
+        tokenRecipient = matchTx.to;
+        console.log(`[ETH] ERC-20検出: ${tokenAmount} ${tokenSymbol} → ${tokenRecipient}`);
+        // トークン受取人がpath未登録なら追加
+        if (tokenRecipient && !path.some(p => p.address?.toLowerCase() === tokenRecipient.toLowerCase())) {
+          const trDb  = getLabel(tokenRecipient);
+          const trLbl = await fetchAddressLabel(tokenRecipient, 'eth').catch(() => '') || trDb.label || '';
+          const trIsEx = trDb.type === 'exchange' || isExchange(trLbl);
+          path.push({ address: tokenRecipient, label: trLbl, role: 'token_recipient', isExchange: trIsEx, amount: tokenAmount, token: tokenSymbol });
+          if (trIsEx) exchanges.push({ name: trLbl, address: tokenRecipient, amount: tokenAmount });
+        }
+      }
+    } catch(e) { console.error('[ETH] ERC20検出エラー:', e.message); }
+  }
+
   // 直接送金先が取引所でない場合 → 送金先からホップ追跡
-  if (!isRecipEx) {
-    const hops = await traceHops(tx.recipient, tx.time, 'eth', 10);
+  const traceFrom = tokenRecipient || tx.recipient;
+  if (!isRecipEx && !exchanges.length) {
+    const hops = await traceHops(traceFrom, tx.time, 'eth', 10);
     for (const hop of hops) {
       if (!path.some(p => p.address?.toLowerCase() === hop.address?.toLowerCase())) {
         path.push(hop);
@@ -749,6 +788,7 @@ async function investigateETH(hash) {
   }
   return { chain: 'ETH', txid: h, blockTime: tx.time, blockHeight: tx.block_id,
     amount: parseFloat(tx.value)/1e18, fee: (tx.gas_used * tx.gas_price)/1e18,
+    tokenSymbol, tokenAmount,
     sender: tx.sender, senderLabel: senderDb.label, recipient: tx.recipient, path, exchanges };
 }
 
@@ -840,7 +880,10 @@ function buildReport(result) {
     exSection = `\n⚠️ 取引所判定\n━━━━━━━━━━━━━━━━━\n送金先は既知の取引所DBに一致しませんでした。${lastLabel}${lastAddr}\n追加追跡が必要な場合はご連絡ください。`;
   }
 
-  return `📊 BitTo 調査レポート\n━━━━━━━━━━━━━━━━━\n${em} チェーン：${result.chain}\n🔗 TXID：${txShort}\n📅 送金日時：${fmtDate(result.blockTime)}\n💰 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}\n\n📍 送金経路\n━━━━━━━━━━━━━━━━━\n${pathLines.join('\n　↓\n')}\n${exSection}${tplSection}\n\n🔒 BitTo が自動生成したレポートです`;
+  const amountDisplay = (result.tokenSymbol && result.tokenAmount > 0)
+    ? `${result.tokenAmount.toFixed(6)} ${result.tokenSymbol}（ERC-20トークン）`
+    : `${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}`;
+  return `📊 BitTo 調査レポート\n━━━━━━━━━━━━━━━━━\n${em} チェーン：${result.chain}\n🔗 TXID：${txShort}\n📅 送金日時：${fmtDate(result.blockTime)}\n💰 送金額：${amountDisplay}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}\n\n📍 送金経路\n━━━━━━━━━━━━━━━━━\n${pathLines.join('\n　↓\n')}\n${exSection}${tplSection}\n\n🔒 BitTo が自動生成したレポートです`;
 }
 
 // ══ Google Sheets 連携 ════════════════════════════════════════
@@ -1231,7 +1274,7 @@ ${r.txid}
 
 ■ チェーン：${r.chain}（${chainFull[r.chain] || r.chain}）
 ■ 送金日時（JST）：${fmtDate(r.blockTime)}
-■ 送金額：${(r.amount != null && !isNaN(r.amount)) ? r.amount.toFixed(8) : '不明'} ${r.chain}
+■ 送金額：${(r.tokenSymbol && r.tokenAmount > 0) ? `${r.tokenAmount.toFixed(6)} ${r.tokenSymbol}（ERC-20）` : `${(r.amount != null && !isNaN(r.amount)) ? r.amount.toFixed(8) : '不明'} ${r.chain}`}
 ■ 着金アドレス：${ex.address}
 
 上記は詐欺被害に起因する不正送金の疑いがあります。
@@ -1264,7 +1307,7 @@ ${r.txid}
           <tr><th>チェーン</th><td>${r.chain}（${chainFull[r.chain] || r.chain}）</td></tr>
           <tr><th>TXID</th><td class="mono">${r.txid}</td></tr>
           <tr><th>送金日時（JST）</th><td>${fmtDate(r.blockTime)}</td></tr>
-          <tr><th>送金額</th><td>${(r.amount != null && !isNaN(r.amount)) ? r.amount.toFixed(8) : '不明'} ${r.chain}</td></tr>
+          <tr><th>送金額</th><td>${(r.tokenSymbol && r.tokenAmount > 0) ? `${r.tokenAmount.toFixed(6)} ${r.tokenSymbol} <span style="font-size:0.8em;color:#64748b">（ERC-20）</span>` : `${(r.amount != null && !isNaN(r.amount)) ? r.amount.toFixed(8) : '不明'} ${r.chain}`}</td></tr>
           ${(r.fee != null && !isNaN(r.fee)) ? `<tr><th>手数料</th><td>${r.fee.toFixed(8)} ${r.chain}</td></tr>` : ''}
           ${r.destTag != null ? `<tr><th>宛先タグ</th><td>${r.destTag}</td></tr>` : ''}
           ${r.blockHeight ? `<tr><th>ブロック高</th><td>${r.blockHeight}</td></tr>` : ''}
