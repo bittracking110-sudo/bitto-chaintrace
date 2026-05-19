@@ -600,9 +600,9 @@ async function getNextTxETH(addr, afterTime) {
   } catch(e) { console.error('[HOP] Etherscan ETH:', e.message); }
 
   // ② 内部TX（スマートコントラクト・プロキシ経由の資金移動）
-  // ※ ループ内でfetchAddressLabelを呼ばない（API過多で停止する問題を修正）
+  // ※ sort=desc で最新TX から取得（古いコントラクトはascだと過去TXしか取れない問題を修正）
   try {
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlistinternal&address=${addr}&startblock=0&endblock=latest&page=1&offset=200&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlistinternal&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=desc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
@@ -610,7 +610,7 @@ async function getNextTxETH(addr, afterTime) {
     const intCandidates = [];
     for (const tx of txs) {
       const txMs = parseInt(tx.timeStamp) * 1000;
-      if (txMs < refMs) continue;
+      if (txMs < refMs) break; // sort=desc なので以降は全て古い → 早期終了
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       if (tx.isError === '1') continue;
       if (!tx.to) continue;
@@ -633,14 +633,14 @@ async function getNextTxETH(addr, afterTime) {
   } catch(e) { console.error('[HOP] Internal TX:', e.message); }
 
   try {
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=500&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=desc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
     const tokenCandidates = [];
     for (const tx of txs) {
       const txMs = parseInt(tx.timeStamp) * 1000;
-      if (txMs < refMs) continue;
+      if (txMs < refMs) break; // sort=desc なので以降は全て古い → 早期終了
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       const db  = getLabel(tx.to);
       const lbl = db.label || '';
