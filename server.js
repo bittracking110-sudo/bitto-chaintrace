@@ -590,8 +590,11 @@ async function getNextTxETH(addr, afterTime) {
     }
     if (candidates.length > 0) {
       const exCand = candidates.find(c => c.isExchange);
-      const chosen = exCand || candidates[0];
-      console.log(`[HOP] ETH送金先: ${chosen.addr} label="${chosen.label}" exchange=${chosen.isExchange}`);
+      // 取引所優先 → 次に金額最大（最も多くETHが流れた先を追う）
+      const byAmount = [...candidates].sort((a, b) => b.amount - a.amount);
+      const chosen = exCand || byAmount[0];
+      chosen._siblings = candidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
+      console.log(`[HOP] ETH送金先: ${chosen.addr} label="${chosen.label}" amount=${chosen.amount} candidates=${candidates.length}`);
       return chosen;
     }
   } catch(e) { console.error('[HOP] Etherscan ETH:', e.message); }
@@ -621,8 +624,10 @@ async function getNextTxETH(addr, afterTime) {
     }
     if (intCandidates.length > 0) {
       const exCand = intCandidates.find(c => c.isExchange);
-      const chosen = exCand || intCandidates[0];
-      console.log(`[HOP] 内部TX送金先: ${chosen.addr} label="${chosen.label}" amt=${chosen.amount}`);
+      const byAmt  = [...intCandidates].sort((a, b) => b.amount - a.amount);
+      const chosen = exCand || byAmt[0];
+      chosen._siblings = intCandidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
+      console.log(`[HOP] 内部TX送金先: ${chosen.addr} label="${chosen.label}" amt=${chosen.amount} total=${intCandidates.length}`);
       return chosen;
     }
   } catch(e) { console.error('[HOP] Internal TX:', e.message); }
@@ -705,17 +710,16 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10) {
     if (visited.has(next.addr.toLowerCase())) break; // ループ防止
     visited.add(next.addr.toLowerCase());
     const db  = getLabel(next.addr);
-    // fetchAddressLabel で Etherscan/Blockchair/XRPScan ラベルも取得（取引所名を優先）
     const fetchedLabel = await fetchAddressLabel(next.addr, chain);
     const lbl = fetchedLabel || db.label || next.label || '';
-    // 取引所判定：ローカルDB / キーワード / Blockchairラベル のいずれかで判定
     const isEx = db.type === 'exchange' || isExchange(lbl);
-    console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... → label="${lbl}" exchange=${isEx}`);
-    hops.push({ address: next.addr, label: lbl, amount: next.amount, isExchange: isEx, time: next.time, txHash: next.txHash });
-    if (isEx) {
-      console.log(`[traceHops] 取引所到達 → 追跡終了: ${lbl}`);
-      break; // 取引所到達 → そこで追跡終了
-    }
+    // 同時送金先（siblings）を保存
+    const siblings = (next._siblings || []).map(s => ({
+      address: s.addr, label: s.label || '', amount: s.amount, token: s.token,
+    }));
+    console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... label="${lbl}" exchange=${isEx} siblings=${siblings.length}`);
+    hops.push({ address: next.addr, label: lbl, amount: next.amount, token: next.token, isExchange: isEx, time: next.time, txHash: next.txHash, siblings });
+    if (isEx) { console.log(`[traceHops] 取引所到達: ${lbl}`); break; }
     currentAddr = next.addr;
     currentTime = next.time;
   }
@@ -917,7 +921,15 @@ function buildReport(result) {
       return `🏦 取引所到達（${i}次先）\n   ${addrShort}${nameTag}${timeStr}${amountStr}`;
     }
     const lbl = p.label ? ` [${p.label}]` : '';
-    return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}`;
+    const siblingLines = (p.siblings || []).length > 0
+      ? '\n' + p.siblings.map(s => {
+          const sa = s.address.slice(0,10)+'...'+s.address.slice(-6);
+          const sl = s.label ? ` [${s.label}]` : '';
+          const sm = (s.amount != null && s.amount > 0) ? ` ${s.amount.toFixed(4)}${s.token||result.chain}` : '';
+          return `   ┣ 同時送金先：${sa}${sl}${sm}`;
+        }).join('\n')
+      : '';
+    return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}${siblingLines}`;
   });
 
   let exSection = '';
