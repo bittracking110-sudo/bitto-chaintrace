@@ -813,12 +813,15 @@ function buildReport(result) {
 
   const pathLines = (result.path || []).map((p, i) => {
     const addrShort = p.address.slice(0, 10) + '...' + p.address.slice(-6);
-    const lbl = p.label ? ` [${p.label}]` : '';
-    if (i === 0) return `🔴 被害者ウォレット\n   ${addrShort}${lbl}`;
+    if (i === 0) return `🔴 被害者ウォレット\n   ${addrShort}`;
     const timeStr   = p.time ? `\n   📅 ${fmtDate(p.time)}` : '';
     const amountStr = (p.amount != null && !isNaN(p.amount) && p.amount > 0)
       ? `\n   💰 ${p.amount.toFixed(6)} ${p.token || result.chain}` : '';
-    if (p.isExchange) return `🏦 取引所到達（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}`;
+    if (p.isExchange) {
+      const nameTag = p.label ? `\n   🏷 取引所名：${p.label}` : '\n   🏷 取引所名：調査中';
+      return `🏦 取引所到達（${i}次先）\n   ${addrShort}${nameTag}${timeStr}${amountStr}`;
+    }
+    const lbl = p.label ? ` [${p.label}]` : '';
     return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}`;
   });
 
@@ -826,8 +829,9 @@ function buildReport(result) {
   let tplSection = '';
   if (result.exchanges && result.exchanges.length > 0) {
     const ex = result.exchanges[0];
-    exSection = `\n🏦 判明した取引所\n━━━━━━━━━━━━━━━━━\n取引所名：${ex.name || '特定済み'}\nアドレス：${ex.address.slice(0,12)}...${ex.address.slice(-6)}\n着金額　：${(ex.amount != null && !isNaN(ex.amount)) ? ex.amount.toFixed(8) : '不明'} ${result.chain}`;
-    tplSection = `\n\n📝 取引所への要請テンプレート\n━━━━━━━━━━━━━━━━━\n【${ex.name || '取引所'} サポートチームへ】\n\n件名：不正送金に関する緊急凍結要請\n\n拝啓\n\n不正な仮想通貨送金について緊急のご対応をお願いいたします。\n\n■ トランザクションID\n${result.txid}\n\n■ チェーン：${result.chain}\n■ 送金日時（JST）：${fmtDate(result.blockTime)}\n■ 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}\n■ 着金アドレス：${ex.address}\n\n上記は詐欺被害に起因する不正送金の疑いがあります。\n①上記アドレスの凍結措置\n②関連する取引情報の保全\nについて緊急のご対応をお願い申し上げます。\n\n敬具\n━━━━━━━━━━━━━━━━━`;
+    const exDisplayName = ex.name && ex.name.trim() ? ex.name : '未登録取引所';
+    exSection = `\n🏦 判明した取引所\n━━━━━━━━━━━━━━━━━\n取引所名：${exDisplayName}\nアドレス：${ex.address.slice(0,12)}...${ex.address.slice(-6)}\n着金額　：${(ex.amount != null && !isNaN(ex.amount)) ? ex.amount.toFixed(8) : '不明'} ${result.chain}`;
+    tplSection = `\n\n📝 取引所への要請テンプレート\n━━━━━━━━━━━━━━━━━\n【${exDisplayName} サポートチームへ】\n\n件名：不正送金に関する緊急凍結要請\n\n拝啓\n\n不正な仮想通貨送金について緊急のご対応をお願いいたします。\n\n■ トランザクションID\n${result.txid}\n\n■ チェーン：${result.chain}\n■ 送金日時（JST）：${fmtDate(result.blockTime)}\n■ 送金額：${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}\n■ 着金アドレス：${ex.address}\n\n上記は詐欺被害に起因する不正送金の疑いがあります。\n①上記アドレスの凍結措置\n②関連する取引情報の保全\nについて緊急のご対応をお願い申し上げます。\n\n敬具\n━━━━━━━━━━━━━━━━━`;
   } else {
     // 最後のノードのラベルを表示（DEX/ブリッジ等）
     const lastNode = (result.path || []).filter(p => p.role !== 'sender').slice(-1)[0];
