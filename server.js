@@ -158,18 +158,26 @@ const LABEL_DB = {
   '1KAt6STtisWMMVo63xFER7NnGBBBBMHTNK': 'HitBTC BTC',
   '1GZEgEoAOcMKoqz93MPpFfQpFPDyKi41jh': 'HitBTC BTC',
   // ─── ブリッジ・DEX（主要） ───
-  '0x8ae4...0472': 'Near Intents（NEARブリッジ）',   // Near Intents contract
-  '0x8ae41b98f02d72b0e9c3b8e9c4d5f6a7b8c9d0e1': 'Near Intents（NEARブリッジ）',
-  '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': 'Wrapped Ether (WETH)',
+  '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': 'Wrapped Ether（WETH）',
   '0xdef1c0ded9bec7f1a1670819833240f027b25eff': '0x Protocol（DEX）',
   '0xe66b31678d6c16e9ebf358268a790b763c133750': '0x Protocol（DEX）',
   '0x1111111254eeb25477b68fb85ed929f73a960582': '1inch v5（DEX）',
   '0x1111111254fb6c44bac0bed2854e76f90643097d': '1inch v4（DEX）',
+  '0x111111125421ca6dc452d289314280a0f8842a65': '1inch v6（DEX）',
   '0x7a250d5630b4cf539739df2c5dacb4c659f2488d': 'Uniswap V2 Router',
   '0xe592427a0aece92de3edee1f18e0157c05861564': 'Uniswap V3 Router',
   '0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45': 'Uniswap V3 Router 2',
-  '0xd9e1ce17f2641f24ae83637ab66a2cca9c378b9f': 'SushiSwap Router',
   '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad': 'Uniswap Universal Router',
+  '0xd9e1ce17f2641f24ae83637ab66a2cca9c378b9f': 'SushiSwap Router',
+  // Near Protocol Rainbow Bridge
+  '0x23ddd3e3692d1861ed57ede224608875809e127f': 'Near Rainbow Bridge（NEARブリッジ）',
+  '0x6bfad42cfc4efc96f529d786d643ff4a8b89fa52': 'Near Rainbow Bridge（NEARブリッジ）',
+  // Across Protocol Bridge
+  '0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5': 'Across Bridge',
+  '0xe35e9842fceaca96570b734083f4a58e8f7c5f2a': 'Across Bridge',
+  // Stargate Finance
+  '0x8731d54e9d02c286767d56ac03e8037c07e01e98': 'Stargate Finance Bridge',
+  '0x296f55f8fb28e498b858d0bcda06d955b2cb3f97': 'Stargate Finance Bridge',
   // ─── その他グローバル ───
   '0x4e9ce36e442e55ecd9025b759ce187c9aa80a4b': 'Bitfinex',
   '0x742d35cc6634c0532925a3b844bc454e4438f44e': 'Bitfinex Hot',
@@ -589,8 +597,9 @@ async function getNextTxETH(addr, afterTime) {
   } catch(e) { console.error('[HOP] Etherscan ETH:', e.message); }
 
   // ② 内部TX（スマートコントラクト・プロキシ経由の資金移動）
+  // ※ ループ内でfetchAddressLabelを呼ばない（API過多で停止する問題を修正）
   try {
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlistinternal&address=${addr}&startblock=0&endblock=latest&page=1&offset=500&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlistinternal&address=${addr}&startblock=0&endblock=latest&page=1&offset=200&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const r = await fetch(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
@@ -602,18 +611,18 @@ async function getNextTxETH(addr, afterTime) {
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       if (tx.isError === '1') continue;
       if (!tx.to) continue;
+      if (tx.type === 'delegatecall' || tx.type === 'staticcall') continue; // 実ETH移動なし
       const amt = parseFloat(tx.value) / 1e18;
-      if (amt < 0.0001) continue; // 微小金額は除外
-      const db  = getLabel(tx.to);
-      const fetchedLbl = await fetchAddressLabel(tx.to, 'eth').catch(() => '');
-      const lbl = fetchedLbl || db.label || '';
+      if (amt < 0.001) continue;
+      const db  = getLabel(tx.to); // ローカルDBのみ（高速）
+      const lbl = db.label || '';
       const isEx = db.type === 'exchange' || isExchange(lbl);
       intCandidates.push({ addr: tx.to, amount: amt, time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, txMs });
     }
     if (intCandidates.length > 0) {
       const exCand = intCandidates.find(c => c.isExchange);
       const chosen = exCand || intCandidates[0];
-      console.log(`[HOP] 内部TX送金先: ${chosen.addr} label="${chosen.label}" exchange=${chosen.isExchange}`);
+      console.log(`[HOP] 内部TX送金先: ${chosen.addr} label="${chosen.label}" amt=${chosen.amount}`);
       return chosen;
     }
   } catch(e) { console.error('[HOP] Internal TX:', e.message); }
