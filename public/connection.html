@@ -170,6 +170,26 @@ header{position:sticky;top:0;z-index:50;background:rgba(10,12,18,.88);backdrop-f
 .md .mx{position:absolute;top:16px;right:20px;background:none;border:none;color:var(--sub);font-size:22px;cursor:pointer}
 .md .merr{color:var(--red);font-size:12px;margin-top:12px;display:none;text-align:center}
 
+/* ── 件数ステッパー ── */
+.stepper{display:flex;align-items:center;gap:14px;margin-top:4px}
+.stp{width:42px;height:42px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;color:var(--gold);font-size:20px;cursor:pointer;line-height:1;transition:all .2s}
+.stp:hover{border-color:var(--gold);background:var(--gold-dim)}
+.stv{font-family:'Cormorant Garamond',serif;font-size:26px;font-weight:600;color:var(--gold2);min-width:36px;text-align:center}
+.stn{font-size:12px;color:var(--sub);letter-spacing:1px}
+.mnote{font-size:11.5px;color:var(--sub2);background:var(--gold-dim);border:1px solid rgba(201,169,110,.3);border-radius:8px;padding:10px 14px;margin-top:14px;line-height:1.8}
+
+/* ── 利用規約モーダル ── */
+#termsModal{position:fixed;inset:0;z-index:140;display:none;align-items:center;justify-content:center;padding:20px;background:rgba(5,6,10,.82);backdrop-filter:blur(4px)}
+#termsModal.open{display:flex}
+.tmd{background:var(--bg2);border:1px solid var(--line2);border-radius:16px;max-width:560px;width:100%;max-height:84vh;display:flex;flex-direction:column;overflow:hidden}
+.tmd-hd{padding:20px 26px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;font-family:'Noto Serif JP',serif;font-size:15px;font-weight:600;letter-spacing:3px;color:var(--gold2)}
+.tmd-bd{flex:1;overflow-y:auto;padding:24px 26px}
+.tmd-bd h4{font-size:13.5px;color:var(--gold2);letter-spacing:1.5px;margin:22px 0 10px;font-weight:600}
+.tmd-bd h4:first-child{margin-top:0}
+.tmd-bd p{font-size:12.5px;color:var(--sub2);line-height:2;margin-bottom:10px}
+.tmd-ft{padding:16px 26px;border-top:1px solid var(--line)}
+.tmd-ft .go{width:100%;background:var(--gold);color:#0a0c12;border:none;font-weight:700;font-size:13px;letter-spacing:3px;padding:14px;border-radius:8px;cursor:pointer}
+
 /* ── サイドバー ── */
 .menu-btn{background:none;border:1px solid var(--line2);border-radius:8px;color:var(--gold);font-size:17px;padding:7px 12px;cursor:pointer;line-height:1;flex-shrink:0}
 .menu-btn:hover{border-color:var(--gold)}
@@ -277,17 +297,59 @@ footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
     <div class="logo serif" style="color:var(--gold);letter-spacing:6px">CONNECTION</div>
     <div class="rule"></div>
     <h3>正式調査報告書のご依頼</h3>
-    <p class="mp">調査費用：<b>¥11,000</b>（税込）／ 1TXID</p>
+    <p class="mp">調査費用：<b id="mTotal">¥11,000</b>（税込）</p>
     <label>お名前</label>
     <input id="mName" type="text" placeholder="山田 太郎">
     <label>メールアドレス（報告書の送付先）</label>
     <input id="mEmail" type="email" placeholder="example@mail.com">
+    <label>電話番号</label>
+    <input id="mPhone" type="tel" placeholder="090-1234-5678">
+    <label>調査件数（TXID数）</label>
+    <div class="stepper">
+      <button type="button" class="stp" onclick="chgCount(-1)">−</button>
+      <span class="stv" id="mCount">1</span>
+      <button type="button" class="stp" onclick="chgCount(1)">＋</button>
+      <span class="stn">件 × ¥11,000</span>
+    </div>
+    <div class="mnote" id="mMultiNote" style="display:none">2件以上の場合、お支払い後にTXID入力フォームをメールでお送りします。</div>
     <div class="magree">
       <input type="checkbox" id="mAgree">
-      <span>調査結果に基づく報告書の作成に同意します。本調査は資産の回復を保証するものではありません。</span>
+      <span><a href="#" onclick="openTerms();return false">利用規約</a>に同意します。本調査は資産の回復を保証するものではありません。</span>
     </div>
     <button class="go" id="mGo" onclick="checkout()">お支払いへ進む</button>
     <div class="merr" id="mErr"></div>
+  </div>
+</div>
+
+<!-- 利用規約モーダル -->
+<div id="termsModal">
+  <div class="tmd">
+    <div class="tmd-hd">
+      <span>利用規約</span>
+      <button class="mx" onclick="closeTerms()" style="position:static">×</button>
+    </div>
+    <div class="tmd-bd">
+      <h4>第1条（目的と適用）</h4>
+      <p>本規約は、Himesen株式会社（以下「当社」）が提供する仮想通貨調査・トラッキングアプリ（以下「本サービス」）の利用条件を定めるものです。</p>
+      <p>本サービスは、ユーザーが指定したトランザクションIDやウォレットアドレスに基づき、ブロックチェーン上の資金移動履歴を調査・可視化する情報提供サービスです。</p>
+      <h4>第2条（利用料金およびアプリ内課金）</h4>
+      <p>本サービスの有料機能（詳細レポートの出力、複数ホップの追跡等）は、Apple Inc. または Google LLC が提供する決済システムを通じて課金されます。</p>
+      <p>ユーザーの端末設定に基づく自動更新（サブスクリプションの場合）の解除は、ユーザー自身が各OSの規定の手順に従って行うものとします。</p>
+      <h4>第3条（返金・キャンセルポリシー）</h4>
+      <p>デジタルコンテンツという商品の特性上、また事前の調査リソースを消費する性質上、課金完了後のキャンセルおよび返金は、いかなる理由（「追跡が途中で途絶えた」「期待した結果と異なった」等）があっても一切お受けできません。</p>
+      <p>法令に基づき返金が義務付けられる場合を除き、当社は返金義務を負いません。</p>
+      <h4>第4条（非弁行為の禁止・法的助言の非提供）</h4>
+      <p>当社は弁護士法等に基づく法的権限を有するものではありません。</p>
+      <p>本サービスを通じて提供される調査レポートや被害対策のガイドブック等の情報は、事実関係の整理を目的としたものであり、特定の相手方に対する返金交渉の代行、法的措置の助言、その他一切の法律事務を提供するものではありません。</p>
+      <h4>第5条（免責事項）</h4>
+      <p>調査結果の限界: 対象となる仮想通貨が海外取引所、分散型取引所（DEX）、または匿名化技術を経由した場合など、技術的・環境的な要因により最終的な着金先を特定できない場合があります。</p>
+      <p>被害回復の非保証: 当社は、本サービスの利用によってユーザーが被った被害の回復、犯人の特定、または仮想通貨の奪還を保証するものではありません。提供した情報を元に行う警察や弁護士への相談結果についても、当社は一切の責任を負いません。</p>
+      <h4>第6条（情報の取り扱いと機密保持）</h4>
+      <p>ユーザーから提供されたトランザクション情報や被害状況等のデータは、本サービスの調査目的、および個人を特定できない形での詐欺手口の啓発・統計データの作成にのみ使用します。</p>
+    </div>
+    <div class="tmd-ft">
+      <button class="go" onclick="agreeTerms()">同意して閉じる</button>
+    </div>
   </div>
 </div>
 
@@ -535,24 +597,44 @@ function copyAddr(a, el){
 }
 
 // ── 申込モーダル／決済 ──
+const UNIT_PRICE = 11000;
+let txidCount = 1;
+
 function openModal(){ document.getElementById('modal').classList.add('open'); }
 function closeModal(){ document.getElementById('modal').classList.remove('open'); }
+
+function chgCount(d){
+  txidCount = Math.max(1, Math.min(10, txidCount + d));
+  document.getElementById('mCount').textContent = txidCount;
+  document.getElementById('mTotal').textContent = '¥' + (UNIT_PRICE * txidCount).toLocaleString('ja-JP');
+  document.getElementById('mMultiNote').style.display = txidCount > 1 ? 'block' : 'none';
+}
+
+function openTerms(){ document.getElementById('termsModal').classList.add('open'); }
+function closeTerms(){ document.getElementById('termsModal').classList.remove('open'); }
+function agreeTerms(){
+  document.getElementById('mAgree').checked = true;
+  closeTerms();
+}
+
 async function checkout(){
   const name  = document.getElementById('mName').value.trim();
   const email = document.getElementById('mEmail').value.trim();
+  const phone = document.getElementById('mPhone').value.trim();
   const agree = document.getElementById('mAgree').checked;
   const errEl = document.getElementById('mErr');
   errEl.style.display = 'none';
   if(!name){ errEl.textContent = 'お名前を入力してください'; errEl.style.display = 'block'; return; }
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ errEl.textContent = '正しいメールアドレスを入力してください'; errEl.style.display = 'block'; return; }
-  if(!agree){ errEl.textContent = '同意事項にチェックを入れてください'; errEl.style.display = 'block'; return; }
+  if(!phone){ errEl.textContent = '電話番号を入力してください'; errEl.style.display = 'block'; return; }
+  if(!agree){ errEl.textContent = '利用規約への同意が必要です'; errEl.style.display = 'block'; return; }
   const btn = document.getElementById('mGo');
   btn.disabled = true;
   btn.textContent = '処理中…';
   try{
     const r = await fetch('/api/connection/checkout',{
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ txid: currentTxid, name, email }),
+      body: JSON.stringify({ txid: currentTxid, name, email, phone, count: txidCount }),
     });
     const j = await r.json();
     if(!r.ok) throw new Error(j.error || '決済処理に失敗しました');

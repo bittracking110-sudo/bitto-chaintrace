@@ -176,6 +176,16 @@
         document.getElementById('displayName').textContent = data.customerName + ' 様';
         document.getElementById('displayCount').textContent = `${data.count}件`;
 
+        // Connectionブランドの場合は表示を切り替え
+        if (data.brand === 'connection') {
+          document.title = 'Connection TXID入力フォーム';
+          document.querySelector('.header .logo').textContent = '';
+          document.querySelector('.header h1').textContent = 'CONNECTION';
+          document.querySelector('.header h1').style.cssText = 'letter-spacing:8px;color:#c9a96e;font-family:serif';
+          document.querySelector('.header p').textContent = '調査するトランザクションIDをご入力ください';
+          document.querySelector('#successBox p').innerHTML = 'TXIDを受け付けました。<br>調査完了後、メールで正式調査報告書とサポートチャットのご案内をお送りします。<br><br>通常10分〜30分でお届けします。';
+        }
+
         const list = document.getElementById('txidList');
         for (let i = 0; i < data.count; i++) {
           list.appendChild(createTxidRow(i));

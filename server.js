@@ -2047,6 +2047,7 @@ app.post('/stripe-webhook',
           txid:         s.metadata.txid,
           customerName: s.metadata.customerName || 'お客様',
           email:        cEmail,
+          count:        parseInt(s.metadata.count) || 1,
         }).catch(e => console.error('[Connection] 注文処理エラー:', e.message));
         return res.json({ received: true });
       }
@@ -2370,7 +2371,7 @@ app.get('/api/txid-form-info/:token', (req, res) => {
   const data = txidFormTokens.get(req.params.token);
   if (!data) return res.status(404).json({ error: 'リンクが無効または期限切れです' });
   if (data.used) return res.status(410).json({ error: 'このリンクはすでに使用済みです', used: true });
-  res.json({ ok: true, count: data.count, customerName: data.customerName });
+  res.json({ ok: true, count: data.count, customerName: data.customerName, brand: data.brand || 'bitto' });
 });
 
 // TXID送信・調査開始API
@@ -2432,13 +2433,31 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
         });
       }
 
-      // メールにレポートURL送信
+      // メールにレポートURL送信（ブランド別）
       if (formData.email) {
-        sendEmail(
-          formData.email,
-          '【BitTo】詳細調査レポートが完成しました',
-          buildReportEmailHTML(formData.customerName, reportUrl, issuedAt)
-        ).catch(console.error);
+        if (formData.brand === 'connection') {
+          // Connection：サポートチャットを開設して専用メールで案内
+          const chatToken = crypto.randomUUID();
+          const chatUrl   = `${BASE_URL}/support/${chatToken}`;
+          connectionChats.set(chatToken, {
+            txid: list.map(l => l.txid).join(', '), chain: list[0].chain,
+            customerName: formData.customerName, email: formData.email, reportUrl,
+            reportSummary: buildReport(list[0].result).slice(0, 3000),
+            messages: [], createdAt: Date.now(),
+          });
+          saveConnectionChats();
+          sendEmail(
+            formData.email,
+            '【Connection】正式調査報告書が完成しました',
+            buildConnectionEmailHTML(formData.customerName, reportUrl, chatUrl, issuedAt)
+          ).catch(console.error);
+        } else {
+          sendEmail(
+            formData.email,
+            '【BitTo】詳細調査レポートが完成しました',
+            buildReportEmailHTML(formData.customerName, reportUrl, issuedAt)
+          ).catch(console.error);
+        }
       }
 
     } catch (e) {
@@ -2557,8 +2576,25 @@ function saveConnectionChats() {
 }
 
 // ── 注文処理（Stripe webhook / テストモード共通） ──────────────
-async function fulfillConnectionOrder({ txid, customerName, email }) {
-  console.log(`[Connection] 注文処理開始: ${txid} / ${email}`);
+async function fulfillConnectionOrder({ txid, customerName, email, count = 1 }) {
+  console.log(`[Connection] 注文処理開始: ${txid} / ${email} / ${count}件`);
+
+  // 複数件の場合はTXID入力フォームを発行してメールで案内
+  if (count > 1) {
+    const formToken = crypto.randomUUID();
+    txidFormTokens.set(formToken, {
+      sessionId: `connection-${formToken.slice(0, 8)}`, userId: '', count,
+      customerName, email, brand: 'connection', used: false, createdAt: Date.now(),
+    });
+    const formUrl = `${BASE_URL}/txid-form/${formToken}`;
+    if (email) {
+      await sendEmail(email, '【Connection】調査するTXIDのご入力をお願いします',
+        buildConnectionTxidFormEmailHTML(customerName, formUrl, count));
+    }
+    console.log(`[Connection] TXIDフォーム発行: ${formUrl}`);
+    return { formUrl };
+  }
+
   const chain = detectChain(txid);
   if (!chain) throw new Error('TXIDの形式が不正です');
 
@@ -2592,6 +2628,28 @@ async function fulfillConnectionOrder({ txid, customerName, email }) {
   }
   console.log(`[Connection] 注文処理完了: ${reportUrl}`);
   return { reportUrl, chatUrl };
+}
+
+function buildConnectionTxidFormEmailHTML(name, formUrl, count) {
+  return `<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8"></head>
+<body style="margin:0;background:#0a0c12;font-family:'Hiragino Mincho ProN','Yu Mincho',serif;padding:32px 16px">
+<div style="max-width:560px;margin:0 auto;background:#12151f;border:1px solid #2a3045;border-radius:12px;overflow:hidden">
+  <div style="padding:36px 32px 28px;text-align:center;border-bottom:1px solid #2a3045">
+    <div style="font-size:26px;letter-spacing:8px;color:#c9a96e;font-weight:600">CONNECTION</div>
+    <div style="width:48px;height:1px;background:#c9a96e;margin:14px auto 0"></div>
+  </div>
+  <div style="padding:32px;color:#eae6dc;font-size:14px;line-height:2">
+    <p style="margin:0 0 18px">${name} 様</p>
+    <p style="margin:0 0 18px">この度はConnectionをご利用いただき、誠にありがとうございます。<br>お支払いを確認いたしました。</p>
+    <p style="margin:0 0 18px">以下のフォームより、調査をご希望のTXIDを<strong style="color:#c9a96e">${count}件</strong>ご入力ください。<br>ご入力後、順次調査を行い正式調査報告書をお送りいたします。</p>
+    <div style="text-align:center;margin:28px 0">
+      <a href="${formUrl}" style="display:inline-block;background:#c9a96e;color:#0a0c12;text-decoration:none;padding:14px 40px;border-radius:6px;font-weight:700;letter-spacing:2px">TXIDを入力する</a>
+    </div>
+    <p style="margin:18px 0 0;font-size:12px;color:#8b91a0">⚠️ このフォームは1回のみご使用いただけます。<br>すでに追跡調査済みのTXIDも含めてご入力ください。</p>
+  </div>
+</div>
+</body></html>`;
 }
 
 function buildConnectionEmailHTML(name, reportUrl, chatUrl, issuedAt) {
@@ -2732,21 +2790,23 @@ app.get('/api/connection/address/:addr', async (req, res) => {
 // ── 決済API（¥11,000／1TXID） ─────────────────────────────────
 app.post('/api/connection/checkout', express.json(), async (req, res) => {
   try {
-    const { txid, name, email } = req.body;
+    const { txid, name, email, phone, count } = req.body;
     const t = (txid || '').trim();
+    const n = Math.max(1, Math.min(10, parseInt(count) || 1));
+    const amount = CONNECTION_PRICE * n;
     if (!detectChain(t)) return res.status(400).json({ error: 'TXIDの形式が正しくありません' });
     if (!email)          return res.status(400).json({ error: 'メールアドレスを入力してください' });
 
     // 申込記録をSheetsへ
     const submittedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
     appendToSheet([
-      submittedAt, name || '', '', email, '', '1',
-      String(CONNECTION_PRICE), `Connection:${t.slice(0, 20)}...`, '', '申込済み(Connection)',
+      submittedAt, name || '', phone || '', email, '', String(n),
+      String(amount), `Connection:${t.slice(0, 20)}...`, '', '申込済み(Connection)',
     ]).catch(console.error);
 
     if (!stripe) {
       // テストモード：即時に報告書生成
-      fulfillConnectionOrder({ txid: t, customerName: name || 'お客様', email }).catch(console.error);
+      fulfillConnectionOrder({ txid: t, customerName: name || 'お客様', email, count: n }).catch(console.error);
       return res.json({ url: `${BASE_URL}/connection/success?test=1` });
     }
 
@@ -2757,17 +2817,17 @@ app.post('/api/connection/checkout', express.json(), async (req, res) => {
         price_data: {
           currency: 'jpy',
           product_data: {
-            name:        'Connection 正式調査報告書（1TXID）',
+            name:        `Connection 正式調査報告書（${n}件）`,
             description: 'ブロックチェーン資金追跡調査・正式報告書＋専任サポートチャット',
           },
           unit_amount: CONNECTION_PRICE,
         },
-        quantity: 1,
+        quantity: n,
       }],
       mode: 'payment',
       success_url: `${BASE_URL}/connection/success`,
       cancel_url:  `${BASE_URL}/connection`,
-      metadata: { brand: 'connection', txid: t, customerName: name || '', email },
+      metadata: { brand: 'connection', txid: t, customerName: name || '', email, phone: phone || '', count: String(n) },
     });
     res.json({ url: session.url });
   } catch (e) { res.status(500).json({ error: e.message }); }
