@@ -170,6 +170,21 @@ header{position:sticky;top:0;z-index:50;background:rgba(10,12,18,.88);backdrop-f
 .md .mx{position:absolute;top:16px;right:20px;background:none;border:none;color:var(--sub);font-size:22px;cursor:pointer}
 .md .merr{color:var(--red);font-size:12px;margin-top:12px;display:none;text-align:center}
 
+/* ── サイドバー ── */
+.menu-btn{background:none;border:1px solid var(--line2);border-radius:8px;color:var(--gold);font-size:17px;padding:7px 12px;cursor:pointer;line-height:1;flex-shrink:0}
+.menu-btn:hover{border-color:var(--gold)}
+#sideOvl{position:fixed;inset:0;background:rgba(5,6,10,.65);backdrop-filter:blur(2px);z-index:120;display:none;opacity:0;transition:opacity .3s}
+#sideOvl.open{display:block;opacity:1}
+#sidebar{position:fixed;top:0;left:0;bottom:0;width:270px;background:var(--bg2);border-right:1px solid var(--line2);z-index:130;transform:translateX(-100%);transition:transform .32s cubic-bezier(.2,.8,.2,1);display:flex;flex-direction:column;padding:26px 0}
+#sidebar.open{transform:none}
+.sb-logo{font-family:'Cormorant Garamond',serif;font-size:19px;letter-spacing:7px;color:var(--gold);font-weight:600;padding:0 26px 8px}
+.sb-rule{width:36px;height:1px;background:var(--gold);margin:8px 26px 22px}
+.sb-item{display:flex;align-items:center;gap:14px;padding:15px 26px;color:var(--sub2);text-decoration:none;font-size:13.5px;letter-spacing:1.5px;border-left:2px solid transparent;transition:all .2s;cursor:pointer}
+.sb-item:hover{background:var(--gold-dim);color:var(--text)}
+.sb-item.active{color:var(--gold2);border-left-color:var(--gold);background:var(--gold-dim)}
+.sb-item .ic{width:20px;text-align:center;flex-shrink:0}
+.sb-foot{margin-top:auto;padding:20px 26px;font-size:10.5px;color:var(--sub);letter-spacing:1px;line-height:1.9;border-top:1px solid var(--line)}
+
 footer{border-top:1px solid var(--line);padding:34px 24px;text-align:center}
 footer .logo{font-size:15px;letter-spacing:6px}
 footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
@@ -181,10 +196,24 @@ footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
 
 <header>
   <div class="hd-in">
-    <div class="logo">CONNECTION</div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <button class="menu-btn" onclick="toggleSidebar()" aria-label="メニュー">☰</button>
+      <div class="logo">CONNECTION</div>
+    </div>
     <div class="hd-note">BLOCKCHAIN&nbsp;FORENSICS</div>
   </div>
 </header>
+
+<!-- サイドバー -->
+<div id="sideOvl" onclick="toggleSidebar()"></div>
+<nav id="sidebar">
+  <div class="sb-logo">CONNECTION</div>
+  <div class="sb-rule"></div>
+  <a class="sb-item active" onclick="navHome()"><span class="ic">🏠</span>ホーム</a>
+  <a class="sb-item" onclick="navSearch()"><span class="ic">🔍</span>新しい調査</a>
+  <a class="sb-item" onclick="navPlan()"><span class="ic">📄</span>正式調査報告書のご案内</a>
+  <div class="sb-foot">サポートチャットは報告書を<br>ご購入のお客様へメールで<br>ご案内しています。</div>
+</nav>
 
 <section class="hero">
   <div class="rule"></div>
@@ -271,6 +300,31 @@ footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
 let currentTxid = '';
 let currentResult = null;
 let pollTimer = null;
+
+// ── サイドバー ──
+function toggleSidebar(){
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sideOvl').classList.toggle('open');
+}
+function navHome(){
+  toggleSidebar();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+function navSearch(){
+  toggleSidebar();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  setTimeout(() => document.getElementById('txidInput').focus(), 500);
+}
+function navPlan(){
+  toggleSidebar();
+  const cta = document.getElementById('ctaBox');
+  if(document.getElementById('result').style.display === 'block'){
+    cta.scrollIntoView({ behavior: 'smooth' });
+  } else {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setTimeout(() => document.getElementById('txidInput').focus(), 500);
+  }
+}
 
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function shortAddr(a){ return a ? a.slice(0,10) + '…' + a.slice(-6) : '不明'; }

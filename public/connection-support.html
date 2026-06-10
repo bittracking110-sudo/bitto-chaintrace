@@ -43,17 +43,46 @@ textarea:focus{border-color:var(--gold)}
 .send{background:var(--gold);color:#0a0c12;border:none;font-weight:700;font-size:13px;letter-spacing:2px;padding:13px 24px;border-radius:12px;cursor:pointer;flex-shrink:0}
 .send:disabled{background:#3a3f50;color:#6a7080;cursor:not-allowed}
 .err{color:var(--red);font-size:12px;text-align:center;padding:8px 0 0;display:none}
+
+/* ── サイドバー ── */
+.menu-btn{background:none;border:1px solid var(--line2);border-radius:8px;color:var(--gold);font-size:17px;padding:7px 12px;cursor:pointer;line-height:1;flex-shrink:0}
+.menu-btn:hover{border-color:var(--gold)}
+#sideOvl{position:fixed;inset:0;background:rgba(5,6,10,.65);backdrop-filter:blur(2px);z-index:90;display:none;opacity:0;transition:opacity .3s}
+#sideOvl.open{display:block;opacity:1}
+#sidebar{position:fixed;top:0;left:0;bottom:0;width:270px;background:var(--bg2);border-right:1px solid var(--line2);z-index:100;transform:translateX(-100%);transition:transform .32s cubic-bezier(.2,.8,.2,1);display:flex;flex-direction:column;padding:26px 0}
+#sidebar.open{transform:none}
+.sb-logo{font-family:'Cormorant Garamond',serif;font-size:19px;letter-spacing:7px;color:var(--gold);font-weight:600;padding:0 26px 8px}
+.sb-rule{width:36px;height:1px;background:var(--gold);margin:8px 26px 22px}
+.sb-item{display:flex;align-items:center;gap:14px;padding:15px 26px;color:var(--sub2);text-decoration:none;font-size:13.5px;letter-spacing:1.5px;border-left:2px solid transparent;transition:all .2s;cursor:pointer}
+.sb-item:hover{background:var(--gold-dim);color:var(--text)}
+.sb-item.active{color:var(--gold2);border-left-color:var(--gold);background:var(--gold-dim)}
+.sb-item .ic{width:20px;text-align:center;flex-shrink:0}
+.sb-foot{margin-top:auto;padding:20px 26px;font-size:10.5px;color:var(--sub);letter-spacing:1px;line-height:1.9;border-top:1px solid var(--line)}
 </style>
 </head>
 <body>
 
 <header>
-  <div>
-    <div class="logo">CONNECTION</div>
-    <div class="hd-sub">専任サポートチャット</div>
+  <div style="display:flex;align-items:center;gap:14px">
+    <button class="menu-btn" onclick="toggleSidebar()" aria-label="メニュー">☰</button>
+    <div>
+      <div class="logo">CONNECTION</div>
+      <div class="hd-sub">専任サポートチャット</div>
+    </div>
   </div>
   <a class="rep-link" id="repLink" href="#" target="_blank" style="display:none">調査報告書を開く ↗</a>
 </header>
+
+<!-- サイドバー -->
+<div id="sideOvl" onclick="toggleSidebar()"></div>
+<nav id="sidebar">
+  <div class="sb-logo">CONNECTION</div>
+  <div class="sb-rule"></div>
+  <a class="sb-item" href="/connection"><span class="ic">🏠</span>ホーム（資金追跡）</a>
+  <a class="sb-item" id="sbReport" href="#" target="_blank" style="display:none"><span class="ic">📄</span>調査報告書</a>
+  <a class="sb-item active"><span class="ic">💬</span>サポートチャット</a>
+  <div class="sb-foot">Blockchain Forensics<br>&amp; Asset Tracing</div>
+</nav>
 
 <div id="chat">
   <div class="notice">
@@ -73,6 +102,11 @@ textarea:focus{border-color:var(--gold)}
 <script>
 const token = location.pathname.split('/').pop();
 const chatEl = document.getElementById('chat');
+
+function toggleSidebar(){
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sideOvl').classList.toggle('open');
+}
 
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -108,6 +142,9 @@ async function load(){
       const link = document.getElementById('repLink');
       link.href = j.reportUrl;
       link.style.display = 'inline-block';
+      const sbRep = document.getElementById('sbReport');
+      sbRep.href = j.reportUrl;
+      sbRep.style.display = 'flex';
     }
     (j.messages || []).forEach(m => addMsg(m.role, m.text));
     if(!(j.messages || []).length){
