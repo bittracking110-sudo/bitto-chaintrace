@@ -24,7 +24,12 @@ a{color:var(--gold)}
 /* ── ヘッダー ── */
 header{position:sticky;top:0;z-index:50;background:rgba(10,12,18,.88);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
 .hd-in{max-width:1080px;margin:0 auto;padding:18px 24px;display:flex;align-items:center;justify-content:space-between}
-.logo{font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:600;letter-spacing:8px;color:var(--gold)}
+.logo{font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:600;letter-spacing:2.5px;background:linear-gradient(180deg,#f0e2b6 0%,#d9bc82 45%,#c9a96e 60%,#a8854a 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+/* ── ロゴ装飾ライン（ゴールド＋中央ダイヤ） ── */
+.ornament{display:flex;align-items:center;justify-content:center;gap:12px}
+.ornament span{display:block;width:120px;height:1px;background:linear-gradient(90deg,transparent,var(--gold));}
+.ornament span:last-child{background:linear-gradient(90deg,var(--gold),transparent)}
+.ornament i{color:var(--gold2);font-style:normal;font-size:13px;line-height:1;transform:translateY(-1px)}
 .hd-note{font-size:11px;color:var(--sub);letter-spacing:2px}
 
 /* ── ヒーロー ── */
@@ -197,7 +202,7 @@ header{position:sticky;top:0;z-index:50;background:rgba(10,12,18,.88);backdrop-f
 #sideOvl.open{display:block;opacity:1}
 #sidebar{position:fixed;top:0;left:0;bottom:0;width:270px;background:var(--bg2);border-right:1px solid var(--line2);z-index:130;transform:translateX(-100%);transition:transform .32s cubic-bezier(.2,.8,.2,1);display:flex;flex-direction:column;padding:26px 0}
 #sidebar.open{transform:none}
-.sb-logo{font-family:'Cormorant Garamond',serif;font-size:19px;letter-spacing:7px;color:var(--gold);font-weight:600;padding:0 26px 8px}
+.sb-logo{font-family:'Cormorant Garamond',serif;font-size:21px;letter-spacing:2px;font-weight:600;padding:0 26px 8px;background:linear-gradient(180deg,#f0e2b6,#c9a96e 60%,#a8854a);-webkit-background-clip:text;background-clip:text;color:transparent}
 .sb-rule{width:36px;height:1px;background:var(--gold);margin:8px 26px 22px}
 .sb-item{display:flex;align-items:center;gap:14px;padding:15px 26px;color:var(--sub2);text-decoration:none;font-size:13.5px;letter-spacing:1.5px;border-left:2px solid transparent;transition:all .2s;cursor:pointer}
 .sb-item:hover{background:var(--gold-dim);color:var(--text)}
@@ -218,7 +223,7 @@ footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
   <div class="hd-in">
     <div style="display:flex;align-items:center;gap:14px">
       <button class="menu-btn" onclick="toggleSidebar()" aria-label="メニュー">☰</button>
-      <div class="logo">CONNECTION</div>
+      <div class="logo">Connection</div>
     </div>
     <div class="hd-note">BLOCKCHAIN&nbsp;FORENSICS</div>
   </div>
@@ -227,7 +232,7 @@ footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
 <!-- サイドバー -->
 <div id="sideOvl" onclick="toggleSidebar()"></div>
 <nav id="sidebar">
-  <div class="sb-logo">CONNECTION</div>
+  <div class="sb-logo">Connection</div>
   <div class="sb-rule"></div>
   <a class="sb-item active" onclick="navHome()"><span class="ic">🏠</span>ホーム</a>
   <a class="sb-item" onclick="navSearch()"><span class="ic">🔍</span>新しい調査</a>
@@ -236,7 +241,8 @@ footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
 </nav>
 
 <section class="hero">
-  <div class="rule"></div>
+  <div class="logo" style="font-size:clamp(40px,8vw,64px);letter-spacing:3px;margin-bottom:14px">Connection</div>
+  <div class="ornament" style="margin-bottom:36px"><span></span><i>✦</i><span></span></div>
   <h1>失われた資産の行方を、<br><b>確かな証拠</b>に変える。</h1>
   <p class="lead">トランザクションID（TXID）を入力するだけで、資金の流れを追跡しフローマップで可視化します。</p>
 
@@ -294,8 +300,8 @@ footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
 <div id="modal">
   <div class="md">
     <button class="mx" onclick="closeModal()">×</button>
-    <div class="logo serif" style="color:var(--gold);letter-spacing:6px">CONNECTION</div>
-    <div class="rule"></div>
+    <div class="logo" style="text-align:center;font-size:22px">Connection</div>
+    <div class="ornament" style="margin:10px 0 22px"><span style="width:60px"></span><i>✦</i><span style="width:60px"></span></div>
     <h3>正式調査報告書のご依頼</h3>
     <p class="mp">調査費用：<b id="mTotal">¥11,000</b>（税込）</p>
     <label>お名前</label>
@@ -332,9 +338,9 @@ footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
       <h4>第1条（目的と適用）</h4>
       <p>本規約は、Himesen株式会社（以下「当社」）が提供する仮想通貨調査・トラッキングアプリ（以下「本サービス」）の利用条件を定めるものです。</p>
       <p>本サービスは、ユーザーが指定したトランザクションIDやウォレットアドレスに基づき、ブロックチェーン上の資金移動履歴を調査・可視化する情報提供サービスです。</p>
-      <h4>第2条（利用料金およびアプリ内課金）</h4>
-      <p>本サービスの有料機能（詳細レポートの出力、複数ホップの追跡等）は、Apple Inc. または Google LLC が提供する決済システムを通じて課金されます。</p>
-      <p>ユーザーの端末設定に基づく自動更新（サブスクリプションの場合）の解除は、ユーザー自身が各OSの規定の手順に従って行うものとします。</p>
+      <h4>第2条（利用料金および課金）</h4>
+      <p>本サービスの有料機能（詳細レポートの出力、複数ホップの追跡等）は、当社が指定する決済代行サービス（Stripe）を通じて課金されます。</p>
+      <p>サブスクリプション形式の課金がある場合、自動更新の解除はユーザー自身が当社所定の手順に従って行うものとします。</p>
       <h4>第3条（返金・キャンセルポリシー）</h4>
       <p>デジタルコンテンツという商品の特性上、また事前の調査リソースを消費する性質上、課金完了後のキャンセルおよび返金は、いかなる理由（「追跡が途中で途絶えた」「期待した結果と異なった」等）があっても一切お受けできません。</p>
       <p>法令に基づき返金が義務付けられる場合を除き、当社は返金義務を負いません。</p>
@@ -354,7 +360,8 @@ footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
 </div>
 
 <footer>
-  <div class="logo serif" style="color:var(--gold)">CONNECTION</div>
+  <div class="logo" style="font-size:20px">Connection</div>
+  <div class="ornament" style="margin-top:8px"><span style="width:70px"></span><i>✦</i><span style="width:70px"></span></div>
   <p>Blockchain Forensics &amp; Asset Tracing</p>
 </footer>
 

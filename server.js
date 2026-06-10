@@ -2636,8 +2636,8 @@ function buildConnectionTxidFormEmailHTML(name, formUrl, count) {
 <body style="margin:0;background:#0a0c12;font-family:'Hiragino Mincho ProN','Yu Mincho',serif;padding:32px 16px">
 <div style="max-width:560px;margin:0 auto;background:#12151f;border:1px solid #2a3045;border-radius:12px;overflow:hidden">
   <div style="padding:36px 32px 28px;text-align:center;border-bottom:1px solid #2a3045">
-    <div style="font-size:26px;letter-spacing:8px;color:#c9a96e;font-weight:600">CONNECTION</div>
-    <div style="width:48px;height:1px;background:#c9a96e;margin:14px auto 0"></div>
+    <div style="font-size:30px;letter-spacing:3px;color:#c9a96e;font-weight:600;font-family:Georgia,'Times New Roman',serif">Connection</div>
+    <div style="margin:14px auto 0;color:#c9a96e;font-size:11px;letter-spacing:2px">──────&nbsp;✦&nbsp;──────</div>
   </div>
   <div style="padding:32px;color:#eae6dc;font-size:14px;line-height:2">
     <p style="margin:0 0 18px">${name} 様</p>
@@ -2658,8 +2658,8 @@ function buildConnectionEmailHTML(name, reportUrl, chatUrl, issuedAt) {
 <body style="margin:0;background:#0a0c12;font-family:'Hiragino Mincho ProN','Yu Mincho',serif;padding:32px 16px">
 <div style="max-width:560px;margin:0 auto;background:#12151f;border:1px solid #2a3045;border-radius:12px;overflow:hidden">
   <div style="padding:36px 32px 28px;text-align:center;border-bottom:1px solid #2a3045">
-    <div style="font-size:26px;letter-spacing:8px;color:#c9a96e;font-weight:600">CONNECTION</div>
-    <div style="width:48px;height:1px;background:#c9a96e;margin:14px auto 0"></div>
+    <div style="font-size:30px;letter-spacing:3px;color:#c9a96e;font-weight:600;font-family:Georgia,'Times New Roman',serif">Connection</div>
+    <div style="margin:14px auto 0;color:#c9a96e;font-size:11px;letter-spacing:2px">──────&nbsp;✦&nbsp;──────</div>
   </div>
   <div style="padding:32px;color:#eae6dc;font-size:14px;line-height:2">
     <p style="margin:0 0 18px">${name} 様</p>
@@ -2682,7 +2682,7 @@ function buildConnectionEmailHTML(name, reportUrl, chatUrl, issuedAt) {
 app.get('/connection', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection.html')));
 app.get('/support/:token', (req, res) => {
   if (!connectionChats.has(req.params.token)) {
-    return res.status(404).send('<!DOCTYPE html><html lang="ja"><body style="background:#0a0c12;color:#eae6dc;font-family:serif;display:flex;align-items:center;justify-content:center;min-height:100vh"><div style="text-align:center"><p style="letter-spacing:6px;color:#c9a96e">CONNECTION</p><p>このサポートチャットは見つかりませんでした。</p></div></body></html>');
+    return res.status(404).send('<!DOCTYPE html><html lang="ja"><body style="background:#0a0c12;color:#eae6dc;font-family:serif;display:flex;align-items:center;justify-content:center;min-height:100vh"><div style="text-align:center"><p style="letter-spacing:2px;color:#c9a96e;font-size:24px">Connection</p><p>このサポートチャットは見つかりませんでした。</p></div></body></html>');
   }
   res.sendFile(path.join(__dirname, 'public', 'connection-support.html'));
 });
@@ -2692,14 +2692,14 @@ app.get('/connection/success', (_req, res) => res.send(`<!DOCTYPE html>
 <style>
 body{margin:0;background:#0a0c12;color:#eae6dc;font-family:'Hiragino Mincho ProN','Yu Mincho',serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
 .card{background:#12151f;border:1px solid #2a3045;border-radius:14px;padding:48px 36px;max-width:460px;width:100%;text-align:center}
-.logo{font-size:22px;letter-spacing:8px;color:#c9a96e;font-weight:600}
-.rule{width:48px;height:1px;background:#c9a96e;margin:16px auto 28px}
+.logo{font-family:Georgia,'Times New Roman',serif;font-size:30px;letter-spacing:2px;font-weight:600;background:linear-gradient(180deg,#f0e2b6,#c9a96e 60%,#a8854a);-webkit-background-clip:text;background-clip:text;color:transparent}
+.rule{color:#c9a96e;font-size:11px;letter-spacing:2px;margin:14px auto 28px}
 h1{font-size:18px;font-weight:600;margin:0 0 16px}
 p{font-size:13.5px;line-height:2;color:#b8bcc8;margin:0 0 12px}
 </style></head><body>
 <div class="card">
-  <div class="logo">CONNECTION</div>
-  <div class="rule"></div>
+  <div class="logo">Connection</div>
+  <div class="rule">──────&nbsp;✦&nbsp;──────</div>
   <h1>お申し込みが完了しました</h1>
   <p>正式調査報告書の作成を開始いたしました。<br>完成次第、ご登録のメールアドレスへ<br>報告書と専任サポートチャットのご案内をお送りします。</p>
   <p style="font-size:12px;color:#8b91a0">通常10分〜30分ほどで完成します。<br>メールが届かない場合は迷惑メールフォルダをご確認ください。</p>
