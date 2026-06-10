@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connection — 暗号資産 資金追跡調査</title>
+<meta name="description" content="TXIDを入力するだけで、暗号資産の資金の流れをフローマップで可視化。到達取引所を特定し、正式な調査報告書を作成します。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Noto+Serif+JP:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0c12; --bg2:#0e1119; --panel:#12151f; --panel2:#161a26;
+  --line:#232838; --line2:#2a3045;
+  --gold:#c9a96e; --gold2:#e3cfa4; --gold-dim:rgba(201,169,110,.14);
+  --text:#eae6dc; --sub:#8b91a0; --sub2:#b8bcc8;
+  --red:#d97b7b; --blue:#7aa2c9; --green:#7bc9a3;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:'Noto Sans JP',sans-serif;font-size:15px;line-height:1.8;-webkit-font-smoothing:antialiased}
+.serif{font-family:'Cormorant Garamond','Noto Serif JP',serif}
+a{color:var(--gold)}
+
+/* ── ヘッダー ── */
+header{position:sticky;top:0;z-index:50;background:rgba(10,12,18,.88);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.hd-in{max-width:1080px;margin:0 auto;padding:18px 24px;display:flex;align-items:center;justify-content:space-between}
+.logo{font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:600;letter-spacing:8px;color:var(--gold)}
+.hd-note{font-size:11px;color:var(--sub);letter-spacing:2px}
+
+/* ── ヒーロー ── */
+.hero{max-width:780px;margin:0 auto;padding:72px 24px 48px;text-align:center}
+.hero .rule{width:56px;height:1px;background:var(--gold);margin:0 auto 28px}
+.hero h1{font-family:'Noto Serif JP',serif;font-size:clamp(22px,4.5vw,34px);font-weight:500;letter-spacing:4px;line-height:1.7}
+.hero h1 b{color:var(--gold2);font-weight:600}
+.hero p.lead{margin-top:18px;color:var(--sub2);font-size:14px;letter-spacing:1px}
+
+/* ── 検索バー ── */
+.search{margin:40px auto 0;max-width:640px;display:flex;gap:0;border:1px solid var(--line2);border-radius:10px;overflow:hidden;background:var(--panel);transition:border-color .3s}
+.search:focus-within{border-color:var(--gold)}
+.search input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-size:14px;padding:18px 20px;font-family:monospace;letter-spacing:.5px}
+.search input::placeholder{color:#4a5060;font-family:'Noto Sans JP',sans-serif;letter-spacing:1px}
+.search button{background:var(--gold);color:#0a0c12;border:none;font-weight:700;font-size:14px;letter-spacing:3px;padding:0 32px;cursor:pointer;font-family:'Noto Sans JP',sans-serif;transition:background .3s;white-space:nowrap}
+.search button:hover{background:var(--gold2)}
+.search button:disabled{background:#3a3f50;color:#6a7080;cursor:not-allowed}
+.chains{margin-top:14px;font-size:12px;color:var(--sub);letter-spacing:2px}
+.err{margin:16px auto 0;max-width:640px;color:var(--red);font-size:13px;display:none}
+
+/* ── ローディング ── */
+#loading{display:none;max-width:560px;margin:48px auto;padding:0 24px}
+.lstep{display:flex;align-items:center;gap:16px;padding:16px 0;border-bottom:1px solid var(--line);opacity:.3;transition:opacity .5s}
+.lstep.on{opacity:1}
+.lstep.done{opacity:.65}
+.lstep .ldot{width:10px;height:10px;border-radius:50%;background:var(--line2);flex-shrink:0;position:relative}
+.lstep.on .ldot{background:var(--gold)}
+.lstep.on .ldot::after{content:'';position:absolute;inset:-5px;border-radius:50%;border:1px solid var(--gold);animation:pulse 1.6s infinite}
+.lstep.done .ldot{background:var(--green)}
+@keyframes pulse{0%{transform:scale(.6);opacity:1}100%{transform:scale(1.6);opacity:0}}
+.lstep span{font-size:13.5px;letter-spacing:1.5px;color:var(--sub2)}
+.lstep.on span{color:var(--text)}
+.lnote{text-align:center;margin-top:24px;font-size:12px;color:var(--sub);letter-spacing:1px}
+
+/* ── 結果 ── */
+#result{display:none;max-width:1080px;margin:0 auto;padding:24px}
+.sum{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:40px}
+.sum .sc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+.sc .sk{font-size:11px;color:var(--sub);letter-spacing:2px;margin-bottom:6px}
+.sc .sv{font-size:15px;font-weight:500;letter-spacing:.5px;word-break:break-all}
+.sc .sv.gold{color:var(--gold2)}
+@media(max-width:760px){.sum{grid-template-columns:repeat(2,1fr)}}
+
+.sec-t{font-family:'Noto Serif JP',serif;font-size:17px;font-weight:600;letter-spacing:4px;margin:0 0 6px;display:flex;align-items:center;gap:14px}
+.sec-t::after{content:'';flex:1;height:1px;background:var(--line)}
+.sec-s{font-size:12px;color:var(--sub);letter-spacing:1px;margin-bottom:28px}
+
+/* ── フローマップ ── */
+.flow{position:relative;max-width:640px;margin:0 auto 56px}
+.fnode{display:flex;gap:18px;cursor:pointer}
+.frail{display:flex;flex-direction:column;align-items:center;flex-shrink:0;width:24px}
+.fdot{width:16px;height:16px;border-radius:50%;border:2px solid;flex-shrink:0;margin-top:22px;background:var(--bg)}
+.fline{width:1px;flex:1;background:linear-gradient(180deg,var(--line2),var(--gold-dim))}
+.fnode:last-child .fline{display:none}
+.fcard{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin-bottom:22px;transition:border-color .25s,transform .25s;position:relative}
+.fnode:hover .fcard{border-color:var(--gold);transform:translateX(3px)}
+.fcard::after{content:'詳細を見る ›';position:absolute;top:18px;right:20px;font-size:11px;color:var(--sub);letter-spacing:1px;opacity:0;transition:opacity .25s}
+.fnode:hover .fcard::after{opacity:1}
+.fk-victim .fdot{border-color:var(--red)}
+.fk-relay .fdot{border-color:var(--blue)}
+.fk-exchange .fdot{border-color:var(--gold);background:var(--gold);box-shadow:0 0 14px rgba(201,169,110,.5)}
+.ftitle{font-size:12px;letter-spacing:2.5px;margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.fk-victim .ftitle{color:var(--red)}
+.fk-relay .ftitle{color:var(--blue)}
+.fk-exchange .ftitle{color:var(--gold2)}
+.fchip{display:inline-block;background:var(--gold-dim);border:1px solid rgba(201,169,110,.35);color:var(--gold2);font-size:11px;padding:2px 10px;border-radius:20px;letter-spacing:1px}
+.faddr{font-family:monospace;font-size:13.5px;color:var(--text);letter-spacing:.5px;word-break:break-all}
+.fmeta{margin-top:8px;font-size:12px;color:var(--sub);display:flex;gap:18px;flex-wrap:wrap}
+.fmeta b{color:var(--sub2);font-weight:500}
+.fsibs{margin:-8px 0 22px 42px;display:flex;flex-direction:column;gap:8px}
+.fsib{background:var(--bg2);border:1px dashed var(--line2);border-radius:8px;padding:10px 16px;font-size:12px;color:var(--sub2);cursor:pointer;transition:border-color .25s;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.fsib:hover{border-color:var(--gold)}
+.fsib .tag{color:var(--sub);letter-spacing:1px;font-size:11px}
+.fsib code{font-family:monospace;color:var(--text)}
+
+/* ── CTA ── */
+.cta{max-width:760px;margin:0 auto 72px;background:linear-gradient(160deg,var(--panel2),var(--panel));border:1px solid rgba(201,169,110,.4);border-radius:16px;padding:48px 40px;text-align:center;position:relative;overflow:hidden}
+.cta::before{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:200px;height:1px;background:linear-gradient(90deg,transparent,var(--gold),transparent)}
+.cta h2{font-family:'Noto Serif JP',serif;font-size:21px;font-weight:600;letter-spacing:3px;line-height:1.8}
+.cta .cl{margin:28px auto;max-width:420px;text-align:left;display:flex;flex-direction:column;gap:12px}
+.cta .cl div{display:flex;gap:12px;font-size:13.5px;color:var(--sub2)}
+.cta .cl div::before{content:'─';color:var(--gold);flex-shrink:0}
+.price{margin:8px 0 26px}
+.price .py{font-family:'Cormorant Garamond',serif;font-size:42px;font-weight:600;color:var(--gold2);letter-spacing:1px}
+.price .pn{font-size:12px;color:var(--sub);letter-spacing:2px;margin-top:2px}
+.cta button{background:var(--gold);color:#0a0c12;border:none;font-weight:700;font-size:14px;letter-spacing:4px;padding:17px 56px;border-radius:8px;cursor:pointer;font-family:'Noto Sans JP',sans-serif;transition:all .3s}
+.cta button:hover{background:var(--gold2);box-shadow:0 8px 32px rgba(201,169,110,.25)}
+.cta .cn{margin-top:16px;font-size:11px;color:var(--sub);letter-spacing:1px}
+
+/* ── ドロワー（ウォレット詳細） ── */
+#ovl{position:fixed;inset:0;background:rgba(5,6,10,.7);backdrop-filter:blur(3px);z-index:90;display:none;opacity:0;transition:opacity .3s}
+#drawer{position:fixed;top:0;right:0;bottom:0;width:min(440px,100%);background:var(--bg2);border-left:1px solid var(--line2);z-index:100;transform:translateX(100%);transition:transform .35s cubic-bezier(.2,.8,.2,1);display:flex;flex-direction:column}
+#drawer.open{transform:translateX(0)}
+#ovl.open{display:block;opacity:1}
+.dr-hd{padding:22px 26px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.dr-hd .t{font-size:13px;letter-spacing:3px;color:var(--gold)}
+.dr-x{background:none;border:none;color:var(--sub);font-size:22px;cursor:pointer;line-height:1}
+.dr-bd{flex:1;overflow-y:auto;padding:26px}
+.dr-addr{font-family:monospace;font-size:13px;word-break:break-all;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;color:var(--text);cursor:pointer;position:relative}
+.dr-addr:active{border-color:var(--gold)}
+.dr-badge{display:inline-block;font-size:11px;letter-spacing:2px;padding:4px 14px;border-radius:20px;margin:16px 0 4px}
+.b-exchange{background:var(--gold-dim);color:var(--gold2);border:1px solid rgba(201,169,110,.4)}
+.b-hot{background:rgba(122,162,201,.12);color:var(--blue);border:1px solid rgba(122,162,201,.35)}
+.b-wallet{background:rgba(139,145,160,.1);color:var(--sub2);border:1px solid var(--line2)}
+.dr-label{font-family:'Noto Serif JP',serif;font-size:18px;font-weight:600;color:var(--gold2);margin:6px 0 18px;letter-spacing:1px}
+.dr-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:26px}
+.dr-cell{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+.dr-cell .k{font-size:10.5px;color:var(--sub);letter-spacing:2px;margin-bottom:4px}
+.dr-cell .v{font-size:14px;font-weight:500}
+.dr-st{font-size:12px;letter-spacing:2.5px;color:var(--sub);margin:0 0 14px;display:flex;align-items:center;gap:12px}
+.dr-st::after{content:'';flex:1;height:1px;background:var(--line)}
+.dr-tx{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:10px;font-size:12px}
+.dr-tx .r1{display:flex;justify-content:space-between;margin-bottom:4px}
+.dr-tx .dir-out{color:var(--red);letter-spacing:1px}
+.dr-tx .dir-in{color:var(--green);letter-spacing:1px}
+.dr-tx .amt{font-weight:500;color:var(--text)}
+.dr-tx .r2{color:var(--sub);font-size:11px;display:flex;justify-content:space-between;gap:10px}
+.dr-tx .r2 code{font-family:monospace}
+.dr-link{display:block;text-align:center;margin-top:18px;font-size:12.5px;letter-spacing:1px;color:var(--gold);text-decoration:none;border:1px solid rgba(201,169,110,.35);border-radius:8px;padding:12px}
+.dr-link:hover{background:var(--gold-dim)}
+.dr-loading{text-align:center;color:var(--sub);font-size:13px;padding:30px 0;letter-spacing:1px}
+@media(max-width:560px){
+  #drawer{top:auto;height:82vh;width:100%;border-left:none;border-top:1px solid var(--line2);border-radius:18px 18px 0 0;transform:translateY(100%)}
+  #drawer.open{transform:translateY(0)}
+}
+
+/* ── 申込モーダル ── */
+#modal{position:fixed;inset:0;z-index:110;display:none;align-items:center;justify-content:center;padding:20px;background:rgba(5,6,10,.78);backdrop-filter:blur(4px)}
+#modal.open{display:flex}
+.md{background:var(--bg2);border:1px solid var(--line2);border-radius:16px;max-width:440px;width:100%;padding:38px 34px;position:relative}
+.md .logo{text-align:center;font-size:17px;margin-bottom:6px}
+.md .rule{width:40px;height:1px;background:var(--gold);margin:12px auto 24px}
+.md h3{text-align:center;font-family:'Noto Serif JP',serif;font-size:16px;font-weight:600;letter-spacing:2px}
+.md .mp{text-align:center;font-size:13px;color:var(--sub2);margin:10px 0 24px}
+.md .mp b{color:var(--gold2);font-size:20px;font-family:'Cormorant Garamond',serif}
+.md label{display:block;font-size:11.5px;letter-spacing:2px;color:var(--sub);margin:16px 0 6px}
+.md input{width:100%;background:var(--panel);border:1px solid var(--line2);border-radius:8px;color:var(--text);font-size:14px;padding:13px 16px;outline:none;transition:border-color .3s}
+.md input:focus{border-color:var(--gold)}
+.md .magree{display:flex;gap:10px;align-items:flex-start;margin:20px 0;font-size:12px;color:var(--sub2)}
+.md .magree input{width:auto;margin-top:3px}
+.md button.go{width:100%;background:var(--gold);color:#0a0c12;border:none;font-weight:700;font-size:14px;letter-spacing:3px;padding:16px;border-radius:8px;cursor:pointer;margin-top:4px}
+.md button.go:disabled{background:#3a3f50;color:#6a7080;cursor:not-allowed}
+.md .mx{position:absolute;top:16px;right:20px;background:none;border:none;color:var(--sub);font-size:22px;cursor:pointer}
+.md .merr{color:var(--red);font-size:12px;margin-top:12px;display:none;text-align:center}
+
+footer{border-top:1px solid var(--line);padding:34px 24px;text-align:center}
+footer .logo{font-size:15px;letter-spacing:6px}
+footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
+.fade{animation:fadein .8s ease}
+@keyframes fadein{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hd-in">
+    <div class="logo">CONNECTION</div>
+    <div class="hd-note">BLOCKCHAIN&nbsp;FORENSICS</div>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="rule"></div>
+  <h1>失われた資産の行方を、<br><b>確かな証拠</b>に変える。</h1>
+  <p class="lead">トランザクションID（TXID）を入力するだけで、資金の流れを追跡しフローマップで可視化します。</p>
+
+  <div class="search">
+    <input id="txidInput" type="text" placeholder="TXID を入力（例：0x3636e73a…）" autocomplete="off" spellcheck="false">
+    <button id="goBtn" onclick="startInvestigation()">追跡開始</button>
+  </div>
+  <div class="chains">BITCOIN ／ ETHEREUM ／ XRP &nbsp;対応・追跡調査は無料</div>
+  <div class="err" id="searchErr"></div>
+</section>
+
+<section id="loading">
+  <div class="lstep" id="ls1"><div class="ldot"></div><span>トランザクションを取得しています</span></div>
+  <div class="lstep" id="ls2"><div class="ldot"></div><span>資金フローを解析しています</span></div>
+  <div class="lstep" id="ls3"><div class="ldot"></div><span>アドレスラベル・取引所情報を照会しています</span></div>
+  <div class="lstep" id="ls4"><div class="ldot"></div><span>フローマップを生成しています</span></div>
+  <div class="lnote">資金の経由数によっては数分かかる場合があります。このままお待ちください。</div>
+</section>
+
+<section id="result">
+  <div class="sum" id="sumCards"></div>
+
+  <div class="sec-t">資金フローマップ</div>
+  <div class="sec-s">各アドレスを選択すると、取引履歴・ウォレット種別・取引所情報をご確認いただけます。</div>
+  <div class="flow" id="flowMap"></div>
+
+  <div class="cta" id="ctaBox">
+    <h2>この資金フローを、<br>正式な証拠資料に。</h2>
+    <div class="cl">
+      <div>取引所向け 資産凍結要請状（正式文書）</div>
+      <div>警察・弁護士提出用 調査報告書</div>
+      <div>AIによる総合分析・追跡評価</div>
+      <div>専任サポートチャット（納品後のご相談に対応）</div>
+    </div>
+    <div class="price">
+      <div class="py">¥11,000</div>
+      <div class="pn">税込・1TXID</div>
+    </div>
+    <button onclick="openModal()">正式調査報告書を依頼する</button>
+    <div class="cn">お支払いはクレジットカード（Stripe決済）に対応しています。</div>
+  </div>
+</section>
+
+<!-- ウォレット詳細ドロワー -->
+<div id="ovl" onclick="closeDrawer()"></div>
+<aside id="drawer">
+  <div class="dr-hd">
+    <span class="t">WALLET&nbsp;DETAIL</span>
+    <button class="dr-x" onclick="closeDrawer()">×</button>
+  </div>
+  <div class="dr-bd" id="drawerBody"></div>
+</aside>
+
+<!-- 申込モーダル -->
+<div id="modal">
+  <div class="md">
+    <button class="mx" onclick="closeModal()">×</button>
+    <div class="logo serif" style="color:var(--gold);letter-spacing:6px">CONNECTION</div>
+    <div class="rule"></div>
+    <h3>正式調査報告書のご依頼</h3>
+    <p class="mp">調査費用：<b>¥11,000</b>（税込）／ 1TXID</p>
+    <label>お名前</label>
+    <input id="mName" type="text" placeholder="山田 太郎">
+    <label>メールアドレス（報告書の送付先）</label>
+    <input id="mEmail" type="email" placeholder="example@mail.com">
+    <div class="magree">
+      <input type="checkbox" id="mAgree">
+      <span>調査結果に基づく報告書の作成に同意します。本調査は資産の回復を保証するものではありません。</span>
+    </div>
+    <button class="go" id="mGo" onclick="checkout()">お支払いへ進む</button>
+    <div class="merr" id="mErr"></div>
+  </div>
+</div>
+
+<footer>
+  <div class="logo serif" style="color:var(--gold)">CONNECTION</div>
+  <p>Blockchain Forensics &amp; Asset Tracing</p>
+</footer>
+
+<script>
+let currentTxid = '';
+let currentResult = null;
+let pollTimer = null;
+
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function shortAddr(a){ return a ? a.slice(0,10) + '…' + a.slice(-6) : '不明'; }
+function fmtTime(t){
+  if(!t) return '';
+  try{
+    const s = typeof t === 'string' ? t.replace(' ','T').replace(/Z+$/,'') + 'Z' : t;
+    const d = new Date(s);
+    if(isNaN(d.getTime())) return '';
+    return d.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
+  }catch{ return ''; }
+}
+function fmtAmt(v, unit){
+  if(v == null || isNaN(v)) return '';
+  const n = v >= 1000 ? v.toLocaleString('ja-JP',{maximumFractionDigits:2}) : v.toFixed(6).replace(/\.?0+$/,'');
+  return n + ' ' + (unit || '');
+}
+
+// ── 調査開始 ──
+async function startInvestigation(){
+  const txid = document.getElementById('txidInput').value.trim();
+  const errEl = document.getElementById('searchErr');
+  errEl.style.display = 'none';
+  if(!/^(0x)?[0-9a-fA-F]{64}$/.test(txid)){
+    errEl.textContent = 'TXIDの形式が正しくありません。64文字のトランザクションIDをご入力ください。';
+    errEl.style.display = 'block';
+    return;
+  }
+  const btn = document.getElementById('goBtn');
+  btn.disabled = true;
+  btn.textContent = '追跡中…';
+  document.getElementById('result').style.display = 'none';
+  document.getElementById('loading').style.display = 'block';
+  setLoadStep(1);
+  try{
+    const r = await fetch('/api/connection/investigate',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ txid }),
+    });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error || '調査を開始できませんでした');
+    currentTxid = txid;
+    setLoadStep(2);
+    let polls = 0;
+    pollTimer = setInterval(async () => {
+      polls++;
+      if(polls === 6) setLoadStep(3);
+      if(polls > 100){ clearInterval(pollTimer); failLoad('調査がタイムアウトしました。時間をおいて再度お試しください。'); return; }
+      try{
+        const pr = await fetch('/api/connection/job/' + j.jobId);
+        const pj = await pr.json();
+        if(pj.status === 'done'){
+          clearInterval(pollTimer);
+          setLoadStep(4);
+          setTimeout(() => renderResult(pj.result), 600);
+        } else if(pj.status === 'error'){
+          clearInterval(pollTimer);
+          failLoad(pj.error || '調査中にエラーが発生しました');
+        }
+      }catch{}
+    }, 3000);
+  }catch(e){
+    failLoad(e.message);
+  }
+}
+
+function setLoadStep(n){
+  for(let i=1;i<=4;i++){
+    const el = document.getElementById('ls'+i);
+    el.classList.remove('on');
+    el.classList.toggle('done', i < n);
+    if(i === n) el.classList.add('on');
+  }
+}
+function failLoad(msg){
+  document.getElementById('loading').style.display = 'none';
+  const errEl = document.getElementById('searchErr');
+  errEl.textContent = msg;
+  errEl.style.display = 'block';
+  const btn = document.getElementById('goBtn');
+  btn.disabled = false;
+  btn.textContent = '追跡開始';
+}
+
+// ── 結果描画 ──
+function renderResult(result){
+  currentResult = result;
+  document.getElementById('loading').style.display = 'none';
+  const btn = document.getElementById('goBtn');
+  btn.disabled = false;
+  btn.textContent = '追跡開始';
+
+  // サマリーカード
+  const exNames = (result.exchanges || []).map(e => e.name).filter(Boolean);
+  const amountStr = (result.tokenSymbol && result.tokenAmount > 0)
+    ? fmtAmt(result.tokenAmount, result.tokenSymbol)
+    : fmtAmt(result.amount, result.chain);
+  document.getElementById('sumCards').innerHTML = `
+    <div class="sc"><div class="sk">CHAIN</div><div class="sv">${esc(result.chain)}</div></div>
+    <div class="sc"><div class="sk">送金日時</div><div class="sv">${esc(fmtTime(result.blockTime) || '不明')}</div></div>
+    <div class="sc"><div class="sk">送金額</div><div class="sv">${esc(amountStr || '不明')}</div></div>
+    <div class="sc"><div class="sk">到達取引所</div><div class="sv ${exNames.length ? 'gold' : ''}">${exNames.length ? esc(exNames[0]) + (exNames.length > 1 ? ' 他' : '') : '詳細調査で特定'}</div></div>`;
+
+  // フローマップ
+  const path = result.path || [];
+  let html = '';
+  let hopIdx = 0;
+  path.forEach((p, i) => {
+    let kind = 'relay', title = '';
+    if(i === 0 && p.role === 'sender'){ kind = 'victim'; title = '被害者ウォレット'; }
+    else {
+      hopIdx++;
+      if(p.isExchange){ kind = 'exchange'; title = `取引所到達（${hopIdx}次先）`; }
+      else { title = `中継アドレス（${hopIdx}次先）`; }
+    }
+    const chip = p.label ? `<span class="fchip">${esc(p.label)}</span>` : (kind === 'exchange' ? `<span class="fchip">取引所（調査中）</span>` : '');
+    const metaParts = [];
+    const t = fmtTime(p.time);
+    if(t) metaParts.push(`<span>📅 <b>${esc(t)}</b></span>`);
+    const am = fmtAmt(p.amount, p.token || result.chain);
+    if(am) metaParts.push(`<span>💰 <b>${esc(am)}</b></span>`);
+    if(p.txCount != null) metaParts.push(`<span>TX <b>${Number(p.txCount).toLocaleString()}件</b></span>`);
+
+    html += `
+    <div class="fnode fk-${kind} fade" onclick="openDrawer('${esc(p.address)}')">
+      <div class="frail"><div class="fdot"></div><div class="fline"></div></div>
+      <div class="fcard">
+        <div class="ftitle">${title}${chip}</div>
+        <div class="faddr">${esc(shortAddr(p.address))}</div>
+        ${metaParts.length ? `<div class="fmeta">${metaParts.join('')}</div>` : ''}
+      </div>
+    </div>`;
+
+    if((p.siblings || []).length){
+      html += `<div class="fsibs">` + p.siblings.map(s => `
+        <div class="fsib" onclick="openDrawer('${esc(s.address)}')">
+          <span class="tag">同時送金先</span>
+          <code>${esc(shortAddr(s.address))}</code>
+          ${s.label ? `<span class="fchip">${esc(s.label)}</span>` : ''}
+          ${s.amount ? `<span>${esc(fmtAmt(s.amount, s.token || result.chain))}</span>` : ''}
+        </div>`).join('') + `</div>`;
+    }
+  });
+  document.getElementById('flowMap').innerHTML = html;
+
+  document.getElementById('result').style.display = 'block';
+  document.getElementById('result').scrollIntoView({ behavior:'smooth' });
+}
+
+// ── ウォレット詳細ドロワー ──
+async function openDrawer(addr){
+  event && event.stopPropagation && event.stopPropagation();
+  document.getElementById('ovl').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
+  const body = document.getElementById('drawerBody');
+  body.innerHTML = `<div class="dr-loading">ウォレット情報を照会しています…</div>`;
+  try{
+    const chain = (currentResult?.chain || 'ETH').toLowerCase();
+    const r = await fetch(`/api/connection/address/${encodeURIComponent(addr)}?chain=${chain}`);
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error || '取得に失敗しました');
+
+    const badge = j.type === 'exchange' ? `<span class="dr-badge b-exchange">取引所ウォレット</span>`
+               : j.type === 'hot_wallet' ? `<span class="dr-badge b-hot">取引所系・大規模ウォレット（推定）</span>`
+               : `<span class="dr-badge b-wallet">個人ウォレット（EOA）</span>`;
+    const explorer = chain === 'eth' ? `https://etherscan.io/address/${addr}`
+                  : chain === 'btc' ? `https://blockchair.com/bitcoin/address/${addr}`
+                  : `https://xrpscan.com/account/${addr}`;
+
+    let txHtml = '';
+    if((j.txs || []).length){
+      txHtml = `<div class="dr-st">直近の取引履歴</div>` + j.txs.map(t => {
+        const dir = t.direction === 'out' ? `<span class="dir-out">送金 ↗</span>` : t.direction === 'in' ? `<span class="dir-in">入金 ↘</span>` : `<span style="color:var(--sub)">TX</span>`;
+        const peer = t.direction === 'out' ? t.to : t.from;
+        return `<div class="dr-tx">
+          <div class="r1">${dir}<span class="amt">${t.value != null ? esc(fmtAmt(t.value, t.unit)) : ''}</span></div>
+          <div class="r2"><code>${esc(shortAddr(peer || t.hash))}</code><span>${esc(fmtTime(t.time))}</span></div>
+        </div>`;
+      }).join('');
+    }
+
+    body.innerHTML = `
+      <div class="dr-addr" onclick="copyAddr('${esc(j.address)}', this)" title="タップでコピー">${esc(j.address)}</div>
+      ${badge}
+      ${j.label ? `<div class="dr-label">${esc(j.label)}</div>` : `<div style="height:14px"></div>`}
+      <div class="dr-grid">
+        <div class="dr-cell"><div class="k">残高</div><div class="v">${j.balance != null ? esc(fmtAmt(j.balance, j.chain)) : '—'}</div></div>
+        <div class="dr-cell"><div class="k">残高（USD）</div><div class="v">${j.balanceUSD != null ? '$' + Number(j.balanceUSD).toLocaleString('ja-JP',{maximumFractionDigits:0}) : '—'}</div></div>
+        <div class="dr-cell"><div class="k">総取引数</div><div class="v">${j.txCount != null ? Number(j.txCount).toLocaleString() + '件' : '—'}</div></div>
+        <div class="dr-cell"><div class="k">チェーン</div><div class="v">${esc(j.chain)}</div></div>
+      </div>
+      ${txHtml}
+      <a class="dr-link" href="${explorer}" target="_blank" rel="noopener">エクスプローラーで全履歴を確認する ↗</a>`;
+  }catch(e){
+    body.innerHTML = `<div class="dr-loading">${esc(e.message)}</div>`;
+  }
+}
+function closeDrawer(){
+  document.getElementById('ovl').classList.remove('open');
+  document.getElementById('drawer').classList.remove('open');
+}
+function copyAddr(a, el){
+  navigator.clipboard?.writeText(a).then(() => {
+    const prev = el.textContent;
+    el.textContent = 'コピーしました';
+    setTimeout(() => { el.textContent = prev; }, 900);
+  }).catch(() => {});
+}
+
+// ── 申込モーダル／決済 ──
+function openModal(){ document.getElementById('modal').classList.add('open'); }
+function closeModal(){ document.getElementById('modal').classList.remove('open'); }
+async function checkout(){
+  const name  = document.getElementById('mName').value.trim();
+  const email = document.getElementById('mEmail').value.trim();
+  const agree = document.getElementById('mAgree').checked;
+  const errEl = document.getElementById('mErr');
+  errEl.style.display = 'none';
+  if(!name){ errEl.textContent = 'お名前を入力してください'; errEl.style.display = 'block'; return; }
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ errEl.textContent = '正しいメールアドレスを入力してください'; errEl.style.display = 'block'; return; }
+  if(!agree){ errEl.textContent = '同意事項にチェックを入れてください'; errEl.style.display = 'block'; return; }
+  const btn = document.getElementById('mGo');
+  btn.disabled = true;
+  btn.textContent = '処理中…';
+  try{
+    const r = await fetch('/api/connection/checkout',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ txid: currentTxid, name, email }),
+    });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error || '決済処理に失敗しました');
+    location.href = j.url;
+  }catch(e){
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'お支払いへ進む';
+  }
+}
+
+document.getElementById('txidInput').addEventListener('keydown', e => { if(e.key === 'Enter') startInvestigation(); });
+</script>
+</body>
+</html>

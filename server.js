@@ -2040,6 +2040,16 @@ app.post('/stripe-webhook',
 
     if (event.type === 'checkout.session.completed') {
       const s = event.data.object;
+      // ── Connection（Web版）の決済：レポート生成＋メール送付で完結 ──
+      if (s.metadata?.brand === 'connection') {
+        const cEmail = s.customer_details?.email || s.customer_email || s.metadata.email || '';
+        fulfillConnectionOrder({
+          txid:         s.metadata.txid,
+          customerName: s.metadata.customerName || 'お客様',
+          email:        cEmail,
+        }).catch(e => console.error('[Connection] 注文処理エラー:', e.message));
+        return res.json({ received: true });
+      }
       const { sessionId, userId, txidCount, customerName } = s.metadata;
       const count = parseInt(txidCount) || 1;
       const cName = customerName || '（お名前）';
@@ -2507,6 +2517,328 @@ h1{color:#f87171;font-size:1.3rem;margin-bottom:12px}.icon{font-size:3rem;margin
   }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
+});
+
+// ══════════════════════════════════════════════════════════════
+// Connection — Web版 資金追跡アプリ（BitToと同一エンジン・別ブランド）
+// 価格：1TXID ¥11,000（税込）／正式報告書＋専任サポートチャット付
+// ══════════════════════════════════════════════════════════════
+const CONNECTION_PRICE = 11000;
+
+// ── 調査ジョブ（非同期実行＋ポーリング） ──────────────────────
+const connectionJobs = new Map(); // jobId → { status, txid, chain, result, error, createdAt }
+setInterval(() => {
+  const cutoff = Date.now() - 3600000;
+  for (const [id, job] of connectionJobs) if (job.createdAt < cutoff) connectionJobs.delete(id);
+}, 600000);
+
+// ── 簡易レート制限（IPごと 調査8回/時） ───────────────────────
+const connRateMap = new Map();
+function connRateOk(ip) {
+  const now = Date.now();
+  const arr = (connRateMap.get(ip) || []).filter(t => now - t < 3600000);
+  if (arr.length >= 8) { connRateMap.set(ip, arr); return false; }
+  arr.push(now);
+  connRateMap.set(ip, arr);
+  return true;
+}
+
+// ── サポートチャット（購入者専用・ファイル永続化） ─────────────
+const connectionChats = new Map(); // token → { txid, chain, customerName, email, reportUrl, reportSummary, messages, createdAt }
+const CONN_CHATS_FILE = path.join(REPORTS_DIR, 'connection-chats.json');
+try {
+  const saved = JSON.parse(fs.readFileSync(CONN_CHATS_FILE, 'utf8'));
+  for (const [k, v] of Object.entries(saved)) connectionChats.set(k, v);
+  console.log(`[Connection] サポートチャット${connectionChats.size}件を復元`);
+} catch {}
+function saveConnectionChats() {
+  fsp.writeFile(CONN_CHATS_FILE, JSON.stringify(Object.fromEntries(connectionChats)), 'utf8')
+    .catch(e => console.error('[Connection] チャット保存失敗:', e.message));
+}
+
+// ── 注文処理（Stripe webhook / テストモード共通） ──────────────
+async function fulfillConnectionOrder({ txid, customerName, email }) {
+  console.log(`[Connection] 注文処理開始: ${txid} / ${email}`);
+  const chain = detectChain(txid);
+  if (!chain) throw new Error('TXIDの形式が不正です');
+
+  const cacheKey = txid.toLowerCase();
+  let result = txidCache.get(cacheKey)?.result;
+  if (!result) {
+    result = await investigate(txid, chain);
+    txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
+  }
+
+  const list     = [{ txid, chain, result }];
+  const issuedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  const aiData   = await generateAIContent(list, customerName).catch(() => ({ analysis: null, requests: [] }));
+  const reportId  = crypto.randomUUID();
+  const reportUrl = `${BASE_URL}/report/${reportId}`;
+  await saveReport(reportId, generateReportHTML(list, customerName, issuedAt, aiData, reportUrl));
+
+  // サポートチャットを開設
+  const chatToken = crypto.randomUUID();
+  const chatUrl   = `${BASE_URL}/support/${chatToken}`;
+  connectionChats.set(chatToken, {
+    txid, chain, customerName, email, reportUrl,
+    reportSummary: buildReport(result).slice(0, 3000),
+    messages: [], createdAt: Date.now(),
+  });
+  saveConnectionChats();
+
+  if (email) {
+    await sendEmail(email, '【Connection】正式調査報告書が完成しました',
+      buildConnectionEmailHTML(customerName, reportUrl, chatUrl, issuedAt));
+  }
+  console.log(`[Connection] 注文処理完了: ${reportUrl}`);
+  return { reportUrl, chatUrl };
+}
+
+function buildConnectionEmailHTML(name, reportUrl, chatUrl, issuedAt) {
+  return `<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8"></head>
+<body style="margin:0;background:#0a0c12;font-family:'Hiragino Mincho ProN','Yu Mincho',serif;padding:32px 16px">
+<div style="max-width:560px;margin:0 auto;background:#12151f;border:1px solid #2a3045;border-radius:12px;overflow:hidden">
+  <div style="padding:36px 32px 28px;text-align:center;border-bottom:1px solid #2a3045">
+    <div style="font-size:26px;letter-spacing:8px;color:#c9a96e;font-weight:600">CONNECTION</div>
+    <div style="width:48px;height:1px;background:#c9a96e;margin:14px auto 0"></div>
+  </div>
+  <div style="padding:32px;color:#eae6dc;font-size:14px;line-height:2">
+    <p style="margin:0 0 18px">${name} 様</p>
+    <p style="margin:0 0 18px">この度はConnectionをご利用いただき、誠にありがとうございます。<br>ご依頼いただいた正式調査報告書が完成いたしました。</p>
+    <div style="text-align:center;margin:28px 0">
+      <a href="${reportUrl}" style="display:inline-block;background:#c9a96e;color:#0a0c12;text-decoration:none;padding:14px 40px;border-radius:6px;font-weight:700;letter-spacing:2px">調査報告書を確認する</a>
+    </div>
+    <div style="background:#0e1119;border:1px solid #2a3045;border-radius:8px;padding:20px 24px;margin:24px 0">
+      <p style="margin:0 0 8px;color:#c9a96e;font-size:13px;letter-spacing:2px">専任サポートチャット</p>
+      <p style="margin:0 0 12px;font-size:13px;color:#b8bcc8">報告書の内容に関するご質問、凍結要請や警察への提出手順など、<br>専任サポートがいつでもご相談を承ります。</p>
+      <a href="${chatUrl}" style="color:#c9a96e;font-size:13px">${chatUrl}</a>
+    </div>
+    <p style="margin:18px 0 0;font-size:12px;color:#8b91a0">発行日時：${issuedAt}<br>このメールは大切に保管してください。</p>
+  </div>
+</div>
+</body></html>`;
+}
+
+// ── ページ配信 ────────────────────────────────────────────────
+app.get('/connection', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection.html')));
+app.get('/support/:token', (req, res) => {
+  if (!connectionChats.has(req.params.token)) {
+    return res.status(404).send('<!DOCTYPE html><html lang="ja"><body style="background:#0a0c12;color:#eae6dc;font-family:serif;display:flex;align-items:center;justify-content:center;min-height:100vh"><div style="text-align:center"><p style="letter-spacing:6px;color:#c9a96e">CONNECTION</p><p>このサポートチャットは見つかりませんでした。</p></div></body></html>');
+  }
+  res.sendFile(path.join(__dirname, 'public', 'connection-support.html'));
+});
+app.get('/connection/success', (_req, res) => res.send(`<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>お申し込み完了 — Connection</title>
+<style>
+body{margin:0;background:#0a0c12;color:#eae6dc;font-family:'Hiragino Mincho ProN','Yu Mincho',serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.card{background:#12151f;border:1px solid #2a3045;border-radius:14px;padding:48px 36px;max-width:460px;width:100%;text-align:center}
+.logo{font-size:22px;letter-spacing:8px;color:#c9a96e;font-weight:600}
+.rule{width:48px;height:1px;background:#c9a96e;margin:16px auto 28px}
+h1{font-size:18px;font-weight:600;margin:0 0 16px}
+p{font-size:13.5px;line-height:2;color:#b8bcc8;margin:0 0 12px}
+</style></head><body>
+<div class="card">
+  <div class="logo">CONNECTION</div>
+  <div class="rule"></div>
+  <h1>お申し込みが完了しました</h1>
+  <p>正式調査報告書の作成を開始いたしました。<br>完成次第、ご登録のメールアドレスへ<br>報告書と専任サポートチャットのご案内をお送りします。</p>
+  <p style="font-size:12px;color:#8b91a0">通常10分〜30分ほどで完成します。<br>メールが届かない場合は迷惑メールフォルダをご確認ください。</p>
+</div>
+</body></html>`));
+
+// ── 調査API ──────────────────────────────────────────────────
+app.post('/api/connection/investigate', express.json(), async (req, res) => {
+  const txid  = (req.body.txid || '').trim();
+  const chain = detectChain(txid);
+  if (!chain) return res.status(400).json({ error: 'TXIDの形式が正しくありません。64文字のトランザクションIDをご入力ください。' });
+  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || '';
+  if (!connRateOk(ip)) return res.status(429).json({ error: '調査回数の上限に達しました。しばらく時間をおいてお試しください。' });
+
+  const jobId = crypto.randomUUID();
+  connectionJobs.set(jobId, { status: 'running', txid, chain, createdAt: Date.now() });
+  (async () => {
+    try {
+      const cacheKey = txid.toLowerCase();
+      let result = txidCache.get(cacheKey)?.result;
+      if (!result) {
+        result = await investigate(txid, chain);
+        txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
+      }
+      const job = connectionJobs.get(jobId);
+      if (job) { job.status = 'done'; job.result = result; }
+    } catch (e) {
+      console.error('[Connection] 調査エラー:', e.message);
+      const job = connectionJobs.get(jobId);
+      if (job) { job.status = 'error'; job.error = e.message; }
+    }
+  })();
+  res.json({ jobId, chain: chain.toUpperCase() });
+});
+
+app.get('/api/connection/job/:id', (req, res) => {
+  const job = connectionJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'ジョブが見つかりません' });
+  res.json({ status: job.status, result: job.status === 'done' ? job.result : undefined, error: job.error });
+});
+
+// ── ウォレット詳細API（ノードクリック時） ──────────────────────
+app.get('/api/connection/address/:addr', async (req, res) => {
+  try {
+    const addr  = req.params.addr;
+    const chain = String(req.query.chain || 'eth').toLowerCase();
+    const info  = await getAddressInfo(addr, chain);
+    const db    = getLabel(addr);
+    const fetched = await fetchAddressLabel(addr, chain).catch(() => '');
+    const label = fetched || db.label || info?.bcLabel || '';
+    const isEx  = db.type === 'exchange' || isExchange(label);
+
+    let txs = [];
+    if (chain === 'eth' && ETHERSCAN_KEY) {
+      const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&page=1&offset=10&sort=desc&apikey=${ETHERSCAN_KEY}`;
+      const j = await (await fetch(url)).json();
+      txs = (Array.isArray(j.result) ? j.result : []).map(t => ({
+        hash: t.hash, from: t.from, to: t.to,
+        value: parseFloat(t.value) / 1e18, unit: 'ETH',
+        time: new Date(parseInt(t.timeStamp) * 1000).toISOString(),
+        direction: t.from.toLowerCase() === addr.toLowerCase() ? 'out' : 'in',
+      }));
+    } else if (chain === 'xrp') {
+      const j = await (await fetch(`https://api.xrpscan.com/api/v1/account/${addr}/transactions`)).json();
+      txs = (j.transactions || []).slice(0, 10).map(t => ({
+        hash: t.hash, from: t.Account, to: t.Destination || '',
+        value: parseFloat(t.Amount) / 1e6 || 0, unit: 'XRP',
+        time: t.date, direction: t.Account === addr ? 'out' : 'in',
+      }));
+    } else if (chain === 'btc' && BLOCKCHAIR_KEY) {
+      const j = await (await fetch(`https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}&limit=10`)).json();
+      const hashes = j.data?.[addr]?.transactions || [];
+      txs = hashes.slice(0, 10).map(h => ({ hash: h, from: '', to: '', value: null, unit: 'BTC', time: '', direction: '' }));
+    }
+
+    let type = 'wallet';
+    if (isEx) type = 'exchange';
+    else if (info?.txCount != null && info.txCount >= 50000) type = 'hot_wallet';
+
+    res.json({
+      address: addr, chain: chain.toUpperCase(), label, isExchange: isEx, type,
+      balance: info?.balance ?? null, balanceUSD: info?.balanceUSD ?? null,
+      txCount: info?.txCount ?? null, txs,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── 決済API（¥11,000／1TXID） ─────────────────────────────────
+app.post('/api/connection/checkout', express.json(), async (req, res) => {
+  try {
+    const { txid, name, email } = req.body;
+    const t = (txid || '').trim();
+    if (!detectChain(t)) return res.status(400).json({ error: 'TXIDの形式が正しくありません' });
+    if (!email)          return res.status(400).json({ error: 'メールアドレスを入力してください' });
+
+    // 申込記録をSheetsへ
+    const submittedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+    appendToSheet([
+      submittedAt, name || '', '', email, '', '1',
+      String(CONNECTION_PRICE), `Connection:${t.slice(0, 20)}...`, '', '申込済み(Connection)',
+    ]).catch(console.error);
+
+    if (!stripe) {
+      // テストモード：即時に報告書生成
+      fulfillConnectionOrder({ txid: t, customerName: name || 'お客様', email }).catch(console.error);
+      return res.json({ url: `${BASE_URL}/connection/success?test=1` });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      customer_email: email,
+      line_items: [{
+        price_data: {
+          currency: 'jpy',
+          product_data: {
+            name:        'Connection 正式調査報告書（1TXID）',
+            description: 'ブロックチェーン資金追跡調査・正式報告書＋専任サポートチャット',
+          },
+          unit_amount: CONNECTION_PRICE,
+        },
+        quantity: 1,
+      }],
+      mode: 'payment',
+      success_url: `${BASE_URL}/connection/success`,
+      cancel_url:  `${BASE_URL}/connection`,
+      metadata: { brand: 'connection', txid: t, customerName: name || '', email },
+    });
+    res.json({ url: session.url });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── サポートチャットAPI ────────────────────────────────────────
+app.get('/api/connection/chat/:token', (req, res) => {
+  const chat = connectionChats.get(req.params.token);
+  if (!chat) return res.status(404).json({ error: 'チャットが見つかりません' });
+  res.json({ customerName: chat.customerName, reportUrl: chat.reportUrl, messages: chat.messages });
+});
+
+app.post('/api/connection/chat/:token', express.json(), async (req, res) => {
+  try {
+    const chat = connectionChats.get(req.params.token);
+    if (!chat) return res.status(404).json({ error: 'チャットが見つかりません' });
+    const message = (req.body.message || '').trim().slice(0, 2000);
+    if (!message) return res.status(400).json({ error: 'メッセージが空です' });
+
+    const isFirst = chat.messages.filter(m => m.role === 'user').length === 0;
+    chat.messages.push({ role: 'user', text: message, at: Date.now() });
+
+    // 初回メッセージは運営者にも通知
+    if (isFirst && SMTP_USER) {
+      sendEmail(SMTP_USER, '【Connection】サポートチャットに新規お問い合わせ',
+        `<p>お客様：${chat.customerName} 様（${chat.email}）</p><p>TXID：${chat.txid}</p><p>メッセージ：${message}</p><p><a href="${BASE_URL}/support/${req.params.token}">チャットを開く</a></p>`
+      ).catch(console.error);
+    }
+
+    let reply = 'お問い合わせありがとうございます。担当者が確認のうえ、ご登録のメールアドレスへご回答いたします。';
+    if (GEMINI_KEY) {
+      const history = chat.messages.slice(-12).map(m => `${m.role === 'user' ? 'お客様' : 'サポート'}：${m.text}`).join('\n');
+      const prompt = `あなたは暗号資産の資金追跡調査サービス「Connection」の専任サポート担当です。
+お客様は正式調査報告書（¥11,000）をご購入済みの大切なお客様です。
+
+【お客様情報】お名前：${chat.customerName} 様
+【調査対象TXID】${chat.txid}
+【調査結果の要約】
+${chat.reportSummary}
+
+【対応方針】
+- 丁寧で落ち着いた敬語。高級サービスにふさわしい上質な対応
+- 調査結果の見方、取引所への凍結要請の進め方、警察への被害届提出の流れを具体的に案内する
+- 法律判断が必要な内容は弁護士への相談を推奨する
+- 被害回復を保証する表現は絶対に使わない
+- わからないことは正直に伝え、担当者からのメール回答を案内する
+- 回答は400文字以内
+
+【これまでの会話】
+${history}
+
+サポート担当としての返信のみを出力してください。`;
+      try {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.4, maxOutputTokens: 600 },
+            thinkingConfig: { thinkingBudget: 0 },
+          }),
+        });
+        const j = await r.json();
+        const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) reply = text.trim();
+      } catch (e) { console.error('[Connection] チャットAI:', e.message); }
+    }
+
+    chat.messages.push({ role: 'assistant', text: reply, at: Date.now() });
+    saveConnectionChats();
+    res.json({ reply });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
