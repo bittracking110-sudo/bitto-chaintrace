@@ -1025,11 +1025,14 @@ async function updateSheetReportUrl(sessionId, reportUrl) {
 function getMailer() {
   if (!SMTP_USER || !SMTP_PASS) return null;
   return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: false, // STARTTLS（Railway対応）
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.SMTP_PORT) || 587,
+    secure: (process.env.SMTP_PORT === '465'), // 465ならSSL、それ以外はSTARTTLS
     auth: { user: SMTP_USER, pass: SMTP_PASS },
     tls: { rejectUnauthorized: false },
+    connectionTimeout: 10000, // 10秒で接続を諦める（ハング防止）
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
   });
 }
 
@@ -2040,15 +2043,20 @@ app.post('/stripe-webhook',
 
     if (event.type === 'checkout.session.completed') {
       const s = event.data.object;
-      // ── Connection（Web版）の決済：レポート生成＋メール送付で完結 ──
+      // ── Connection（Web版）の決済：決済後はTXID入力フォームで処理 ──
       if (s.metadata?.brand === 'connection') {
         const cEmail = s.customer_details?.email || s.customer_email || s.metadata.email || '';
-        fulfillConnectionOrder({
-          txid:         s.metadata.txid,
-          customerName: s.metadata.customerName || 'お客様',
-          email:        cEmail,
-          count:        parseInt(s.metadata.count) || 1,
-        }).catch(e => console.error('[Connection] 注文処理エラー:', e.message));
+        const formToken = s.metadata.formToken;
+        // 念のためフォームトークンに最新メールを反映＋バックアップでフォームURLをメール
+        if (formToken && txidFormTokens.has(formToken)) {
+          const fd = txidFormTokens.get(formToken);
+          if (cEmail) fd.email = cEmail;
+          const formUrl = `${BASE_URL}/txid-form/${formToken}`;
+          if (cEmail && !fd.used) {
+            sendEmail(cEmail, '【Connection】調査するTXIDのご入力をお願いします',
+              buildConnectionTxidFormEmailHTML(fd.customerName, formUrl, fd.count)).catch(console.error);
+          }
+        }
         return res.json({ received: true });
       }
       const { sessionId, userId, txidCount, customerName } = s.metadata;
@@ -2371,7 +2379,18 @@ app.get('/api/txid-form-info/:token', (req, res) => {
   const data = txidFormTokens.get(req.params.token);
   if (!data) return res.status(404).json({ error: 'リンクが無効または期限切れです' });
   if (data.used) return res.status(410).json({ error: 'このリンクはすでに使用済みです', used: true });
-  res.json({ ok: true, count: data.count, customerName: data.customerName, brand: data.brand || 'bitto' });
+  res.json({ ok: true, count: data.count, customerName: data.customerName, brand: data.brand || 'bitto', prefillTxid: data.prefillTxid || '' });
+});
+
+// 調査の進捗・結果取得API（決済後フォームの申請完了画面でポーリング）
+app.get('/api/txid-form-result/:token', (req, res) => {
+  const data = txidFormTokens.get(req.params.token);
+  if (!data) return res.status(404).json({ error: 'リンクが無効または期限切れです' });
+  res.json({
+    status: data.status || (data.used ? 'investigating' : 'paid_waiting_txid'),
+    report: data.report || null,
+    errorMsg: data.errorMsg || null,
+  });
 });
 
 // TXID送信・調査開始API
@@ -2385,6 +2404,7 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
 
   // 即座に使用済みにして二重送信を防ぐ
   formData.used = true;
+  formData.status = 'investigating';
   res.json({ ok: true });
 
   // バックグラウンドで調査・レポート生成
@@ -2433,34 +2453,40 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
         });
       }
 
-      // メールにレポートURL送信（ブランド別）
-      if (formData.email) {
-        if (formData.brand === 'connection') {
-          // Connection：サポートチャットを開設して専用メールで案内
-          const chatToken = crypto.randomUUID();
-          const chatUrl   = `${BASE_URL}/support/${chatToken}`;
-          connectionChats.set(chatToken, {
-            txid: list.map(l => l.txid).join(', '), chain: list[0].chain,
-            customerName: formData.customerName, email: formData.email, reportUrl,
-            reportSummary: buildReport(list[0].result).slice(0, 3000),
-            messages: [], createdAt: Date.now(),
-          });
-          saveConnectionChats();
+      // ブランド別の納品処理
+      if (formData.brand === 'connection') {
+        // Connection：サポートチャットを開設
+        const chatToken = crypto.randomUUID();
+        const chatUrl   = `${BASE_URL}/support/${chatToken}`;
+        connectionChats.set(chatToken, {
+          txid: list.map(l => l.txid).join(', '), chain: list[0].chain,
+          customerName: formData.customerName, email: formData.email, reportUrl,
+          reportSummary: buildReport(list[0].result).slice(0, 3000),
+          messages: [], createdAt: Date.now(),
+        });
+        saveConnectionChats();
+        // ブラウザのポーリング表示用に結果を保存
+        formData.status = 'done';
+        formData.report = { reportUrl, chatUrl, issuedAt };
+        // メールでも案内（Railwayのメール不達時はブラウザ表示でカバー）
+        if (formData.email) {
           sendEmail(
             formData.email,
             '【Connection】正式調査報告書が完成しました',
             buildConnectionEmailHTML(formData.customerName, reportUrl, chatUrl, issuedAt)
           ).catch(console.error);
-        } else {
-          sendEmail(
-            formData.email,
-            '【BitTo】詳細調査レポートが完成しました',
-            buildReportEmailHTML(formData.customerName, reportUrl, issuedAt)
-          ).catch(console.error);
         }
+      } else if (formData.email) {
+        sendEmail(
+          formData.email,
+          '【BitTo】詳細調査レポートが完成しました',
+          buildReportEmailHTML(formData.customerName, reportUrl, issuedAt)
+        ).catch(console.error);
       }
 
     } catch (e) {
+      formData.status = 'error';
+      formData.errorMsg = e.message;
       console.error('[Submit] エラー:', e.message);
       if (formData.userId) {
         lineClient.pushMessage(formData.userId, {
@@ -2794,20 +2820,28 @@ app.post('/api/connection/checkout', express.json(), async (req, res) => {
     const t = (txid || '').trim();
     const n = Math.max(1, Math.min(10, parseInt(count) || 1));
     const amount = CONNECTION_PRICE * n;
-    if (!detectChain(t)) return res.status(400).json({ error: 'TXIDの形式が正しくありません' });
-    if (!email)          return res.status(400).json({ error: 'メールアドレスを入力してください' });
+    if (!email) return res.status(400).json({ error: 'メールアドレスを入力してください' });
+
+    // 決済後に表示するTXID入力フォームのトークンを先に発行
+    const formToken = crypto.randomUUID();
+    txidFormTokens.set(formToken, {
+      sessionId: `connection-${formToken.slice(0, 8)}`, userId: '', count: n,
+      customerName: name || 'お客様', email, phone: phone || '',
+      brand: 'connection', used: false, createdAt: Date.now(),
+      prefillTxid: t, status: 'paid_waiting_txid',
+    });
+    const formUrl = `${BASE_URL}/txid-form/${formToken}`;
 
     // 申込記録をSheetsへ
     const submittedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
     appendToSheet([
       submittedAt, name || '', phone || '', email, '', String(n),
-      String(amount), `Connection:${t.slice(0, 20)}...`, '', '申込済み(Connection)',
+      String(amount), `Connection:${formToken.slice(0, 12)}`, '', '申込済み(Connection)',
     ]).catch(console.error);
 
     if (!stripe) {
-      // テストモード：即時に報告書生成
-      fulfillConnectionOrder({ txid: t, customerName: name || 'お客様', email, count: n }).catch(console.error);
-      return res.json({ url: `${BASE_URL}/connection/success?test=1` });
+      // テストモード：決済を飛ばして直接TXID入力フォームへ
+      return res.json({ url: formUrl });
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -2825,9 +2859,9 @@ app.post('/api/connection/checkout', express.json(), async (req, res) => {
         quantity: n,
       }],
       mode: 'payment',
-      success_url: `${BASE_URL}/connection/success`,
+      success_url: formUrl,                       // 決済後はTXID入力フォームへ遷移
       cancel_url:  `${BASE_URL}/connection`,
-      metadata: { brand: 'connection', txid: t, customerName: name || '', email, phone: phone || '', count: String(n) },
+      metadata: { brand: 'connection', formToken, customerName: name || '', email, phone: phone || '', count: String(n) },
     });
     res.json({ url: session.url });
   } catch (e) { res.status(500).json({ error: e.message }); }

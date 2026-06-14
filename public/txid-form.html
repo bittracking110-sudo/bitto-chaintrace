@@ -88,7 +88,7 @@
       <!-- TXID入力 -->
       <div class="card">
         <h2>🔢 TXIDを入力してください</h2>
-        <div class="warn-box">
+        <div class="warn-box" id="warnBox">
           ⚠️ このフォームは<strong>1回のみ</strong>使用可能です。<br>
           BTC・ETH・XRP のTXIDを貼り付けてください。チェーンは自動判定されます。
         </div>
@@ -104,16 +104,19 @@
     <!-- 送信完了 -->
     <div class="success-box" id="successBox">
       <div class="icon">✅</div>
-      <h2>調査を開始しました！</h2>
-      <p>TXIDを受け付けました。<br>
+      <h2 id="successTitle">調査を開始しました！</h2>
+      <p id="successMsg">TXIDを受け付けました。<br>
       調査完了後、LINEとメールにレポートURLをお送りします。<br><br>
       通常1〜3分でお届けします。</p>
+      <div id="resultArea" style="margin-top:20px"></div>
     </div>
   </div>
 
   <script>
     const token = location.pathname.split('/').pop();
     let maxCount = 1;
+    let isConnection = false;
+    let resultPollTimer = null;
 
     function detectChain(txid) {
       const s = txid.trim();
@@ -178,12 +181,21 @@
 
         // Connectionブランドの場合は表示を切り替え
         if (data.brand === 'connection') {
-          document.title = 'Connection TXID入力フォーム';
+          isConnection = true;
+          document.title = 'Connection｜お申し込み完了';
           document.querySelector('.header .logo').textContent = '';
           document.querySelector('.header h1').textContent = 'Connection';
           document.querySelector('.header h1').style.cssText = 'letter-spacing:2px;color:#c9a96e;font-family:Georgia,serif;font-size:1.8rem';
-          document.querySelector('.header p').textContent = '調査するトランザクションIDをご入力ください';
-          document.querySelector('#successBox p').innerHTML = 'TXIDを受け付けました。<br>調査完了後、メールで正式調査報告書とサポートチャットのご案内をお送りします。<br><br>通常10分〜30分でお届けします。';
+          document.querySelector('.header p').textContent = 'お申し込みありがとうございます';
+          // 申込内容カードの見出しを変更
+          document.querySelectorAll('.card h2')[0].textContent = '📋 お申し込み内容';
+          document.querySelectorAll('.card h2')[1].textContent = '🔢 調査するTXIDをご入力ください';
+          // 案内メッセージ
+          document.getElementById('warnBox').innerHTML =
+            '<strong style="color:#fdd663">お申し込みが完了しました。</strong><br>' +
+            'TXIDを1件ずつ入力し、完了しましたら調査を申請ください。<br>' +
+            '<span style="color:#f28b82">※TXIDの相違が無いようにお願いします。</span>';
+          document.getElementById('submitBtn').textContent = '調査を申請する';
         }
 
         const list = document.getElementById('txidList');
@@ -238,12 +250,47 @@
 
         document.getElementById('mainForm').style.display = 'none';
         document.getElementById('successBox').style.display = 'block';
+
+        if (isConnection) {
+          document.getElementById('successTitle').textContent = '調査を申請しました';
+          document.getElementById('successMsg').innerHTML =
+            'TXID ' + txids.length + '件を受け付けました。<br>ただいま調査を行っております。<br>' +
+            '<span style="color:#9aa0a6;font-size:0.85rem">通常10〜30分で完成します。このページを開いたままお待ちください。</span>';
+          startResultPolling();
+        }
       } catch (e) {
         errorEl.textContent = 'エラー: ' + e.message;
         errorEl.style.display = 'block';
         btn.disabled = false;
-        btn.textContent = '🔍 調査を開始する';
+        btn.textContent = isConnection ? '調査を申請する' : '🔍 調査を開始する';
       }
+    }
+
+    function startResultPolling() {
+      const area = document.getElementById('resultArea');
+      area.innerHTML = '<div style="display:inline-block;width:22px;height:22px;border:2px solid #4a4b50;border-top-color:#c9a96e;border-radius:50%;animation:spin 0.9s linear infinite"></div>' +
+        '<style>@keyframes spin{to{transform:rotate(360deg)}}</style>';
+      let polls = 0;
+      resultPollTimer = setInterval(async () => {
+        polls++;
+        if (polls > 200) { clearInterval(resultPollTimer); return; }
+        try {
+          const r = await fetch(`/api/txid-form-result/${token}`);
+          const j = await r.json();
+          if (j.status === 'done' && j.report) {
+            clearInterval(resultPollTimer);
+            document.getElementById('successTitle').textContent = '正式調査報告書が完成しました';
+            document.getElementById('successMsg').innerHTML = 'ご登録のメールアドレスにもご案内をお送りしました。';
+            area.innerHTML =
+              `<a href="${j.report.reportUrl}" target="_blank" style="display:block;background:#c9a96e;color:#0a0c12;text-decoration:none;padding:14px;border-radius:8px;font-weight:700;letter-spacing:1px;margin-bottom:12px">📄 調査報告書を開く</a>` +
+              `<a href="${j.report.chatUrl}" target="_blank" style="display:block;background:#2a2b2e;color:#c9a96e;text-decoration:none;padding:14px;border-radius:8px;font-weight:600;border:1px solid #c9a96e">💬 専任サポートチャット</a>` +
+              `<p style="font-size:0.78rem;color:#8b91a0;margin-top:14px">このページのリンクは大切に保管してください。</p>`;
+          } else if (j.status === 'error') {
+            clearInterval(resultPollTimer);
+            area.innerHTML = `<p style="color:#f28b82;font-size:0.85rem">調査中にエラーが発生しました。サポートよりご連絡いたします。</p>`;
+          }
+        } catch (e) {}
+      }, 4000);
     }
 
     init();
