@@ -2354,11 +2354,13 @@ app.get('/api/test-txid-form', (req, res) => {
   const customerName = req.query.name  || 'テストユーザー';
   const count        = parseInt(req.query.count) || 1;
   const email        = req.query.email || '';
+  const brand        = req.query.brand || 'bitto';
   const formToken    = crypto.randomUUID();
   txidFormTokens.set(formToken, {
     sessionId: 'test-' + formToken,
     userId:    null,
-    count, customerName, email,
+    count, customerName, email, brand,
+    status: 'paid_waiting_txid',
     used: false, createdAt: Date.now(),
   });
   const url = `${BASE_URL}/txid-form/${formToken}`;
