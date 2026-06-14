@@ -1250,8 +1250,27 @@ function buildMermaidDiagram(path, chain) {
 
 // ══ 有料HTMLレポート生成 ══════════════════════════════════════
 
-function generateReportHTML(results, customerName, issuedAt, aiData = {}, reportUrl = '') {
+function generateReportHTML(results, customerName, issuedAt, aiData = {}, reportUrl = '', brand = 'bitto') {
   const chainFull = { BTC: 'Bitcoin', ETH: 'Ethereum', XRP: 'XRP Ledger' };
+
+  // ── ブランド出し分け（未指定はBitTo＝従来どおり） ──
+  const BRANDS = {
+    bitto: {
+      pageTitle: 'BitTo 詳細調査レポート',
+      coverH1:   '🔗 BitTo 詳細調査レポート',
+      coverH1Style: '',
+      coverSub:  'ブロックチェーン送金経路・取引所特定 調査報告書',
+      footer:    '本レポートは BitTo が自動生成した調査報告書です。参考資料としてご活用ください。',
+    },
+    connection: {
+      pageTitle: 'Connection 正式調査報告書',
+      coverH1:   'Connection',
+      coverH1Style: "font-family:Georgia,'Times New Roman',serif;letter-spacing:3px;color:#b88a3e;font-weight:600",
+      coverSub:  '正式調査報告書｜Blockchain Forensics &amp; Asset Tracing',
+      footer:    '本報告書は Connection（Himesen株式会社）が作成した正式調査報告書です。',
+    },
+  };
+  const BR = BRANDS[brand] || BRANDS.bitto;
 
   const sectionsHTML = results.map((item, idx) => {
     const r  = item.result;
@@ -1408,7 +1427,7 @@ ${r.txid}
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>BitTo 詳細調査レポート</title>
+  <title>${BR.pageTitle}</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:'Hiragino Kaku Gothic Pro','Meiryo',sans-serif;background:#f4f5f7;color:#1a1a2e;padding:24px 16px 60px;font-size:14px}
@@ -1591,8 +1610,8 @@ ${r.txid}
 
   <div class="cover">
     <div class="cover-left">
-      <h1>🔗 BitTo 詳細調査レポート</h1>
-      <p>ブロックチェーン送金経路・取引所特定 調査報告書</p>
+      <h1${BR.coverH1Style ? ` style="${BR.coverH1Style}"` : ''}>${BR.coverH1}</h1>
+      <p>${BR.coverSub}</p>
     </div>
     <div class="cover-meta">
       <strong>依頼者</strong>${customerName}
@@ -1613,7 +1632,7 @@ ${r.txid}
   ${sectionsHTML}
 
   <p style="text-align:center;color:#94a3b8;font-size:0.78rem;margin-top:20px">
-    本レポートは BitTo が自動生成した調査報告書です。参考資料としてご活用ください。
+    ${BR.footer}
   </p>
 </div>
 
@@ -2441,7 +2460,7 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
       const aiData     = await generateAIContent(list, formData.customerName).catch(() => ({ analysis: null, requests: [] }));
       const reportId   = crypto.randomUUID();
       const reportUrl  = `${BASE_URL}/report/${reportId}`;
-      const reportHtml = generateReportHTML(list, formData.customerName, issuedAt, aiData, reportUrl);
+      const reportHtml = generateReportHTML(list, formData.customerName, issuedAt, aiData, reportUrl, formData.brand || 'bitto');
       await saveReport(reportId, reportHtml);
 
       // SheetsにレポートURLを記録
@@ -2638,7 +2657,7 @@ async function fulfillConnectionOrder({ txid, customerName, email, count = 1 }) 
   const aiData   = await generateAIContent(list, customerName).catch(() => ({ analysis: null, requests: [] }));
   const reportId  = crypto.randomUUID();
   const reportUrl = `${BASE_URL}/report/${reportId}`;
-  await saveReport(reportId, generateReportHTML(list, customerName, issuedAt, aiData, reportUrl));
+  await saveReport(reportId, generateReportHTML(list, customerName, issuedAt, aiData, reportUrl, 'connection'));
 
   // サポートチャットを開設
   const chatToken = crypto.randomUUID();
