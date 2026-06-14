@@ -2564,7 +2564,8 @@ app.get('/report/preview', async (req, res) => {
     aiData = await generateAIContent(mockList, 'テストユーザー').catch(() => ({ analysis: null, requests: [] }));
   }
 
-  const html = generateReportHTML(mockList, 'テストユーザー（プレビュー）', issuedAt, aiData);
+  const brand = req.query.brand === 'connection' ? 'connection' : 'bitto';
+  const html = generateReportHTML(mockList, 'テストユーザー（プレビュー）', issuedAt, aiData, '', brand);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
 });
