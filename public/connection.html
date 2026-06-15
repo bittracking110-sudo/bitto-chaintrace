@@ -810,7 +810,7 @@ async function csSendMsg(preset){
   b.appendChild(typing); b.scrollTop = b.scrollHeight;
 
   try{
-    const r = await fetch(API_BASE + '/api/connection/consult', {
+    const r = await fetch('/api/connection/consult', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ message: text, messages: csMessages.slice(-10), context: buildConsultContext() }),
     });
