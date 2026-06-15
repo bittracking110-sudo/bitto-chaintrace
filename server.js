@@ -28,6 +28,9 @@ const STRIPE_WEBHOOK_SECRET     = process.env.STRIPE_WEBHOOK_SECRET;
 const GOOGLE_SHEET_ID           = process.env.GOOGLE_SHEET_ID;
 const SMTP_USER                 = process.env.SMTP_USER;
 const SMTP_PASS                 = process.env.SMTP_PASS;
+// Resend（HTTP APIメール配信：Railwayのポートブロック回避）
+const RESEND_API_KEY            = process.env.RESEND_API_KEY;
+const MAIL_FROM                 = process.env.MAIL_FROM || 'Connection <onboarding@resend.dev>';
 // Railway は RAILWAY_PUBLIC_DOMAIN を自動設定する → https:// を付けて使用
 const BASE_URL = process.env.BASE_URL
   || (process.env.RAILWAY_PUBLIC_DOMAIN
@@ -1036,21 +1039,46 @@ function getMailer() {
   });
 }
 
+// Resend（HTTP API）でメール送信。Railwayでもポートブロックを受けない
+async function sendViaResend(to, subject, html) {
+  const bcc = SMTP_USER && SMTP_USER !== to ? [SMTP_USER] : undefined;
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ from: MAIL_FROM, to: [to], bcc, subject, html }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`Resend ${r.status}: ${data.message || JSON.stringify(data)}`);
+  return data.id;
+}
+
 async function sendEmail(to, subject, html) {
+  // ① Resend（推奨：HTTP経由でRailway対応）
+  if (RESEND_API_KEY) {
+    try {
+      const id = await sendViaResend(to, subject, html);
+      console.log('[Mail] Resend送信完了 → to:', to, '/ id:', id);
+      return;
+    } catch (e) {
+      console.error('[Mail] Resend送信エラー:', e.message);
+      // Resend失敗時はSMTPにフォールバック
+    }
+  }
+  // ② SMTP（フォールバック）
   try {
     const mailer = getMailer();
-    if (!mailer) { console.log('[Mail] SMTP未設定（スキップ）'); return; }
-
-    // 提供者（SMTP_USER）にもBCCで送信
+    if (!mailer) { console.log('[Mail] メール未設定（スキップ）'); return; }
     const bcc = SMTP_USER && SMTP_USER !== to ? SMTP_USER : undefined;
-
     const info = await mailer.sendMail({
       from: `"BitTo 調査サービス" <${SMTP_USER}>`,
       to, bcc, subject, html,
     });
-    console.log('[Mail] 送信完了 → to:', to, '/ bcc:', bcc || 'なし', '/ messageId:', info.messageId);
+    console.log('[Mail] SMTP送信完了 → to:', to, '/ bcc:', bcc || 'なし', '/ messageId:', info.messageId);
   } catch (e) {
-    console.error('[Mail] 送信エラー詳細:', e.message);
+    console.error('[Mail] SMTP送信エラー詳細:', e.message);
     console.error('[Mail] エラーコード:', e.code, '/ 応答:', e.response || '');
   }
 }
@@ -2298,18 +2326,24 @@ app.post('/api/ai/analyze', express.json(), async (req, res) => {
 app.get('/api/test-email', async (req, res) => {
   const to = req.query.to || SMTP_USER;
   if (!to) return res.status(400).json({ error: 'to パラメータが必要です' });
+  const html = '<p>このメールが届いていればメール設定は正常です。</p>';
+  // Resend優先
+  if (RESEND_API_KEY) {
+    try {
+      const id = await sendViaResend(to, '【Connection】メール送信テスト', html);
+      return res.json({ ok: true, via: 'resend', id, to, from: MAIL_FROM });
+    } catch (e) {
+      return res.status(500).json({ ok: false, via: 'resend', error: e.message });
+    }
+  }
+  // SMTPフォールバック
   try {
     const mailer = getMailer();
-    if (!mailer) return res.status(503).json({ error: 'SMTP未設定（SMTP_USER / SMTP_PASSを確認）' });
-    const info = await mailer.sendMail({
-      from: `"BitTo テスト" <${SMTP_USER}>`,
-      to,
-      subject: '【BitTo】メール送信テスト',
-      html: '<p>このメールが届いていればSMTP設定は正常です。</p>',
-    });
-    res.json({ ok: true, messageId: info.messageId, to });
+    if (!mailer) return res.status(503).json({ error: 'メール未設定（RESEND_API_KEY または SMTP_USER/PASS）' });
+    const info = await mailer.sendMail({ from: `"BitTo テスト" <${SMTP_USER}>`, to, subject: '【BitTo】メール送信テスト', html });
+    res.json({ ok: true, via: 'smtp', messageId: info.messageId, to });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message, code: e.code, response: e.response });
+    res.status(500).json({ ok: false, via: 'smtp', error: e.message, code: e.code, response: e.response });
   }
 });
 
