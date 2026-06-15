@@ -1041,7 +1041,11 @@ function getMailer() {
 
 // Resend（HTTP API）でメール送信。Railwayでもポートブロックを受けない
 async function sendViaResend(to, subject, html) {
-  const bcc = SMTP_USER && SMTP_USER !== to ? [SMTP_USER] : undefined;
+  // テストドメイン（onboarding@resend.dev）では本人以外・BCCに送れないため、
+  // 独自ドメイン認証後（MAIL_FROMがresend.dev以外）のみ運営者控えBCCを付ける
+  const domainVerified = !/onboarding@resend\.dev/.test(MAIL_FROM);
+  const bccTarget = SMTP_USER && SMTP_USER !== to ? [SMTP_USER] : undefined;
+  const bcc = domainVerified ? bccTarget : undefined;
   const r = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
