@@ -1824,8 +1824,7 @@ ${requestBlocks}
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 2500 },
-          thinkingConfig: { thinkingBudget: 0 },
+          generationConfig: { temperature: 0.3, maxOutputTokens: 2500, thinkingConfig: { thinkingBudget: 0 } },
         }),
       }
     );
@@ -2318,7 +2317,7 @@ app.post('/api/ai/analyze', express.json(), async (req, res) => {
     if (!prompt) return res.status(400).json({ error: 'promptが必要です' });
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 1000 }, thinkingConfig: { thinkingBudget: 0 } }),
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 1000, thinkingConfig: { thinkingBudget: 0 } } }),
     });
     const j = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: j.error?.message });
@@ -2981,8 +2980,7 @@ ${history}
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.4, maxOutputTokens: 600 },
-            thinkingConfig: { thinkingBudget: 0 },
+            generationConfig: { temperature: 0.4, maxOutputTokens: 600, thinkingConfig: { thinkingBudget: 0 } },
           }),
         });
         const j = await r.json();
@@ -3055,8 +3053,7 @@ ${history}
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.5, maxOutputTokens: 600 },
-            thinkingConfig: { thinkingBudget: 0 },
+            generationConfig: { temperature: 0.5, maxOutputTokens: 600, thinkingConfig: { thinkingBudget: 0 } },
           }),
         });
         const j = await r.json();
