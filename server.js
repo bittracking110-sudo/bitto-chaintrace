@@ -2728,6 +2728,8 @@ function buildConnectionEmailHTML(name, reportUrl, chatUrl, issuedAt) {
 
 // ── ページ配信 ────────────────────────────────────────────────
 app.get('/connection', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection.html')));
+app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-privacy.html')));
+app.get('/connection/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-privacy.html')));
 app.get('/support/:token', (req, res) => {
   if (!connectionChats.has(req.params.token)) {
     return res.status(404).send('<!DOCTYPE html><html lang="ja"><body style="background:#0a0c12;color:#eae6dc;font-family:serif;display:flex;align-items:center;justify-content:center;min-height:100vh"><div style="text-align:center"><p style="letter-spacing:2px;color:#c9a96e;font-size:24px">Connection</p><p>このサポートチャットは見つかりませんでした。</p></div></body></html>');
