@@ -2997,6 +2997,77 @@ ${history}
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── 初回相談AI（購入前・無料・匿名） ──────────────────────────
+const consultRateMap = new Map(); // IP → timestamps[]
+app.post('/api/connection/consult', express.json(), async (req, res) => {
+  try {
+    // IPレート制限：30メッセージ/時
+    const ip = (req.headers['x-forwarded-for'] || req.ip || 'unknown').toString().split(',')[0].trim();
+    const now = Date.now();
+    const hist = (consultRateMap.get(ip) || []).filter(t => now - t < 3600000);
+    if (hist.length >= 30) return res.status(429).json({ error: 'ご相談が混み合っています。しばらくしてから再度お試しください。' });
+    hist.push(now); consultRateMap.set(ip, hist);
+
+    const message = (req.body.message || '').trim().slice(0, 2000);
+    if (!message) return res.status(400).json({ error: 'メッセージが空です' });
+    const messages = Array.isArray(req.body.messages) ? req.body.messages.slice(-10) : [];
+    const ctx = req.body.context || null;
+
+    // 追跡結果の文脈を組み立て
+    let caseInfo = '（まだ追跡を行っていない、または追跡情報なし）';
+    if (ctx && ctx.chain) {
+      const exNames = (ctx.exchanges || []).filter(Boolean).join('、');
+      const reached = ctx.reachedExchange ? `到達した取引所：${exNames || '取引所系ウォレット（名称調査中）'}` : '現時点で既知の取引所には未到達';
+      caseInfo = `チェーン：${ctx.chain}\n送金額：${ctx.amount || '不明'}\n経由数：${ctx.hops != null ? ctx.hops + '段階' : '不明'}\n${reached}\nDEX経由の可能性：${ctx.viaDex ? 'あり（最終特定が難しい場合があります）' : '低い'}`;
+    }
+
+    let reply = 'ご相談ありがとうございます。担当者が確認のうえご案内いたします。';
+    if (GEMINI_KEY) {
+      const history = messages.map(m => `${m.role === 'user' ? 'ご相談者' : '相談員'}：${m.text}`).join('\n');
+      const prompt = `あなたは暗号資産の資金追跡調査サービス「Connection」の初回相談員です。
+これは正式依頼【前】の無料相談です。詐欺被害などで不安を抱えた方が多いので、まず安心していただくことを最優先にしてください。
+
+【サービス概要】
+- TXID（取引ID）を入力すると、資金の流れをフローマップで可視化（追跡は無料）
+- 正式調査報告書（税込¥11,000／1TXID）には、取引所向け資産凍結要請状、警察・弁護士提出用の調査報告書、AI総合分析、購入後の専任サポートチャットが含まれます
+- 対応チェーン：ビットコイン(BTC)／イーサリアム(ETH)／XRP
+
+【ご相談者の追跡結果】
+${caseInfo}
+
+【対応方針】
+- 丁寧で落ち着いた敬語。高級サービスにふさわしい、寄り添う上質な対応
+- 上記の追跡結果を踏まえ、その方のケースに即して具体的に説明する
+- 取引所に到達している場合は、報告書が凍結要請に有効であることを前向きに伝える
+- DEX・海外取引所・匿名化を経由している場合は、最終特定が難しい可能性を正直に伝える
+- 被害の回復・資産の奪還・犯人特定を「保証」する表現は絶対に使わない
+- 法律判断・返金交渉の代行はしない。法的な相談は弁護士等の専門家を案内する（弁護士法に配慮）
+- 不安を煽らず、押し売りもしない。納得されたら「正式調査報告書のご依頼」を自然に案内する
+- 回答は400文字以内、日本語
+
+【これまでの相談】
+${history}
+ご相談者：${message}
+
+相談員としての返信のみを出力してください。`;
+      try {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.5, maxOutputTokens: 600 },
+            thinkingConfig: { thinkingBudget: 0 },
+          }),
+        });
+        const j = await r.json();
+        const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) reply = text.trim();
+      } catch (e) { console.error('[Connection] 初回相談AI:', e.message); }
+    }
+    res.json({ reply });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.listen(PORT, () => {
