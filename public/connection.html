@@ -289,6 +289,7 @@ footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
     <button id="goBtn" onclick="startInvestigation()">追跡開始</button>
   </div>
   <div class="chains">BITCOIN ／ ETHEREUM ／ XRP &nbsp;対応・追跡調査は無料</div>
+  <div style="margin-top:12px"><a href="javascript:void(0)" onclick="showDemo()" style="font-size:12.5px;color:var(--gold2);letter-spacing:1px;border-bottom:1px solid rgba(201,169,110,.4);padding-bottom:2px">▶ サンプルで追跡結果を見る</a></div>
   <div class="err" id="searchErr"></div>
 </section>
 
@@ -301,6 +302,7 @@ footer p{font-size:11px;color:var(--sub);margin-top:10px;letter-spacing:1px}
 </section>
 
 <section id="result">
+  <div id="demoBanner" style="display:none;background:var(--gold-dim);border:1px solid rgba(201,169,110,.4);border-radius:10px;padding:12px 18px;margin-bottom:22px;text-align:center;font-size:12.5px;color:var(--gold2);letter-spacing:1px">これはサンプル表示です。実際のTXIDを入力すると、その取引の資金フローを追跡します。</div>
   <div class="sum" id="sumCards"></div>
 
   <div class="sec-t">資金フローマップ</div>
@@ -478,11 +480,33 @@ function fmtAmt(v, unit){
   return n + ' ' + (unit || '');
 }
 
+// ── サンプル表示（スクショ・初回体験用） ──
+const DEMO_RESULT = {
+  chain: 'ETH',
+  blockTime: '2025-03-12 14:22:08',
+  amount: 2.45,
+  exchanges: [{ name: 'Binance' }],
+  path: [
+    { address:'0x7a3f9c2e1b4d6a8f0c2e4a6b8d0f2a4c6e8b0d2f', role:'sender',   isExchange:false, txCount:9,       time:'2025-03-12 14:22:08' },
+    { address:'0x4c8e1a9b02f7d3e5c6a8b0d2f4e6a8c0b2d4f6e8', role:'relay',    isExchange:false, amount:2.45, token:'ETH', txCount:6,  time:'2025-03-12 15:01:33' },
+    { address:'0xd15b77c4a2e8f6091c3b5d7f9a1c3e5b7d9f1a3c', role:'relay',    isExchange:false, amount:2.44, token:'ETH', txCount:21, time:'2025-03-12 18:47:10' },
+    { address:'0x28c6c06298d514db089934071355e5743bf21d60', role:'exchange', isExchange:true, label:'Binance', amount:2.43, token:'ETH', txCount:1843922, time:'2025-03-13 09:12:55' },
+  ],
+};
+function showDemo(){
+  currentTxid = '(サンプル)';
+  document.getElementById('searchErr').style.display = 'none';
+  document.getElementById('loading').style.display = 'none';
+  renderResult(JSON.parse(JSON.stringify(DEMO_RESULT)));
+  document.getElementById('demoBanner').style.display = 'block';
+}
+
 // ── 調査開始 ──
 async function startInvestigation(){
   const txid = document.getElementById('txidInput').value.trim();
   const errEl = document.getElementById('searchErr');
   errEl.style.display = 'none';
+  document.getElementById('demoBanner').style.display = 'none';
   if(!/^(0x)?[0-9a-fA-F]{64}$/.test(txid)){
     errEl.textContent = 'TXIDの形式が正しくありません。64文字のトランザクションIDをご入力ください。';
     errEl.style.display = 'block';
