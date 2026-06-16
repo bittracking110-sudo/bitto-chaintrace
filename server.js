@@ -3067,6 +3067,14 @@ ${history}
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── IAP（App内課金）レシート検証：RevenueCat連携後に実装 ──────────
+// ストアアカウント承認後、RevenueCatのレシート/エンタイトルメントを検証し、
+// 検証OKの場合のみ txidFormTokens にトークンを発行して formUrl を返す。
+// （現状は未実装。決済が確認できない限りトークンは発行しない＝不正防止）
+app.post('/api/connection/iap/verify', express.json(), async (_req, res) => {
+  return res.status(501).json({ error: 'IAP検証は準備中です（ストアアカウント承認後に有効化）' });
+});
+
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.listen(PORT, () => {
