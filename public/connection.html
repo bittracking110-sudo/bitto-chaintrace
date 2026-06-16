@@ -82,9 +82,12 @@ header{position:sticky;top:0;z-index:50;background:rgba(10,12,18,.88);backdrop-f
 .fnode{display:flex;gap:18px;cursor:pointer}
 .frail{display:flex;flex-direction:column;align-items:center;flex-shrink:0;width:24px}
 .fdot{width:16px;height:16px;border-radius:50%;border:2px solid;flex-shrink:0;margin-top:22px;background:var(--bg)}
-.fline{width:2px;flex:1;background:linear-gradient(180deg,var(--blue),var(--gold-dim));position:relative;border-radius:2px}
-.fline::after{content:'▾';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--gold2);font-size:15px;line-height:1;text-shadow:0 0 6px var(--bg)}
+.fline{width:2px;flex:1;position:relative;border-radius:2px;overflow:hidden;background:linear-gradient(180deg,rgba(122,162,201,.5),rgba(201,169,110,.25))}
+/* 金色の光が下へ流れるエフェクト */
+.fline::before{content:'';position:absolute;left:0;right:0;top:-40%;height:40%;background:linear-gradient(180deg,transparent,var(--gold2),transparent);filter:blur(1px);animation:flow 2.2s linear infinite}
+@keyframes flow{0%{top:-40%}100%{top:100%}}
 .fnode:last-child .fline{display:none}
+@media (prefers-reduced-motion: reduce){.fline::before{animation:none}}
 .fcard{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin-bottom:22px;transition:border-color .25s,transform .25s;position:relative}
 .fnode:hover .fcard{border-color:var(--gold);transform:translateX(3px)}
 .fcard::after{content:'詳細を見る ›';position:absolute;top:18px;right:20px;font-size:11px;color:var(--sub);letter-spacing:1px;opacity:0;transition:opacity .25s}
