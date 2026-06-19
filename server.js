@@ -37,6 +37,14 @@ const BASE_URL = process.env.BASE_URL
       ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
       : `http://localhost:${PORT}`);
 
+// ── RevenueCat（App内課金レシート検証用・秘密キー） ──────────
+// RevenueCat ダッシュボード → Project settings → API keys → Secret key（sk_ で始まる）
+// 検証対象の商品ID（任意・カンマ区切り）。未設定なら商品ID一致チェックをスキップ。
+const REVENUECAT_SECRET_KEY = process.env.REVENUECAT_SECRET_KEY || '';
+const RC_PRODUCT_IDS = (process.env.RC_PRODUCT_IDS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const consumedIapTx = new Set();   // 二重利用防止：検証済みトランザクションID
+
 // ── Stripe（任意） ─────────────────────────────────────────
 let stripe = null;
 if (STRIPE_SECRET_KEY && !STRIPE_SECRET_KEY.includes('ここに')) {
@@ -3067,12 +3075,86 @@ ${history}
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── IAP（App内課金）レシート検証：RevenueCat連携後に実装 ──────────
-// ストアアカウント承認後、RevenueCatのレシート/エンタイトルメントを検証し、
-// 検証OKの場合のみ txidFormTokens にトークンを発行して formUrl を返す。
-// （現状は未実装。決済が確認できない限りトークンは発行しない＝不正防止）
-app.post('/api/connection/iap/verify', express.json(), async (_req, res) => {
-  return res.status(501).json({ error: 'IAP検証は準備中です（ストアアカウント承認後に有効化）' });
+// ── IAP（App内課金）レシート検証：RevenueCat ─────────────────────
+// クライアントの購入後に呼ばれ、RevenueCatのレシートを検証。
+// 検証OKの場合のみ txidFormTokens にトークンを発行して formUrl を返す（不正防止）。
+// REVENUECAT_SECRET_KEY 未設定時は 503（承認前は安全に無効化）。
+app.post('/api/connection/iap/verify', express.json(), async (req, res) => {
+  try {
+    const { appUserId, transactionIds, productId, platform, name, email, phone, count } = req.body || {};
+    const want = Math.max(1, Math.min(10, parseInt(count) ||
+      (Array.isArray(transactionIds) ? transactionIds.length : 1)));
+    if (!email)     return res.status(400).json({ error: 'メールアドレスが必要です' });
+    if (!appUserId) return res.status(400).json({ error: '購入情報が不足しています' });
+    if (!REVENUECAT_SECRET_KEY)
+      return res.status(503).json({ error: 'IAP検証は準備中です（ストアアカウント承認後に有効化）' });
+
+    // RevenueCat REST：subscriber 情報を取得
+    const rcRes = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, {
+      headers: { Authorization: `Bearer ${REVENUECAT_SECRET_KEY}`, 'Content-Type': 'application/json' },
+    });
+    if (!rcRes.ok) return res.status(502).json({ error: '購入の確認に失敗しました' });
+    const rcData = await rcRes.json();
+    const nonSubs = (rcData.subscriber && rcData.subscriber.non_subscriptions) || {};
+
+    // 消費型購入を平坦化（商品ID一致・未消費のみ）
+    const txList = [];
+    for (const pid of Object.keys(nonSubs)) {
+      if (RC_PRODUCT_IDS.length && !RC_PRODUCT_IDS.includes(pid)) continue;
+      for (const t of (nonSubs[pid] || [])) {
+        const tid = t.store_transaction_id || t.id;
+        if (!tid || consumedIapTx.has(tid)) continue;
+        txList.push({ pid, tid, ms: Date.parse(t.purchase_date || '') || 0, sandbox: !!t.is_sandbox });
+      }
+    }
+    txList.sort((a, b) => b.ms - a.ms);
+
+    // クライアント指定のトランザクションIDを優先突き合わせ
+    const provided = new Set((transactionIds || []).filter(Boolean));
+    const chosen = [];
+    for (const tx of txList) {
+      if (chosen.length >= want) break;
+      if (provided.has(tx.tid)) chosen.push(tx);
+    }
+    // 不足分は直近(60分以内)の未消費購入で補完（同一ユーザーの正当な購入のみ）
+    if (chosen.length < want) {
+      const cutoff = Date.now() - 60 * 60 * 1000;
+      for (const tx of txList) {
+        if (chosen.length >= want) break;
+        if (chosen.includes(tx)) continue;
+        if (tx.ms && tx.ms < cutoff) continue;
+        chosen.push(tx);
+      }
+    }
+    if (!chosen.length) return res.status(402).json({ error: '有効な購入が確認できませんでした' });
+
+    chosen.forEach(tx => consumedIapTx.add(tx.tid));
+    const n = chosen.length;
+
+    // TXID入力フォームのトークンを発行（Stripeフローと同じ構造）
+    const formToken = crypto.randomUUID();
+    txidFormTokens.set(formToken, {
+      sessionId: `connection-${formToken.slice(0, 8)}`, userId: '', count: n,
+      customerName: name || 'お客様', email, phone: phone || '',
+      brand: 'connection', used: false, createdAt: Date.now(),
+      prefillTxid: '', status: 'paid_waiting_txid',
+      iap: {
+        platform: platform || '', appUserId,
+        productId: productId || (chosen[0] && chosen[0].pid) || '',
+        transactionIds: chosen.map(c => c.tid), sandbox: chosen.some(c => c.sandbox),
+      },
+    });
+    const formUrl = `${BASE_URL}/txid-form/${formToken}`;
+
+    // 申込記録
+    const submittedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+    appendToSheet([
+      submittedAt, name || '', phone || '', email, '', String(n),
+      String(CONNECTION_PRICE * n), `Connection-IAP:${formToken.slice(0, 12)}`, '', '申込済み(Connection/IAP)',
+    ]).catch(console.error);
+
+    res.json({ ok: true, formUrl });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
