@@ -433,7 +433,9 @@ async function getAddressInfo(addr, chain) {
 }
 
 async function enrichPathWithAddressInfo(path, chain) {
-  for (const node of path) {
+  let exchangeCount = 0;                 // 判明＋推定を合わせた取引所ノード数
+  for (let idx = 0; idx < path.length; idx++) {
+    const node = path[idx];
     if (!node.address) continue;
     await new Promise(res => setTimeout(res, 250)); // レート制限対策
     const info = await getAddressInfo(node.address, chain);
@@ -458,6 +460,16 @@ async function enrichPathWithAddressInfo(path, chain) {
         node.label      = inferred;
         node.isExchange = true;
         node.inferred   = true;
+      }
+    }
+
+    // ③ 2個目の取引所で停止：以降は取引所内移動の可能性が高く意味が薄いため切り捨て
+    if (node.isExchange) {
+      exchangeCount++;
+      if (exchangeCount >= 2) {
+        path.splice(idx + 1);
+        console.log(`[trace] 2個目の取引所で停止（index ${idx}、以降を切り捨て）`);
+        break;
       }
     }
   }
@@ -712,6 +724,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10) {
   let currentAddr = startAddr;
   let currentTime = startTime;
   const visited = new Set([startAddr.toLowerCase()]);
+  let exCount = 0;                       // ラベルで判明した取引所の数
   for (let i = 0; i < maxHops; i++) {
     let next = null;
     if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime);
@@ -730,7 +743,11 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10) {
     }));
     console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... label="${lbl}" exchange=${isEx} siblings=${siblings.length}`);
     hops.push({ address: next.addr, label: lbl, amount: next.amount, token: next.token, isExchange: isEx, time: next.time, txHash: next.txHash, siblings });
-    if (isEx) { console.log(`[traceHops] 取引所到達: ${lbl}`); break; }
+    if (isEx) {
+      exCount++;
+      console.log(`[traceHops] 取引所到達(${exCount}件目): ${lbl}`);
+      if (exCount >= 2) break;          // 2個目の取引所で停止
+    }
     currentAddr = next.addr;
     currentTime = next.time;
   }
