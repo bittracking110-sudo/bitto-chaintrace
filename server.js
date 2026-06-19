@@ -204,6 +204,24 @@ const LABEL_DB = {
   'razqnbmgaqrknxcvntxfwpsecmz39aagg':  'Bitstamp XRP',
 };
 
+// 自前ラベルDB：Etherscan由来のCEXプリセット + 手動照会(MistTrack/Arkham等)分を読み込み。
+// address-labels.json を後に読むことで、手動の確認済みラベルがプリセットを上書きする。
+// 使い方：address-labels.json に "小文字アドレス": "取引所名" を追記 → commit&push で自動反映。
+for (const labelFile of ['exchange-labels-eth.json', 'address-labels.json']) {
+  try {
+    const extra = JSON.parse(fs.readFileSync(path.join(__dirname, labelFile), 'utf8'));
+    let n = 0;
+    for (const [addr, name] of Object.entries(extra)) {
+      if (addr.startsWith('_') || !name) continue;   // _note / _source 等のメタは無視
+      LABEL_DB[addr.toLowerCase()] = name;
+      n++;
+    }
+    console.log(`[LABEL_DB] ${labelFile} から ${n}件を読み込み`);
+  } catch (e) {
+    if (e.code !== 'ENOENT') console.error(`[LABEL_DB] ${labelFile} 読み込み失敗:`, e.message);
+  }
+}
+
 // ══ 取引所連絡先DB ════════════════════════════════════════════
 const EXCHANGE_CONTACTS = {
   binance: {
