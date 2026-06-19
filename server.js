@@ -1379,7 +1379,22 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
     const lastLabelHtml = lastPathNode?.label
       ? `<br><span style="font-size:0.85em;color:#aaa">最終到達先：<strong>${lastPathNode.label}</strong>（${lastPathNode.address?.slice(0,12)}...${lastPathNode.address?.slice(-6)}）</span>`
       : '';
-    let exHTML = `<p class="no-ex">送金先は既知の取引所DBに一致しませんでした。${lastLabelHtml}</p>`;
+    // 名称未判明だが「取引所ホットウォレットの可能性が高い（推定）」アドレスに到達した場合
+    const inferredEx = (r.path || []).filter(p => p.isExchange && p.inferred).slice(-1)[0];
+    let exHTML;
+    if (inferredEx) {
+      exHTML = `
+        <div style="background:rgba(201,169,110,.08);border:1px solid rgba(201,169,110,.3);border-radius:8px;padding:14px 16px">
+          <p style="margin:0 0 10px"><strong>取引所のホットウォレットの可能性が高いアドレスに到達しました（推定）。</strong></p>
+          <table class="info-table">
+            <tr><th>到達アドレス</th><td class="mono">${inferredEx.address}</td></tr>
+            <tr><th>判定根拠（推定）</th><td>${inferredEx.label || '残高ほぼ0・取引回数が非常に多い（取引所ホットウォレットの典型）'}${inferredEx.txCount != null ? `（TX ${Number(inferredEx.txCount).toLocaleString()}件）` : ''}</td></tr>
+          </table>
+          <p style="font-size:0.85em;color:#aaa;margin:10px 0 0">※ 取引所名（運営元）は公開情報からは特定できていません。凍結要請を行うには、弁護士・警察を通じた発信者情報開示請求や取引所への照会により運営元を特定する必要があります。本資料はその手続きの証拠資料としてご利用ください。</p>
+        </div>`;
+    } else {
+      exHTML = `<p class="no-ex">送金先は既知の取引所DBに一致しませんでした。${lastLabelHtml}</p>`;
+    }
     let tplHTML = '';
     if (r.exchanges && r.exchanges.length > 0) {
       const ex      = r.exchanges[0];
@@ -1803,7 +1818,7 @@ async function generateAIContent(results, customerName) {
     const txData = results.map((item, idx) => {
       const r = item.result;
       const pathInfo = (r.path || []).map((p, i) => {
-        const role = i === 0 ? '起点（被害者）' : p.isExchange ? '★取引所到達' : `中継${i}`;
+        const role = i === 0 ? '起点（被害者）' : p.isExchange ? (p.inferred ? '取引所?(推定)' : '★取引所到達') : `中継${i}`;
         const bal  = p.balance  != null ? `残高:${p.balance.toFixed(4)}${r.chain}` : '';
         const txc  = p.txCount  != null ? `TX:${p.txCount}件` : '';
         return `  [${role}] ${p.address}${p.label ? '('+p.label+')':''} ${bal} ${txc}`;
@@ -1815,8 +1830,9 @@ async function generateAIContent(results, customerName) {
     const requestBlocks = results.map((item, idx) => {
       const r  = item.result;
       const ex = r.exchanges?.[0];
-      return `[REQUEST_${idx}]（${ex?.name||'取引所'}宛。依頼者:${customerName} TXID:${r.txid} チェーン:${r.chain} 日時:${r.blockTime} 金額:${r.amount?.toFixed(6)||'?'}${r.chain} 着金アドレス:${ex?.address||'不明'} 送金経路の説明 凍結・保全・情報提供の3点を要請 取引所固有の申請窓口を明記した凍結要請メール全文）[/REQUEST_${idx}]`;
-    }).join('\n');
+      if (!ex || !ex.name) return '';   // 名称未判明は凍結要請状を生成しない（証拠資料で対応）
+      return `[REQUEST_${idx}]（${ex.name}宛。依頼者:${customerName} TXID:${r.txid} チェーン:${r.chain} 日時:${r.blockTime} 金額:${r.amount?.toFixed(6)||'?'}${r.chain} 着金アドレス:${ex.address||'不明'} 送金経路の説明 凍結・保全・情報提供の3点を要請 取引所固有の申請窓口を明記した凍結要請メール全文）[/REQUEST_${idx}]`;
+    }).filter(Boolean).join('\n');
 
     const prompt = `あなたはブロックチェーン調査の専門家です。仮想通貨詐欺被害の調査結果を分析し、被害者（${customerName}様）への報告書を作成してください。
 

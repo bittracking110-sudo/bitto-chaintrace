@@ -95,11 +95,14 @@ header{position:sticky;top:0;z-index:50;background:rgba(10,12,18,.88);backdrop-f
 .fk-victim .fdot{border-color:var(--red)}
 .fk-relay .fdot{border-color:var(--blue)}
 .fk-exchange .fdot{border-color:var(--gold);background:var(--gold);box-shadow:0 0 14px rgba(201,169,110,.5)}
+.fk-exchange-est .fdot{border-color:var(--gold);background:transparent;box-shadow:0 0 8px rgba(201,169,110,.25)}
 .ftitle{font-size:12px;letter-spacing:2.5px;margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .fk-victim .ftitle{color:var(--red)}
 .fk-relay .ftitle{color:var(--blue)}
 .fk-exchange .ftitle{color:var(--gold2)}
+.fk-exchange-est .ftitle{color:var(--gold)}
 .fchip{display:inline-block;background:var(--gold-dim);border:1px solid rgba(201,169,110,.35);color:var(--gold2);font-size:11px;padding:2px 10px;border-radius:20px;letter-spacing:1px}
+.fchip.est{background:transparent;border-style:dashed;color:var(--sub2)}
 .faddr{font-family:monospace;font-size:13.5px;color:var(--text);letter-spacing:.5px;word-break:break-all}
 .fmeta{margin-top:8px;font-size:12px;color:var(--sub);display:flex;gap:18px;flex-wrap:wrap}
 .fmeta b{color:var(--sub2);font-weight:500}
@@ -687,6 +690,7 @@ function renderResult(result){
 
   // サマリーカード
   const exNames = (result.exchanges || []).map(e => e.name).filter(Boolean);
+  const hasInferredEx = (result.path || []).some(p => p.isExchange && p.inferred);
   const amountStr = (result.tokenSymbol && result.tokenAmount > 0)
     ? fmtAmt(result.tokenAmount, result.tokenSymbol)
     : fmtAmt(result.amount, result.chain);
@@ -694,7 +698,7 @@ function renderResult(result){
     <div class="sc"><div class="sk">CHAIN</div><div class="sv">${esc(result.chain)}</div></div>
     <div class="sc"><div class="sk">送金日時</div><div class="sv">${esc(fmtTime(result.blockTime) || '不明')}</div></div>
     <div class="sc"><div class="sk">送金額</div><div class="sv">${esc(amountStr || '不明')}</div></div>
-    <div class="sc"><div class="sk">到達取引所</div><div class="sv ${exNames.length ? 'gold' : ''}">${exNames.length ? esc(exNames[0]) + (exNames.length > 1 ? ' 他' : '') : '詳細調査で特定'}</div></div>`;
+    <div class="sc"><div class="sk">到達取引所</div><div class="sv ${exNames.length ? 'gold' : ''}">${exNames.length ? esc(exNames[0]) + (exNames.length > 1 ? ' 他' : '') : (hasInferredEx ? '取引所の可能性（推定）' : '詳細調査で特定')}</div></div>`;
 
   // フローマップ
   const path = result.path || [];
@@ -705,10 +709,14 @@ function renderResult(result){
     if(i === 0 && p.role === 'sender'){ kind = 'victim'; title = '被害者ウォレット'; }
     else {
       hopIdx++;
-      if(p.isExchange){ kind = 'exchange'; title = `取引所到達（${hopIdx}次先）`; }
+      if(p.isExchange){
+        if(p.inferred){ kind = 'exchange-est'; title = `取引所の可能性（推定・${hopIdx}次先）`; }
+        else { kind = 'exchange'; title = `取引所到達（${hopIdx}次先）`; }
+      }
       else { title = `中継アドレス（${hopIdx}次先）`; }
     }
-    const chip = p.label ? `<span class="fchip">${esc(p.label)}</span>` : (kind === 'exchange' ? `<span class="fchip">取引所（調査中）</span>` : '');
+    const chipCls = kind === 'exchange-est' ? 'fchip est' : 'fchip';
+    const chip = p.label ? `<span class="${chipCls}">${esc(p.label)}</span>` : (kind === 'exchange' ? `<span class="fchip">取引所（調査中）</span>` : '');
     const metaParts = [];
     const t = fmtTime(p.time);
     if(t) metaParts.push(`<span>📅 <b>${esc(t)}</b></span>`);
