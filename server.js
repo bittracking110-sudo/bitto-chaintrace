@@ -73,6 +73,12 @@ const txidFormTokens  = new Map();
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'public', 'reports');
 const REPORTS_DIR = DATA_DIR;
 if (!fs.existsSync(REPORTS_DIR)) fs.mkdirSync(REPORTS_DIR, { recursive: true });
+// 起動時に保存先を明示ログ（Railwayログで永続化の有効/無効を確認できる）
+if (process.env.DATA_DIR) {
+  console.log(`[Storage] ✅ 永続ボリューム有効: DATA_DIR=${REPORTS_DIR}（再デプロイしても報告書は残ります）`);
+} else {
+  console.log(`[Storage] ⚠️ 揮発モード（DATA_DIR未設定）: ${REPORTS_DIR}（再デプロイで消えます）`);
+}
 
 // 申込（TXIDフォームトークン）の永続化：再デプロイで注文が消えないように
 const TXID_FORMS_FILE = path.join(REPORTS_DIR, 'txid-forms.json');
