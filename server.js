@@ -66,9 +66,28 @@ const pendingSessions = new Map(); // sessionId → { userId, txidCount, stripeI
 const reportCache     = new Map(); // reportId  → { html }（メモリキャッシュ）
 const txidFormTokens  = new Map();
 
-// ── レポートのファイル永続化 ───────────────────────────────────
-const REPORTS_DIR = path.join(__dirname, 'public', 'reports');
+// ── データ永続化 ───────────────────────────────────────────────
+// ⚠️ Railwayのファイルシステムは揮発性（再デプロイで消える）。
+//   本番では Railwayの永続ボリュームをマウントし、環境変数 DATA_DIR=/data を設定すること。
+//   未設定時はローカル（開発用・揮発）にフォールバック。
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'public', 'reports');
+const REPORTS_DIR = DATA_DIR;
 if (!fs.existsSync(REPORTS_DIR)) fs.mkdirSync(REPORTS_DIR, { recursive: true });
+
+// 申込（TXIDフォームトークン）の永続化：再デプロイで注文が消えないように
+const TXID_FORMS_FILE = path.join(REPORTS_DIR, 'txid-forms.json');
+try {
+  if (fs.existsSync(TXID_FORMS_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(TXID_FORMS_FILE, 'utf8'));
+    for (const [k, v] of Object.entries(saved)) txidFormTokens.set(k, v);
+    console.log(`[Forms] 申込 ${txidFormTokens.size}件を復元`);
+  }
+} catch (e) { console.error('[Forms] 復元失敗:', e.message); }
+function saveTxidForms() {
+  fsp.writeFile(TXID_FORMS_FILE, JSON.stringify(Object.fromEntries(txidFormTokens)), 'utf8').catch(() => {});
+}
+// 申込状態（作成・調査中・完了）を定期的に永続化（個別呼び出し漏れを防ぐ）
+setInterval(saveTxidForms, 8000);
 
 async function saveReport(reportId, html) {
   reportCache.set(reportId, { html });
