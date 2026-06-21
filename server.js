@@ -2529,7 +2529,8 @@ app.get('/api/test-txid-form', (req, res) => {
 app.get('/txid-form/:token', (req, res) => {
   const data = txidFormTokens.get(req.params.token);
   if (!data) return res.status(404).sendFile(path.join(__dirname, 'public', 'form-expired.html'));
-  if (data.used) return res.status(410).sendFile(path.join(__dirname, 'public', 'form-used.html'));
+  // Connectionは使用済みでも報告書を表示するためフォームページを返す（BitToはLINE配信のため固定ページ）
+  if (data.used && data.brand !== 'connection') return res.status(410).sendFile(path.join(__dirname, 'public', 'form-used.html'));
   res.sendFile(path.join(__dirname, 'public', 'txid-form.html'));
 });
 
@@ -2537,7 +2538,7 @@ app.get('/txid-form/:token', (req, res) => {
 app.get('/api/txid-form-info/:token', (req, res) => {
   const data = txidFormTokens.get(req.params.token);
   if (!data) return res.status(404).json({ error: 'リンクが無効または期限切れです' });
-  if (data.used) return res.status(410).json({ error: 'このリンクはすでに使用済みです', used: true });
+  if (data.used) return res.status(410).json({ error: 'このリンクはすでに使用済みです', used: true, brand: data.brand || 'bitto' });
   res.json({ ok: true, count: data.count, customerName: data.customerName, brand: data.brand || 'bitto', prefillTxid: data.prefillTxid || '' });
 });
 

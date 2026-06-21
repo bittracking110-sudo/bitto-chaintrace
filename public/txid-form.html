@@ -167,6 +167,12 @@
         const data = await res.json();
 
         if (!res.ok) {
+          // TXID送信済み（used）のConnection申込は、報告書の状況を表示する
+          if (data.used && data.brand === 'connection') {
+            isConnection = true;
+            showStatusForUsedToken();
+            return;
+          }
           document.getElementById('loadingState').innerHTML =
             `<div style="text-align:center;padding:40px;color:#f28b82">
               <div style="font-size:3rem;margin-bottom:12px">⚠️</div>
@@ -279,18 +285,57 @@
           const j = await r.json();
           if (j.status === 'done' && j.report) {
             clearInterval(resultPollTimer);
-            document.getElementById('successTitle').textContent = '正式調査報告書が完成しました';
-            document.getElementById('successMsg').innerHTML = '調査報告書と専任サポートチャットは、ご登録のメールアドレスにもお送りしています。';
-            area.innerHTML =
-              `<a href="${j.report.reportUrl}" target="_blank" style="display:block;background:#c9a96e;color:#0a0c12;text-decoration:none;padding:14px;border-radius:8px;font-weight:700;letter-spacing:1px;margin-bottom:12px">📄 調査報告書を開く</a>` +
-              `<a href="${j.report.chatUrl}" target="_blank" style="display:block;background:#2a2b2e;color:#c9a96e;text-decoration:none;padding:14px;border-radius:8px;font-weight:600;border:1px solid #c9a96e">💬 専任サポートチャット</a>` +
-              `<p style="font-size:0.78rem;color:#8b91a0;margin-top:14px">このページのリンクは大切に保管してください。</p>`;
+            renderReport(j.report);
           } else if (j.status === 'error') {
             clearInterval(resultPollTimer);
             area.innerHTML = `<p style="color:#f28b82;font-size:0.85rem">調査中にエラーが発生しました。サポートよりご連絡いたします。</p>`;
           }
         } catch (e) {}
       }, 4000);
+    }
+
+    // 完成した報告書＋サポートチャットのリンクを表示
+    function renderReport(report) {
+      document.getElementById('successTitle').textContent = '正式調査報告書が完成しました';
+      document.getElementById('successMsg').innerHTML = '調査報告書と専任サポートチャットは、ご登録のメールアドレスにもお送りしています。';
+      document.getElementById('resultArea').innerHTML =
+        `<a href="${report.reportUrl}" target="_blank" style="display:block;background:#c9a96e;color:#0a0c12;text-decoration:none;padding:14px;border-radius:8px;font-weight:700;letter-spacing:1px;margin-bottom:12px">📄 調査報告書を開く</a>` +
+        `<a href="${report.chatUrl}" target="_blank" style="display:block;background:#2a2b2e;color:#c9a96e;text-decoration:none;padding:14px;border-radius:8px;font-weight:600;border:1px solid #c9a96e">💬 専任サポートチャット</a>` +
+        `<p style="font-size:0.78rem;color:#8b91a0;margin-top:14px">このページのリンクは大切に保管してください。</p>`;
+    }
+
+    // ヘッダーをConnection表示に切り替え
+    function applyConnectionHeader() {
+      document.title = 'Connection｜調査状況';
+      const logo = document.querySelector('.header .logo'); if (logo) logo.textContent = '';
+      const h1 = document.querySelector('.header h1');
+      if (h1) { h1.textContent = 'Connection'; h1.style.cssText = 'letter-spacing:2px;color:#c9a96e;font-family:Georgia,serif;font-size:1.8rem'; }
+      const p = document.querySelector('.header p'); if (p) p.textContent = 'お申し込みありがとうございます';
+    }
+
+    // TXID送信済み（used）の再アクセス時：完成済みなら報告書、調査中なら進捗を表示
+    async function showStatusForUsedToken() {
+      applyConnectionHeader();
+      document.getElementById('loadingState').style.display = 'none';
+      document.getElementById('mainForm').style.display = 'none';
+      document.getElementById('successBox').style.display = 'block';
+      document.getElementById('successTitle').textContent = '調査状況';
+      document.getElementById('successMsg').innerHTML = '調査状況を確認しています…';
+      try {
+        const r = await fetch(`/api/txid-form-result/${token}`);
+        const j = await r.json();
+        if (j.status === 'done' && j.report) { renderReport(j.report); return; }
+        if (j.status === 'error') {
+          document.getElementById('successMsg').innerHTML = '';
+          document.getElementById('resultArea').innerHTML = `<p style="color:#f28b82;font-size:0.85rem">調査中にエラーが発生しました。サポートよりご連絡いたします。</p>`;
+          return;
+        }
+      } catch (e) {}
+      // まだ調査中 → 完成までポーリング
+      document.getElementById('successTitle').textContent = '調査中です';
+      document.getElementById('successMsg').innerHTML =
+        'ただいま調査を行っております。<br><span style="color:#9aa0a6;font-size:0.85rem">完成すると、このページに報告書が表示されます。</span>';
+      startResultPolling();
     }
 
     init();
