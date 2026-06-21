@@ -280,7 +280,7 @@
           if (j.status === 'done' && j.report) {
             clearInterval(resultPollTimer);
             document.getElementById('successTitle').textContent = '正式調査報告書が完成しました';
-            document.getElementById('successMsg').innerHTML = 'ご登録のメールアドレスにもご案内をお送りしました。';
+            document.getElementById('successMsg').innerHTML = '調査報告書と専任サポートチャットは、ご登録のメールアドレスにもお送りしています。';
             area.innerHTML =
               `<a href="${j.report.reportUrl}" target="_blank" style="display:block;background:#c9a96e;color:#0a0c12;text-decoration:none;padding:14px;border-radius:8px;font-weight:700;letter-spacing:1px;margin-bottom:12px">📄 調査報告書を開く</a>` +
               `<a href="${j.report.chatUrl}" target="_blank" style="display:block;background:#2a2b2e;color:#c9a96e;text-decoration:none;padding:14px;border-radius:8px;font-weight:600;border:1px solid #c9a96e">💬 専任サポートチャット</a>` +

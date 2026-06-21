@@ -1436,6 +1436,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
 
       tplHTML = `
         <h3>📝 取引所への要請テンプレート</h3>
+        <p style="font-size:0.85em;color:#94a3b8;margin:0 0 8px">下記は、上記「申請アドバイス」に沿って取引所へそのまま送付できる要請文です。</p>
         <div class="template-box">【${ex.name || '取引所'} サポートチームへ】
 
 件名：不正送金に関する緊急凍結要請
@@ -1469,9 +1470,25 @@ ${r.txid}
       const aiReq = (aiData.requests || [])[idx];
       if (aiReq) {
         tplHTML = `
-        <h3>📝 取引所への要請テンプレート<span class="ai-req-badge">AI生成</span></h3>
+        <h3>📝 取引所への要請テンプレート</h3>
+        <p style="font-size:0.85em;color:#94a3b8;margin:0 0 8px">下記は、上記「申請アドバイス」に沿って取引所へそのまま送付できる要請文です。</p>
         <div class="template-box">${aiReq}</div>`;
       }
+    }
+
+    // USDT（Tether発行）の場合：Tether社への凍結要請窓口を併記（Tetherはトークンを凍結可能）
+    let tetherHTML = '';
+    if (/usdt|tether/i.test(r.tokenSymbol || '')) {
+      tetherHTML = `
+        <h3>🪙 Tether社（USDT発行体）への凍結要請</h3>
+        <div style="background:rgba(5,150,105,.08);border:1px solid rgba(5,150,105,.3);border-radius:8px;padding:14px 16px">
+          <p style="margin:0 0 10px">本件は <strong>USDT（Tether社発行）</strong>です。Tether社は自社発行のUSDTトークンを<strong>凍結する権限</strong>を持つため、到達先取引所への要請に加え、<strong>発行体（Tether社）への凍結要請も有効</strong>です。</p>
+          <table class="info-table">
+            <tr><th>法執行機関向け窓口</th><td><a href="https://tether.to/en/legal/?tab=law-enforcement-requests">https://tether.to/en/legal/?tab=law-enforcement-requests</a></td></tr>
+            <tr><th>連絡先メール</th><td>inforequests@tether.to</td></tr>
+          </table>
+          <p style="font-size:0.85em;color:#94a3b8;margin:10px 0 0">※ 通常、Tether社への要請は警察・弁護士等の法執行機関を通じて行います。本資料を添えてご相談ください。</p>
+        </div>`;
     }
 
     return `
@@ -1509,6 +1526,7 @@ ${r.txid}
         <h3>🏦 取引所判定</h3>
         ${exHTML}
         ${tplHTML}
+        ${tetherHTML}
       </section>`;
   }).join('');
 
@@ -1713,8 +1731,7 @@ ${r.txid}
   ${aiData.analysis ? `
   <div class="ai-overall">
     <div class="ai-header">
-      <span class="ai-title">🤖 AI調査分析レポート</span>
-      <span class="ai-label">✦ Gemini AI 自動生成</span>
+      <span class="ai-title">🔎 総合調査分析レポート</span>
     </div>
     <div class="ai-body">${aiData.analysis}</div>
   </div>` : ''}
@@ -3203,6 +3220,28 @@ app.post('/api/connection/iap/verify', express.json(), async (req, res) => {
       submittedAt, name || '', phone || '', email, '', String(n),
       String(CONNECTION_PRICE * n), `Connection-IAP:${formToken.slice(0, 12)}`, '', '申込済み(Connection/IAP)',
     ]).catch(console.error);
+
+    // 申込確認・利用規約同意メール
+    sendEmail(email, '【Connection】お申し込みを受け付けました（正式調査報告書）',
+      `<div style="font-family:sans-serif;line-height:1.8;color:#222">
+        <p>${name || 'お客様'} 様</p>
+        <p>正式調査報告書のお申し込みを受け付けました。ご利用ありがとうございます。</p>
+        <p><b>調査件数：</b>${n}件　<b>お支払い：</b>¥${(CONNECTION_PRICE * n).toLocaleString()}（税込）</p>
+        <p>続けて、以下のフォームから調査対象の <b>TXID</b> をご入力ください（${n}件）：<br>
+          <a href="${formUrl}">${formUrl}</a></p>
+        <p>調査完了後、<b>調査報告書</b>と<b>専任サポートチャット</b>を、このメールアドレスとアプリ内でお届けします。</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:18px 0">
+        <p style="font-size:13px;color:#666">
+          ■ お申し込み時に<b>利用規約に同意</b>いただいています。主な内容：<br>
+          ・本サービスは公開ブロックチェーン情報に基づく調査・情報提供サービスです。<br>
+          ・デジタルコンテンツの性質上、決済後のキャンセル・返金はお受けできません。<br>
+          ・本サービスは被害の回復・資産の奪還・犯人の特定を保証するものではありません。<br>
+          ・本サービスは法律事務を提供するものではありません。<br>
+          プライバシーポリシー：<a href="${BASE_URL}/privacy">${BASE_URL}/privacy</a>
+        </p>
+        <p style="font-size:13px;color:#666">運営：Himesen株式会社　お問い合わせ：himesen.inc2512@gmail.com</p>
+      </div>`
+    ).catch(console.error);
 
     res.json({ ok: true, formUrl });
   } catch (e) { res.status(500).json({ error: e.message }); }
