@@ -2384,12 +2384,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/status', (_req, res) => res.json({
   ok: true, mode: stripe ? 'production' : 'test（Stripeなし）',
   keys: { blockchair: !!BLOCKCHAIR_KEY, etherscan: !!ETHERSCAN_KEY, gemini: !!GEMINI_KEY, line: !!LINE_CHANNEL_ACCESS_TOKEN, stripe: !!stripe },
-  mail: {
-    resend: !!RESEND_API_KEY,
-    smtp: !!(SMTP_USER && SMTP_PASS),
-    from: MAIL_FROM,
-    domainVerified: !/onboarding@resend\.dev/.test(MAIL_FROM),
-  },
   webhook: `${BASE_URL}/webhook`,
 }));
 app.get('/api/btc/tx/:txid', async (req, res) => {
