@@ -2986,8 +2986,9 @@ app.post('/api/connection/checkout', express.json(), async (req, res) => {
 
     // 決済後に表示するTXID入力フォームのトークンを先に発行
     const formToken = crypto.randomUUID();
+    const sessionId = `connection-${formToken.slice(0, 8)}`;
     txidFormTokens.set(formToken, {
-      sessionId: `connection-${formToken.slice(0, 8)}`, userId: '', count: n,
+      sessionId, userId: '', count: n,
       customerName: name || 'お客様', email, phone: phone || '',
       brand: 'connection', used: false, createdAt: Date.now(),
       prefillTxid: t, status: 'paid_waiting_txid',
@@ -2998,7 +2999,7 @@ app.post('/api/connection/checkout', express.json(), async (req, res) => {
     const submittedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
     appendToSheet([
       submittedAt, name || '', phone || '', email, '', String(n),
-      String(amount), `Connection:${formToken.slice(0, 12)}`, '', '申込済み(Connection)',
+      String(amount), sessionId, '', '申込済み(Connection)',
     ]).catch(console.error);
 
     if (!stripe) {
@@ -3226,8 +3227,9 @@ app.post('/api/connection/iap/verify', express.json(), async (req, res) => {
 
     // TXID入力フォームのトークンを発行（Stripeフローと同じ構造）
     const formToken = crypto.randomUUID();
+    const sessionId = `connection-${formToken.slice(0, 8)}`;
     txidFormTokens.set(formToken, {
-      sessionId: `connection-${formToken.slice(0, 8)}`, userId: '', count: n,
+      sessionId, userId: '', count: n,
       customerName: name || 'お客様', email, phone: phone || '',
       brand: 'connection', used: false, createdAt: Date.now(),
       prefillTxid: '', status: 'paid_waiting_txid',
@@ -3243,7 +3245,7 @@ app.post('/api/connection/iap/verify', express.json(), async (req, res) => {
     const submittedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
     appendToSheet([
       submittedAt, name || '', phone || '', email, '', String(n),
-      String(CONNECTION_PRICE * n), `Connection-IAP:${formToken.slice(0, 12)}`, '', '申込済み(Connection/IAP)',
+      String(CONNECTION_PRICE * n), sessionId, '', '申込済み(Connection/IAP)',
     ]).catch(console.error);
 
     // 申込確認・利用規約同意メール
