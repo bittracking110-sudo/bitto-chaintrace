@@ -1871,8 +1871,28 @@ ${r.txid}
 
 // ══ Gemini AI コンテンツ生成 ══════════════════════════════════
 
-async function generateAIContent(results, customerName) {
-  if (!GEMINI_KEY) return { analysis: null, requests: [] };
+// AI生成に失敗すると、報告書から「総合調査分析レポート」と「凍結要請状」が
+// 黙って欠落したまま有料顧客に届く。無言で劣化させないため運営に通知する。
+async function notifyAIFailure(customerName, reason) {
+  console.error(`[AI] ❌ 報告書のAI生成に失敗（AI分析・凍結要請状が欠落します）依頼者:${customerName} 理由:${reason}`);
+  if (!SMTP_USER) return;
+  await sendEmail(SMTP_USER, '【要対応】報告書のAI生成に失敗しました',
+    `<p>依頼者：${customerName} 様</p>
+     <p>理由：${reason}</p>
+     <p><b>この報告書には「総合調査分析レポート」と「凍結要請状」が含まれていません。</b>
+     内容を確認し、必要なら再生成のうえ改めてご案内してください。</p>
+     <p>Geminiの無料枠を使い切っている場合は、APIキーの課金を有効化してください。</p>`
+  ).catch(e => console.error('[AI] 失敗通知メールの送信に失敗:', e.message));
+}
+
+async function generateAIContent(results, customerName, opts = {}) {
+  const notify = opts.notify !== false;
+  const failed = async (reason) => {
+    if (notify) await notifyAIFailure(customerName, reason);
+    else console.error('[AI] Gemini生成失敗:', reason);
+    return { analysis: null, requests: [], aiFailed: true };
+  };
+  if (!GEMINI_KEY) return failed('GEMINI_API_KEY が未設定');
   try {
     // 調査データをテキスト化
     const txData = results.map((item, idx) => {
@@ -1918,34 +1938,45 @@ ${requestBlocks}
 
 分析ポイント：TX件数10件以下→専用ウォレット疑い、残高ほぼゼロ→使い捨て、短時間転送→計画的犯行、取引所ごとの窓口（法執行機関ポータル/メール/チケット）を明記`;
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 2500, thinkingConfig: { thinkingBudget: 0 } },
-        }),
+    // 一時的なレート超過（RPM）は待てば通るので3回まで再試行する
+    let lastErr = '不明';
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { temperature: 0.3, maxOutputTokens: 2500, thinkingConfig: { thinkingBudget: 0 } },
+            }),
+          }
+        );
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error?.message || 'API error');
+        const text = j.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+        const aMatch   = text.match(/\[ANALYSIS\]([\s\S]*?)\[\/ANALYSIS\]/);
+        const analysis = aMatch ? aMatch[1].trim() : null;
+        if (!analysis) throw new Error('ANALYSISタグが返らなかった（' + (j.candidates?.[0]?.finishReason || '理由不明') + '）');
+
+        const requests = results.map((_, idx) => {
+          const m = text.match(new RegExp(`\\[REQUEST_${idx}\\]([\\s\\S]*?)\\[/REQUEST_${idx}\\]`));
+          return m ? m[1].trim() : null;
+        });
+
+        console.log('[AI] Gemini分析完了 analysis: true requests:', requests.map(r => !!r));
+        return { analysis, requests, aiFailed: false };
+      } catch (e) {
+        lastErr = e.message;
+        console.warn(`[AI] 生成失敗 (${attempt}/3): ${lastErr}`);
+        if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 5000));
       }
-    );
-    const j = await res.json();
-    if (!res.ok) throw new Error(j.error?.message || 'API error');
-    const text = j.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-    const aMatch  = text.match(/\[ANALYSIS\]([\s\S]*?)\[\/ANALYSIS\]/);
-    const analysis = aMatch ? aMatch[1].trim() : null;
-
-    const requests = results.map((_, idx) => {
-      const m = text.match(new RegExp(`\\[REQUEST_${idx}\\]([\\s\\S]*?)\\[/REQUEST_${idx}\\]`));
-      return m ? m[1].trim() : null;
-    });
-
-    console.log('[AI] Gemini分析完了 analysis:', !!analysis, 'requests:', requests.map(r => !!r));
-    return { analysis, requests };
+    }
+    return failed(lastErr);
   } catch (e) {
-    console.error('[AI] Gemini エラー:', e.message);
-    return { analysis: null, requests: [] };
+    return failed(e.message);
   }
 }
 
@@ -2700,7 +2731,8 @@ app.get('/report/preview', async (req, res) => {
   let aiData = { analysis: null, requests: [] };
   if (req.query.ai !== '0' && GEMINI_KEY) {
     console.log('[Preview] Gemini AI 生成中...');
-    aiData = await generateAIContent(mockList, 'テストユーザー').catch(() => ({ analysis: null, requests: [] }));
+    // プレビューは運営自身の確認用なので失敗通知メールは送らない
+    aiData = await generateAIContent(mockList, 'テストユーザー', { notify: false }).catch(() => ({ analysis: null, requests: [] }));
   }
 
   const brand = req.query.brand === 'connection' ? 'connection' : 'bitto';
