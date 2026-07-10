@@ -2867,6 +2867,8 @@ function buildConnectionEmailHTML(name, reportUrl, chatUrl, issuedAt) {
 
 // ── ページ配信 ────────────────────────────────────────────────
 app.get('/connection', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection.html')));
+// BitTo：チャット型の無料追跡UI（アプリ化の土台）
+app.get('/bitto', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'bitto.html')));
 app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-privacy.html')));
 app.get('/connection/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-privacy.html')));
 app.get('/support/:token', (req, res) => {
@@ -3113,6 +3115,8 @@ app.post('/api/connection/consult', express.json(), async (req, res) => {
     if (!message) return res.status(400).json({ error: 'メッセージが空です' });
     const messages = Array.isArray(req.body.messages) ? req.body.messages.slice(-10) : [];
     const ctx = req.body.context || null;
+    // ブランド別のAIペルソナ（BitToは無料アプリ＝有料商品の案内をしない）
+    const brand = req.body.brand === 'bitto' ? 'bitto' : 'connection';
 
     // 追跡結果の文脈を組み立て
     let caseInfo = '（まだ追跡を行っていない、または追跡情報なし）';
@@ -3125,7 +3129,36 @@ app.post('/api/connection/consult', express.json(), async (req, res) => {
     let reply = 'ご相談ありがとうございます。担当者が確認のうえご案内いたします。';
     if (GEMINI_KEY) {
       const history = messages.map(m => `${m.role === 'user' ? 'ご相談者' : '相談員'}：${m.text}`).join('\n');
-      const prompt = `あなたは暗号資産の資金追跡調査サービス「Connection」の初回相談員です。
+      const bittoPrompt = `あなたは暗号資産の資金追跡サービス「BitTo」の調査AIです。
+詐欺被害などで不安を抱えた方が多いので、まず安心していただくことを最優先にしてください。
+
+【サービス概要】
+- TXID（取引ID）を送ると、資金の流れを追跡して可視化します（追跡は無料）
+- 対応チェーン：ビットコイン(BTC)／イーサリアム(ETH)／XRP
+- 到達した取引所の候補を「判明／推定」に分けて表示します
+
+【ご相談者の追跡結果】
+${caseInfo}
+
+【対応方針】
+- 丁寧で落ち着いた敬語。寄り添う対応
+- 名乗りは「BitToの調査AI」のみ。個人名・架空の氏名・伏字は絶対に使わない
+- 毎回挨拶を繰り返さず、会話が続いている場合は自然に本題へ
+- 上記の追跡結果を踏まえ、その方のケースに即して具体的に説明する
+- 取引所に到達している場合は、記録の保全や取引所への連絡といった次の一歩を案内する
+- DEX・海外取引所・匿名化を経由している場合は、最終特定が難しい可能性を正直に伝える
+- 被害の回復・資産の奪還・犯人特定を「保証」する表現は絶対に使わない
+- 法律判断・返金交渉の代行はしない。法的な相談は弁護士等の専門家を案内する（弁護士法に配慮）
+- **有料サービスや金額の案内・営業は一切しない**（このアプリでは販売していません）
+- 不安を煽らない。回答は400文字以内、日本語
+
+【これまでの相談】
+${history}
+ご相談者：${message}
+
+調査AIとしての返信のみを出力してください。`;
+
+      const connectionPrompt = `あなたは暗号資産の資金追跡調査サービス「Connection」の初回相談員です。
 これは正式依頼【前】の無料相談です。詐欺被害などで不安を抱えた方が多いので、まず安心していただくことを最優先にしてください。
 
 【サービス概要】
@@ -3153,6 +3186,8 @@ ${history}
 ご相談者：${message}
 
 相談員としての返信のみを出力してください。`;
+
+      const prompt = brand === 'bitto' ? bittoPrompt : connectionPrompt;
       try {
         const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
