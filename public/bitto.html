@@ -86,6 +86,7 @@
   .risk .t{font-size:12.5px;font-weight:600}
   .risk .d{font-size:10.5px;color:var(--sub)}
   .risk.ok .ic{color:var(--green)} .risk.warn .ic{color:var(--amber)} .risk.bad .ic{color:var(--red)}
+  .risk.unk .ic{color:var(--grey)} .risk.unk .t{color:var(--sub2)}   /* ラベル情報なし＝判定不能 */
 
   /* フロー */
   .flow{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;align-items:flex-start}
@@ -279,25 +280,36 @@ function resultCard(results){
   paths.forEach(p => p.forEach(n => n.label && allLabels.push(n.label)));
   const mixer  = allLabels.filter(l => hasKey(l, MIXER_KEYS));
   const bridge = allLabels.filter(l => hasKey(l, BRIDGE_KEYS));
+  // ラベルが1件も取れていない＝「検出なし」ではなく「判定不能」
+  const noLabelInfo = allLabels.length === 0;
+  const chains = [...new Set(results.map(r => r.chain))];
+  const btcNote = chains.includes('BTC')
+    ? '<div class="note">※ ビットコインは公開されているアドレスラベルが限られるため、実際には取引所へ到達していても名称を特定できない場合があります。</div>' : '';
 
   const stats = `
   <div class="card"><h4>調査サマリー</h4><div class="stats">
     <div class="stat"><div class="k">🔗 追跡TXID数</div><div class="v">${results.length}件</div><div class="n">解析完了</div></div>
     <div class="stat"><div class="k">📍 追跡アドレス数</div><div class="v">${addrs.size}件</div><div class="n">経路上のアドレス</div></div>
-    <div class="stat"><div class="k">🏦 取引所候補</div><div class="v">${exNodes.length}件</div><div class="n">判明${exNames.length}／推定${exNodes.length - exNames.length}</div></div>
+    <div class="stat"><div class="k">🏦 取引所候補</div><div class="v">${exNodes.length}件</div><div class="n">${noLabelInfo ? 'ラベル情報なし' : `判明${exNames.length}／推定${exNodes.length - exNames.length}`}</div></div>
     <div class="stat"><div class="k">💰 追跡総額</div><div class="v" style="font-size:14px">${esc(amountText)}</div><div class="n">オンチェーン値</div></div>
   </div></div>`;
 
+  // ラベルが1件も無い場合、「検出なし（緑✓）」は誤った安心を与えるため出さない
+  const riskRow = (title, hits, cls) => `
+    <div class="risk ${noLabelInfo ? 'unk' : (hits.length ? cls : 'ok')}">
+      <div class="ic">${noLabelInfo ? '—' : (hits.length ? '⚠️' : '✓')}</div>
+      <div><div class="t">${title}</div>
+      <div class="d">${noLabelInfo
+        ? '経路上のアドレスにラベル情報がなく、判定できません'
+        : (hits.length ? esc([...new Set(hits)].join('、')) + ' を経由' : '該当する経路は検出されませんでした')}</div></div></div>`;
+
   const risk = `
   <div class="card"><h4>リスク検出</h4><div class="risks">
-    <div class="risk ${mixer.length ? 'bad':'ok'}"><div class="ic">${mixer.length ? '⚠️':'✓'}</div>
-      <div><div class="t">匿名化・スワップ経由</div>
-      <div class="d">${mixer.length ? esc([...new Set(mixer)].join('、')) + ' を経由' : '該当する経路は検出されませんでした'}</div></div></div>
-    <div class="risk ${bridge.length ? 'warn':'ok'}"><div class="ic">${bridge.length ? '⚠️':'✓'}</div>
-      <div><div class="t">ブリッジ・DEX経由</div>
-      <div class="d">${bridge.length ? esc([...new Set(bridge)].join('、')) + ' を経由' : '該当する経路は検出されませんでした'}</div></div></div>
+    ${riskRow('匿名化・スワップ経由', mixer, 'bad')}
+    ${riskRow('ブリッジ・DEX経由', bridge, 'warn')}
   </div>
-  <div class="note">※ 検出は判明したラベル情報に基づきます。ラベルが未取得のアドレスについては判定できません。</div></div>`;
+  <div class="note">※ 検出は判明したラベル情報に基づきます。ラベルが未取得のアドレスについては判定できません。</div>
+  ${btcNote}</div>`;
 
   const flows = results.map((r,i) => `
     <div class="card"><h4>資金フロー（概要）${results.length>1 ? ` ${i+1}/${results.length}` : ''} — ${esc(r.chain)}</h4>
@@ -315,7 +327,10 @@ function resultCard(results){
       ? `取引所系とみられるウォレットに到達しましたが、<b>名称は特定できていません（推定）</b>。${viaNote}`
       : viaNodes.length
         ? `資金はDEX・ブリッジ等を経由しており、<b>現時点で既知の取引所には到達していません</b>。${viaNote}`
-        : '現時点で既知の取引所には到達していません。';
+        : noLabelInfo
+          // ラベルが1件も無い＝「到達していない」とは言い切れない
+          ? `経路上のアドレスに<b>既知のラベル情報が見つからず、取引所を特定できませんでした</b>。資金の移動経路は下記のとおり追跡できています。`
+          : '現時点で既知の取引所には到達していません。';
 
   return `調査が完了しました。以下が結果の概要です。\n\n${summaryLine}${stats}${risk}${flows}
     <div class="note">本結果は公開ブロックチェーン情報に基づく情報提供です。資産の回復・犯人の特定を保証するものではありません。</div>`;
