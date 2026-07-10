@@ -96,6 +96,9 @@
   .node .nm{font-size:12px;font-weight:700;margin-top:2px;line-height:1.35;word-break:break-word}
   .node .ad{font-size:10px;color:var(--sub);font-family:ui-monospace,Menlo,monospace;margin-top:2px}
   .node .am{font-size:11px;color:var(--sub2);margin-top:4px}
+  /* 取引回数（生データ。多いほど取引所/サービスの手がかりになるが断定はしない） */
+  .node .meta{font-size:10px;color:var(--sub);margin-top:2px}
+  .node .meta.hi{color:var(--amber);font-weight:700}
   .badge{display:inline-block;margin-top:6px;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:4px}
   .b-known{background:rgba(61,220,151,.18);color:var(--green);border:1px solid rgba(61,220,151,.42)}
   .b-guess{background:rgba(251,191,36,.16);color:var(--amber);border:1px solid rgba(251,191,36,.42)}
@@ -237,8 +240,10 @@ function hopName(i, total){
   if (i === total - 1) return `${i}次先`;
   return `${i}次先`;
 }
+const HIGH_TX = 1000;   // これ以上の取引回数は「取引所/サービスの可能性」の手がかり（断定はしない）
+const fmtNum = n => Number(n).toLocaleString('ja-JP');
 function flowHTML(path){
-  const nodes = path.slice(0, 6);   // 表示は最大6ノード
+  const nodes = path;   // 最終到達先まで全て表示（横スクロール）
   return `<div class="flow">` + nodes.map((n,i) => `
     ${i ? '<div class="arrow">→</div>' : ''}
     <div class="node">
@@ -246,6 +251,7 @@ function flowHTML(path){
       <div class="nm">${esc(n.label || (n.isExchange ? '取引所系ウォレット' : 'ウォレット'))}</div>
       <div class="ad">${esc(shortAddr(n.address))}</div>
       ${n.amount != null ? `<div class="am">${esc(String(n.amount).slice(0,10))}${n.token ? ' ' + esc(n.token) : ''}</div>` : ''}
+      ${Number.isFinite(n.txCount) ? `<div class="meta${n.txCount >= HIGH_TX ? ' hi' : ''}">取引 ${fmtNum(n.txCount)}回</div>` : ''}
       ${nodeBadge(n)}
     </div>`).join('') + `</div>
     <div class="legend">
@@ -311,14 +317,17 @@ function resultCard(results){
   <div class="note">※ 検出は判明したラベル情報に基づきます。ラベルが未取得のアドレスについては判定できません。</div>
   ${btcNote}</div>`;
 
-  const flows = results.map((r,i) => `
+  const flows = results.map((r,i) => {
+    const p = r.path || [];
+    const hiTx = p.filter(n => Number.isFinite(n.txCount) && n.txCount >= HIGH_TX);
+    const ex = [...new Set((r.exchanges || []).filter(n => !hasKey(n, BRIDGE_KEYS) && !hasKey(n, MIXER_KEYS)))];
+    return `
     <div class="card"><h4>資金フロー（概要）${results.length>1 ? ` ${i+1}/${results.length}` : ''} — ${esc(r.chain)}</h4>
-      ${flowHTML(r.path || [])}
-      ${(() => {
-        const ex = [...new Set((r.exchanges || []).filter(n => !hasKey(n, BRIDGE_KEYS) && !hasKey(n, MIXER_KEYS)))];
-        return ex.length ? `<div class="note">到達した取引所：${esc(ex.join('、'))}</div>` : '';
-      })()}
-    </div>`).join('');
+      ${flowHTML(p)}
+      ${ex.length ? `<div class="note">到達した取引所：${esc(ex.join('、'))}</div>` : ''}
+      ${hiTx.length ? `<div class="note">※ <b style="color:var(--amber)">取引回数が非常に多いアドレス</b>（${fmtNum(HIGH_TX)}回以上）が${hiTx.length}件あります。取引所やサービスのウォレットである可能性がありますが、ラベルが未取得のため断定はできません。</div>` : ''}
+    </div>`;
+  }).join('');
 
   const viaNote = viaNodes.length ? `（途中で <b>${esc([...new Set(viaNodes.map(n=>n.label))].join('、'))}</b> を経由しています）` : '';
   const summaryLine = exNames.length
