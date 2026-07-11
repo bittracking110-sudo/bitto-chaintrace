@@ -1203,8 +1203,8 @@ td{padding:8px 10px;border:1px solid #e2e8f0;font-size:0.85rem}
 
 ■ 料金
 ・送金経路・取引所特定：無料
-・詳細調査レポート 1TXID：¥6,600（税込）
-・複数TXIDは件数 × ¥6,600
+・詳細調査レポート 1TXID：¥${BITTO_PRICE.toLocaleString()}（税込）
+・複数TXIDは件数 × ¥${BITTO_PRICE.toLocaleString()}
 
 ■ 返金について
 本サービスはデジタル調査コンテンツの提供のため、調査開始後の返金はいたしかねます。
@@ -2032,7 +2032,7 @@ ${nameTag}${amountStr}
 早急な調査で被害回復に向けての
 進展を目指してください！
 
-📋 1件 ¥6,600（税込）
+📋 1件 ¥${BITTO_PRICE.toLocaleString()}（税込）
 🔗 ${applyUrl}`;
   } else {
     // 取引所が見つからなかった場合 → さらなる追跡を訴求
@@ -2049,7 +2049,7 @@ ${amountStr}
 早急な調査で被害回復に向けての
 進展を目指してください！
 
-📋 1件 ¥6,600（税込）
+📋 1件 ¥${BITTO_PRICE.toLocaleString()}（税込）
 🔗 ${applyUrl}`;
   }
 }
@@ -2110,7 +2110,7 @@ TXIDをそのまま送信してください
 
 💴 料金
 ・送金経路・取引所特定：無料
-・詳細レポート：¥6,600（税込）/ 件
+・詳細レポート：¥${BITTO_PRICE.toLocaleString()}（税込）/ 件
 
 「リセット」で最初からやり直し`;
 
@@ -2320,7 +2320,7 @@ app.post('/api/create-checkout', express.json(), async (req, res) => {
   try {
     const { uid, name, phone, email, address, txid_count } = req.body;
     const count  = Math.max(1, Math.min(10, parseInt(txid_count) || 1));
-    const amount = 6600 * count;
+    const amount = BITTO_PRICE * count;
     const sessionId = crypto.randomUUID();
 
     // Stripe未設定でも Sheets保存・確認メールだけ先に実行
@@ -2792,6 +2792,7 @@ h1{color:#f87171;font-size:1.3rem;margin-bottom:12px}.icon{font-size:3rem;margin
 // 価格：1TXID ¥11,000（税込）／正式報告書＋専任サポートチャット付
 // ══════════════════════════════════════════════════════════════
 const CONNECTION_PRICE = 11000;
+const BITTO_PRICE      = 6600;  // BitToの報告書価格（Web/LINEのStripe用。IAP価格はストア側で設定）
 
 // ── 調査ジョブ（非同期実行＋ポーリング） ──────────────────────
 const connectionJobs = new Map(); // jobId → { status, txid, chain, result, error, createdAt }
