@@ -23,6 +23,8 @@ const ETHERSCAN_KEY             = process.env.ETHERSCAN_API_KEY;
 const GEMINI_KEY                = process.env.GEMINI_API_KEY;
 // gemini-2.5-flash は新規プロジェクトでは提供終了。既定を現行の別名モデルにし、env で上書き可能に。
 const GEMINI_MODEL              = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+// 価格定数（トップレベルの文字列テンプレートでも使うため、ファイル冒頭で定義）
+const BITTO_PRICE              = 6600;  // BitToの報告書価格（Web/LINEのStripe用。IAP価格はストア側で設定）
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const LINE_CHANNEL_SECRET       = process.env.LINE_CHANNEL_SECRET;
 const STRIPE_SECRET_KEY         = process.env.STRIPE_SECRET_KEY;
@@ -2792,7 +2794,6 @@ h1{color:#f87171;font-size:1.3rem;margin-bottom:12px}.icon{font-size:3rem;margin
 // 価格：1TXID ¥11,000（税込）／正式報告書＋専任サポートチャット付
 // ══════════════════════════════════════════════════════════════
 const CONNECTION_PRICE = 11000;
-const BITTO_PRICE      = 6600;  // BitToの報告書価格（Web/LINEのStripe用。IAP価格はストア側で設定）
 
 // ── 調査ジョブ（非同期実行＋ポーリング） ──────────────────────
 const connectionJobs = new Map(); // jobId → { status, txid, chain, result, error, createdAt }
