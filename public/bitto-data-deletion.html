@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>データ削除のご請求 — BitTo</title>
+<meta name="description" content="BitTo（Himesen株式会社）における、お客様の個人データ・アカウント削除のご請求方法について。">
+<style>
+:root{
+  --bg:#0C1728; --panel:#152741; --panel2:#1B3050; --line:#2C4468; --line2:#38517a;
+  --teal:#34E1C8; --green:#3DDC97; --blue:#2F6FE8;
+  --text:#EAF2FB; --sub:#8FA3C4; --sub2:#B9C9DE;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:ui-sans-serif,-apple-system,'Hiragino Kaku Gothic Pro','Meiryo',sans-serif;font-size:14.5px;line-height:1.95;-webkit-font-smoothing:antialiased;padding-bottom:60px}
+a{color:var(--teal)}
+header{position:sticky;top:0;z-index:30;background:linear-gradient(180deg,#16294A,#0C1728);border-bottom:1px solid var(--line);padding:16px 20px;display:flex;align-items:center;gap:10px}
+.wordmark{font-size:20px;font-weight:800;letter-spacing:.5px}
+.wordmark .b{color:var(--teal)}
+.tag{margin-left:auto;font-size:11px;color:var(--sub);letter-spacing:1px}
+.wrap{max-width:760px;margin:0 auto;padding:34px 22px}
+h1{font-size:21px;font-weight:700;letter-spacing:1px;text-align:center;margin-bottom:10px}
+.lead{text-align:center;color:var(--sub2);font-size:13px;margin-bottom:6px;line-height:2}
+.updated{text-align:center;color:var(--sub);font-size:12px;letter-spacing:1px;margin-bottom:36px}
+h2{font-size:15.5px;font-weight:700;color:var(--teal);letter-spacing:.5px;margin:32px 0 14px;padding-bottom:9px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:9px}
+h2 .n{color:var(--sub);font-weight:700}
+p{color:var(--sub2);margin-bottom:12px}
+ul{list-style:none;margin:6px 0 14px}
+li{color:var(--sub2);position:relative;padding-left:18px;margin-bottom:9px}
+li::before{content:'▸';color:var(--teal);position:absolute;left:0}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0 16px}
+.box .k{color:var(--teal);font-size:12px;letter-spacing:1px}
+.tbl{width:100%;border-collapse:collapse;margin:10px 0 16px;font-size:13px}
+.tbl th,.tbl td{border:1px solid var(--line);padding:11px 13px;text-align:left;vertical-align:top}
+.tbl th{background:var(--panel2);color:var(--sub2);white-space:nowrap;font-weight:600}
+.tbl td{color:var(--sub2)}
+.form{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 18px;margin:16px 0}
+.form label{display:block;color:var(--sub2);font-size:12.5px;letter-spacing:.3px;margin:14px 0 6px}
+.form label.req::after{content:' *';color:var(--teal)}
+.form input,.form textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--text);font-family:inherit;font-size:14px;padding:11px 12px;outline:none}
+.form input:focus,.form textarea:focus{border-color:var(--teal)}
+.form textarea{min-height:80px;resize:vertical}
+.form .hint{color:var(--sub);font-size:12px;margin-top:5px;line-height:1.7}
+.btn{margin-top:20px;width:100%;background:linear-gradient(180deg,#3DEAD1,#34E1C8 55%,#22b7a3);color:#062A25;border:none;border-radius:9px;font-weight:800;font-size:15px;letter-spacing:1px;padding:14px;cursor:pointer}
+.btn:disabled{opacity:.5;cursor:default}
+.msg{margin-top:16px;border-radius:8px;padding:14px 16px;font-size:13.5px;line-height:1.8;display:none}
+.msg.ok{display:block;background:rgba(61,220,151,.10);border:1px solid #2e7a58;color:#bfe9d3}
+.msg.err{display:block;background:rgba(220,90,90,.12);border:1px solid #7a4d4d;color:#e6cfcf}
+.footlink{text-align:center;margin-top:38px;font-size:12.5px;color:var(--sub)}
+</style>
+</head>
+<body>
+<header>
+  <div class="wordmark"><span class="b">Bit</span>To</div>
+  <div class="tag">暗号資産 資金追跡・解析</div>
+</header>
+<div class="wrap">
+  <h1>データ削除のご請求</h1>
+  <p class="lead">BitTo をご利用のお客様は、当社が保有するお客様の個人データ・<br>アカウント情報の削除をいつでもご請求いただけます。</p>
+  <p class="updated">Himesen株式会社（HIMESEN K.K.）</p>
+
+  <h2><span class="n">1.</span>削除の対象となるデータ</h2>
+  <p>ご請求に基づき、当社が保有する以下の情報を削除します。</p>
+  <table class="tbl">
+    <tr><th>お申込み情報</th><td>お名前、メールアドレス、電話番号</td></tr>
+    <tr><td style="color:var(--teal)">連携・注文情報</td><td>LINEの連携情報、ご依頼のトランザクションID（TXID）、注文履歴、調査報告書、チャットの内容</td></tr>
+  </table>
+  <p style="font-size:13px;color:var(--sub)">※ クレジットカード情報は決済代行会社（Stripe）が管理しており、当社は保持していません。ブロックチェーン上の公開取引データそのものは、当社が削除できる対象ではありません。</p>
+
+  <h2><span class="n">2.</span>削除をご請求いただく方法</h2>
+  <p>以下のいずれかの方法でご請求ください。<strong style="color:var(--teal)">ご登録時のメールアドレス</strong>をお知らせいただくと、対象データを特定できます。</p>
+
+  <div class="form">
+    <label class="req" for="dname">お名前</label>
+    <input type="text" id="dname" placeholder="山田 太郎" autocomplete="name">
+    <label class="req" for="demail">ご登録のメールアドレス</label>
+    <input type="email" id="demail" placeholder="you@example.com" autocomplete="email">
+    <label for="ddetail">対象の注文情報・TXIDなど（任意）</label>
+    <textarea id="ddetail" placeholder="お申込み時の情報や、削除をご希望の内容があればご記入ください（任意）"></textarea>
+    <p class="hint">送信後、本人確認のためご登録のメールアドレス宛にご連絡する場合があります。</p>
+    <button class="btn" id="dsubmit" onclick="submitDeletion()">削除を請求する</button>
+    <div class="msg" id="dmsg"></div>
+  </div>
+
+  <p>フォームが使えない場合は、下記メールアドレスへ「データ削除希望」とご記入のうえ、ご登録のメールアドレスを添えてご連絡ください。</p>
+  <div class="box">
+    <div class="k">個人情報お問い合わせ窓口</div>
+    <div><a href="mailto:himesen.inc2512@gmail.com?subject=データ削除希望（BitTo）">himesen.inc2512@gmail.com</a></div>
+  </div>
+
+  <h2><span class="n">3.</span>削除までの流れと期間</h2>
+  <ul>
+    <li>ご請求を受け付け後、なりすまし防止のため本人確認を行う場合があります。</li>
+    <li>本人確認完了後、<strong style="color:var(--teal)">原則30日以内</strong>に対象データを削除します。</li>
+    <li>削除の完了後、ご登録のメールアドレス宛に完了のご連絡をいたします。</li>
+  </ul>
+
+  <h2><span class="n">4.</span>削除後も一定期間保持する情報と保持期間</h2>
+  <p>次の情報は、法令上の保存義務や正当な事業上の必要がある範囲に限り、削除後も以下の期間保持し、期間経過後に消去します。</p>
+  <table class="tbl">
+    <tr><th>保持する情報</th><th>保持期間</th></tr>
+    <tr><td>取引・決済・会計に関する記録（法人税法・会社法等に基づく帳簿・書類）</td><td><strong style="color:var(--teal)">最長10年間</strong></td></tr>
+    <tr><td>不正利用の防止・紛争対応・法的請求への対応に必要な最小限の記録</td><td><strong style="color:var(--teal)">最長1年間</strong></td></tr>
+  </table>
+  <p style="font-size:13px;color:var(--sub)">これらは利用目的の範囲外での利用は行わず、上記の保持期間の経過後に適切に消去します。それ以外のお客様の個人データ（お名前・連絡先・TXID・注文/報告書/チャット履歴）は、ご請求に基づき原則30日以内に削除します。</p>
+
+  <p class="footlink">Himesen株式会社</p>
+</div>
+<script>
+async function submitDeletion(){
+  var name=document.getElementById('dname').value.trim();
+  var email=document.getElementById('demail').value.trim();
+  var detail=document.getElementById('ddetail').value.trim();
+  var msg=document.getElementById('dmsg');
+  var btn=document.getElementById('dsubmit');
+  msg.className='msg'; msg.textContent='';
+  if(!name){ msg.className='msg err'; msg.textContent='お名前をご入力ください。'; return; }
+  if(!email || email.indexOf('@')<1){ msg.className='msg err'; msg.textContent='ご登録のメールアドレスをご入力ください。'; return; }
+  btn.disabled=true; btn.textContent='送信中…';
+  try{
+    var r=await fetch('/api/data-deletion-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,email:email,detail:detail,brand:'bitto'})});
+    var j=await r.json();
+    if(!r.ok) throw new Error(j.error||'送信に失敗しました');
+    msg.className='msg ok';
+    msg.textContent='データ削除のご請求を受け付けました。本人確認のうえ、原則30日以内に対応いたします。ご登録のメールアドレスに確認のご連絡をお送りする場合があります。';
+    btn.textContent='受け付けました';
+  }catch(e){
+    msg.className='msg err';
+    msg.textContent=(e.message||'送信に失敗しました')+' 恐れ入りますが himesen.inc2512@gmail.com へメールでご連絡ください。';
+    btn.disabled=false; btn.textContent='削除を請求する';
+  }
+}
+</script>
+</body>
+</html>

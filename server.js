@@ -2938,6 +2938,8 @@ app.get('/connection/privacy', (_req, res) => res.sendFile(path.join(__dirname, 
 // ── データ削除ページ（Google Playアカウント削除要件：公開URLとフォーム） ──
 app.get('/data-deletion', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-data-deletion.html')));
 app.get('/connection/data-deletion', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-data-deletion.html')));
+app.get('/bitto/data-deletion', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'bitto-data-deletion.html')));
+app.get('/bitto-data-deletion', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'bitto-data-deletion.html')));
 
 // データ削除リクエストの受付（運営に通知＋申請者に受付確認）
 app.post('/api/data-deletion-request', express.json(), async (req, res) => {
@@ -2948,10 +2950,11 @@ app.post('/api/data-deletion-request', express.json(), async (req, res) => {
     const detail = esc((req.body.detail || '').toString().trim().slice(0, 1000));
     if (!name)  return res.status(400).json({ error: 'お名前が未入力です' });
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'メールアドレスの形式が正しくありません' });
+    const brand = req.body.brand === 'bitto' ? 'BitTo' : 'Connection';
     const at = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
     const CONTACT = 'himesen.inc2512@gmail.com';
     // 運営へ通知
-    await sendEmail(CONTACT, '【Connection】データ削除のご請求',
+    await sendEmail(CONTACT, `【${brand}】データ削除のご請求`,
       `<p>データ削除のご請求を受け付けました。本人確認のうえ対応してください。</p>
        <table style="border-collapse:collapse;font-size:14px">
          <tr><td style="padding:4px 10px;color:#64748b">受付日時</td><td style="padding:4px 10px">${at}</td></tr>
@@ -2961,16 +2964,16 @@ app.post('/api/data-deletion-request', express.json(), async (req, res) => {
        </table>`
     ).catch(e => console.error('[DataDeletion] 運営通知失敗:', e.message));
     // 申請者へ受付確認
-    await sendEmail(email, '【Connection】データ削除のご請求を受け付けました',
+    await sendEmail(email, `【${brand}】データ削除のご請求を受け付けました`,
       `<p>${name} 様</p>
        <p>この度は、データ削除のご請求をいただきありがとうございます。以下の内容で受け付けいたしました。</p>
        <p>本人確認のうえ、原則30日以内に対象データを削除し、完了のご連絡をお送りいたします。<br>
        なお、法令上の保存義務がある取引・会計記録は、法定期間の経過後に消去いたします。</p>
        <p style="color:#64748b;font-size:13px">受付日時：${at}</p>
        <p style="color:#64748b;font-size:13px">本メールにお心当たりがない場合は、破棄してください。</p>
-       <p>Connection（Himesen株式会社）</p>`
+       <p>${brand}（Himesen株式会社）</p>`
     ).catch(e => console.error('[DataDeletion] 申請者確認失敗:', e.message));
-    console.log(`[DataDeletion] 受付: ${name} / ${email}`);
+    console.log(`[DataDeletion] 受付(${brand}): ${name} / ${email}`);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
