@@ -1374,6 +1374,30 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
   };
   const BR = BRANDS[brand] || BRANDS.bitto;
 
+  // ── ブランド別テーマ（配色・フォント）。報告書のCSSは var(--r-*) を参照する ──
+  const THEME = {
+    connection: {
+      page:'#FBF8F1', ink:'#243349', ink2:'#6b7688', card:'#ffffff', border:'#E4D9C1', line:'#EAE1CE',
+      softbg:'#FBF9F3', accent:'#B88A3E', accentink:'#9a7333', badgebg:'#243349', badgeink:'#ffffff',
+      coverbg:'#FBF8F1', coverink:'#243349', coversub:'#6b7688', thbg:'#FAF6EC', addrbg:'#FCFAF4', addrink:'#3a4658',
+      monoink:'#3a4658', aibg:'#243349', aititle:'#D8B877', aibody:'#D8DEE7', ailabelbg:'#B88A3E', tmplbg:'#FAF7F0',
+      vbg:'#FBF5F2', vborder:'#E4B9A9', vink:'#B0553C', rbg:'#F7F3EB', rborder:'#DED0B2', rink:'#8A7A52',
+      ebg:'#FBF6E9', eborder:'#D8C39A', eink:'#9A7333', usd:'#8A7A52', printbtnbg:'#243349', printbtnink:'#ffffff',
+      openbtnbg:'#B88A3E', font:"Georgia,'Times New Roman','Yu Mincho',serif", mono:"'Courier New',monospace",
+    },
+    bitto: {
+      page:'#0C1728', ink:'#C7D6EC', ink2:'#8FA3C4', card:'#152741', border:'#2C4468', line:'#23385C',
+      softbg:'#111F36', accent:'#34E1C8', accentink:'#34E1C8', badgebg:'#34E1C8', badgeink:'#0C1728',
+      coverbg:'#0C1728', coverink:'#EAF6F3', coversub:'#5A7099', thbg:'#122038', addrbg:'#0E1C30', addrink:'#9FD9CD',
+      monoink:'#9FD9CD', aibg:'#0F2033', aititle:'#34E1C8', aibody:'#B9C9DE', ailabelbg:'#0F6E56', tmplbg:'#122038',
+      vbg:'#241826', vborder:'#7A3B3B', vink:'#E8897F', rbg:'#132038', rborder:'#3A557F', rink:'#8FB0E0',
+      ebg:'#0F2B28', eborder:'#34E1C8', eink:'#34E1C8', usd:'#5DCAA5', printbtnbg:'#34E1C8', printbtnink:'#062018',
+      openbtnbg:'#2F6FE8', font:"ui-monospace,'SF Mono',Menlo,Consolas,monospace", mono:"ui-monospace,'SF Mono',Menlo,monospace",
+    },
+  };
+  const TH = THEME[brand] || THEME.bitto;
+  const themeCSS = ':root{' + Object.entries(TH).map(([k,v]) => `--r-${k}:${v}`).join(';') + '}';
+
   const sectionsHTML = results.map((item, idx) => {
     const r  = item.result;
     const em = { BTC: '₿', ETH: 'Ξ', XRP: '✕' }[r.chain] || '🔗';
@@ -1564,81 +1588,82 @@ ${r.txid}
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>${BR.pageTitle}</title>
   <style>
+    ${themeCSS}
     *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:'Hiragino Kaku Gothic Pro','Meiryo',sans-serif;background:#f4f5f7;color:#1a1a2e;padding:24px 16px 60px;font-size:14px}
+    body{font-family:var(--r-font);background:var(--r-page);color:var(--r-ink);padding:24px 16px 60px;font-size:14px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .container{max-width:760px;margin:0 auto}
     /* カバー */
-    .cover{background:#1a1a2e;color:#fff;border-radius:12px;padding:32px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+    .cover{background:var(--r-coverbg);color:var(--r-coverink);border:1px solid var(--r-border);border-radius:12px;padding:32px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
     .cover-left h1{font-size:1.5rem;margin-bottom:4px}
-    .cover-left p{color:#94a3b8;font-size:0.85rem}
-    .cover-meta{text-align:right;font-size:0.82rem;color:#94a3b8;line-height:1.8}
-    .cover-meta strong{color:#e2e8f0;display:block}
+    .cover-left p{color:var(--r-coversub);font-size:0.85rem}
+    .cover-meta{text-align:right;font-size:0.82rem;color:var(--r-coversub);line-height:1.8}
+    .cover-meta strong{color:var(--r-coverink);display:block}
     /* セクション */
-    .tx-section{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:24px;margin-bottom:20px}
-    .tx-header{display:flex;align-items:center;gap:10px;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0}
-    .chain-badge{background:#1a1a2e;color:#fff;padding:4px 12px;border-radius:20px;font-weight:700;font-size:0.9rem}
-    .tx-num{color:#64748b;font-size:0.85rem}
-    h3{font-size:0.95rem;color:#1a1a2e;margin:20px 0 10px;padding-left:8px;border-left:3px solid #3b82f6}
-    h4{font-size:0.88rem;color:#374151}
+    .tx-section{background:var(--r-card);border:1px solid var(--r-border);border-radius:10px;padding:24px;margin-bottom:20px}
+    .tx-header{display:flex;align-items:center;gap:10px;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid var(--r-border)}
+    .chain-badge{background:var(--r-badgebg);color:var(--r-badgeink);padding:4px 12px;border-radius:20px;font-weight:700;font-size:0.9rem}
+    .tx-num{color:var(--r-ink2);font-size:0.85rem}
+    h3{font-size:0.95rem;color:var(--r-ink);margin:20px 0 10px;padding-left:8px;border-left:3px solid var(--r-accent)}
+    h4{font-size:0.88rem;color:var(--r-ink)}
     /* テーブル */
     .info-table{width:100%;border-collapse:collapse;margin-bottom:8px}
-    .info-table th{width:140px;background:#f8fafc;padding:8px 10px;text-align:left;font-size:0.82rem;color:#64748b;border:1px solid #e2e8f0;white-space:nowrap}
-    .info-table td{padding:8px 10px;border:1px solid #e2e8f0;font-size:0.85rem;word-break:break-all}
-    .info-table a{color:#3b82f6;text-decoration:none}
-    .mono{font-family:'Courier New',monospace;font-size:0.78rem;color:#1e3a5f;word-break:break-all}
+    .info-table th{width:140px;background:var(--r-thbg);padding:8px 10px;text-align:left;font-size:0.82rem;color:var(--r-ink2);border:1px solid var(--r-border);white-space:nowrap}
+    .info-table td{padding:8px 10px;border:1px solid var(--r-border);font-size:0.85rem;word-break:break-all}
+    .info-table a{color:var(--r-accentink);text-decoration:none}
+    .mono{font-family:var(--r-mono);font-size:0.78rem;color:var(--r-monoink);word-break:break-all}
     /* フローマップ */
     .flow-map{display:flex;flex-direction:column;align-items:center;gap:0;margin:12px 0}
     .flow-node{width:100%;border-radius:10px;padding:14px 16px;border:2px solid}
-    .flow-node.victim  {background:#fff5f5;border-color:#fca5a5}
-    .flow-node.relay   {background:#eff6ff;border-color:#93c5fd}
-    .flow-node.exchange{background:#f0fdf4;border-color:#86efac}
+    .flow-node.victim  {background:var(--r-vbg);border-color:var(--r-vborder)}
+    .flow-node.relay   {background:var(--r-rbg);border-color:var(--r-rborder)}
+    .flow-node.exchange{background:var(--r-ebg);border-color:var(--r-eborder)}
     .node-role{font-weight:700;font-size:0.85rem;margin-bottom:6px;display:flex;align-items:center;gap:6px}
     .node-icon{font-size:0.75rem}
-    .flow-node.victim   .node-role{color:#dc2626}
-    .flow-node.relay    .node-role{color:#2563eb}
-    .flow-node.exchange .node-role{color:#16a34a}
-    .node-address{font-family:'Courier New',monospace;font-size:0.77rem;color:#374151;word-break:break-all;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;margin-bottom:4px}
-    .node-meta{font-size:0.78rem;color:#64748b;margin-top:3px}
-    .usd-val{color:#059669;font-size:0.76rem;font-weight:600}
-    .badge{background:#1a1a2e;color:#fff;font-size:0.72rem;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:400}
-    .flow-arrow{font-size:1.4rem;color:#94a3b8;margin:4px 0;line-height:1}
-    .no-ex{color:#64748b;font-size:0.85rem;padding:10px}
+    .flow-node.victim   .node-role{color:var(--r-vink)}
+    .flow-node.relay    .node-role{color:var(--r-rink)}
+    .flow-node.exchange .node-role{color:var(--r-eink)}
+    .node-address{font-family:var(--r-mono);font-size:0.77rem;color:var(--r-addrink);word-break:break-all;background:var(--r-addrbg);border:1px solid var(--r-border);border-radius:6px;padding:6px 8px;margin-bottom:4px}
+    .node-meta{font-size:0.78rem;color:var(--r-ink2);margin-top:3px}
+    .usd-val{color:var(--r-usd);font-size:0.76rem;font-weight:600}
+    .badge{background:var(--r-badgebg);color:var(--r-badgeink);font-size:0.72rem;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:400}
+    .flow-arrow{font-size:1.4rem;color:var(--r-ink2);margin:4px 0;line-height:1}
+    .no-ex{color:var(--r-ink2);font-size:0.85rem;padding:10px}
     /* 要請テンプレート */
-    .template-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;font-size:0.82rem;white-space:pre-wrap;line-height:1.8;word-break:break-all;margin-top:10px}
+    .template-box{background:var(--r-tmplbg);border:1px solid var(--r-border);border-radius:8px;padding:16px;font-size:0.82rem;white-space:pre-wrap;line-height:1.8;word-break:break-all;margin-top:10px;color:var(--r-ink)}
     /* 印刷ボタン */
-    .print-bar{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 20px;margin-bottom:20px}
-    .print-bar p{font-size:0.83rem;color:#64748b;margin:0 0 10px}
-    .print-btn{background:#1a1a2e;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:0.9rem;font-weight:700;cursor:pointer;margin-right:8px}
+    .print-bar{background:var(--r-card);border:1px solid var(--r-border);border-radius:10px;padding:16px 20px;margin-bottom:20px}
+    .print-bar p{font-size:0.83rem;color:var(--r-ink2);margin:0 0 10px}
+    .print-btn{background:var(--r-printbtnbg);color:var(--r-printbtnink);border:none;border-radius:8px;padding:10px 20px;font-size:0.9rem;font-weight:700;cursor:pointer;margin-right:8px}
     .print-btn:hover{opacity:0.85}
-    .open-btn{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer}
+    .open-btn{background:var(--r-openbtnbg);color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:0.85rem;font-weight:700;cursor:pointer}
     .open-btn:hover{opacity:0.85}
-    .print-hint{font-size:0.75rem;color:#94a3b8;margin-top:8px;display:none}
+    .print-hint{font-size:0.75rem;color:var(--r-ink2);margin-top:8px;display:none}
     @media(max-width:640px){.print-hint{display:block}}
-    .mobile-open-section{display:none;margin-top:14px;padding-top:14px;border-top:2px dashed #e2e8f0}
+    .mobile-open-section{display:none;margin-top:14px;padding-top:14px;border-top:2px dashed var(--r-border)}
     @media(max-width:640px){.mobile-open-section{display:block}}
     .qr-wrap{display:flex;gap:16px;align-items:flex-start;margin-bottom:14px}
-    .qr-img{width:130px;height:130px;border:2px solid #e2e8f0;border-radius:8px;flex-shrink:0}
-    .qr-steps{margin:0;padding-left:18px;font-size:0.82rem;color:#334155;line-height:2}
+    .qr-img{width:130px;height:130px;border:2px solid var(--r-border);border-radius:8px;flex-shrink:0;background:#fff}
+    .qr-steps{margin:0;padding-left:18px;font-size:0.82rem;color:var(--r-ink);line-height:2}
     .qr-steps li{margin-bottom:2px}
-    .qr-steps strong{color:#1a1a2e}
+    .qr-steps strong{color:var(--r-ink)}
     .url-box{display:flex;gap:6px;align-items:center;margin-top:8px}
-    .url-input{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:9px 10px;font-size:0.72rem;color:#334155;background:#f8fafc;word-break:break-all;-webkit-user-select:all;user-select:all;outline:none}
-    .copy-btn{background:#64748b;color:#fff;border:none;border-radius:8px;padding:10px 14px;font-size:0.82rem;font-weight:700;cursor:pointer;white-space:nowrap}
-    .copy-hint{font-size:0.72rem;color:#94a3b8;margin-top:6px;line-height:1.6}
+    .url-input{flex:1;border:1px solid var(--r-border);border-radius:8px;padding:9px 10px;font-size:0.72rem;color:var(--r-ink2);background:var(--r-thbg);word-break:break-all;-webkit-user-select:all;user-select:all;outline:none}
+    .copy-btn{background:var(--r-ink2);color:var(--r-card);border:none;border-radius:8px;padding:10px 14px;font-size:0.82rem;font-weight:700;cursor:pointer;white-space:nowrap}
+    .copy-hint{font-size:0.72rem;color:var(--r-ink2);margin-top:6px;line-height:1.6}
     /* AI分析セクション */
-    .ai-overall{background:linear-gradient(135deg,#1e3a5f 0%,#1a1a2e 100%);border-radius:10px;padding:22px 24px;margin-bottom:20px;color:#e2e8f0}
+    .ai-overall{background:var(--r-aibg);border:1px solid var(--r-border);border-radius:10px;padding:22px 24px;margin-bottom:20px;color:var(--r-aibody)}
     .ai-header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
-    .ai-title{font-size:1rem;font-weight:700;color:#93c5fd}
-    .ai-label{display:inline-flex;align-items:center;background:#3b82f6;color:#fff;font-size:0.7rem;font-weight:700;padding:3px 10px;border-radius:12px}
-    .ai-body{font-size:0.85rem;line-height:1.9;color:#cbd5e1;white-space:pre-wrap;word-break:break-word}
-    .ai-req-badge{background:#059669;color:#fff;font-size:0.68rem;padding:2px 8px;border-radius:10px;margin-left:8px;font-weight:700;vertical-align:middle}
+    .ai-title{font-size:1rem;font-weight:700;color:var(--r-aititle)}
+    .ai-label{display:inline-flex;align-items:center;background:var(--r-ailabelbg);color:#fff;font-size:0.7rem;font-weight:700;padding:3px 10px;border-radius:12px}
+    .ai-body{font-size:0.85rem;line-height:1.9;color:var(--r-aibody);white-space:pre-wrap;word-break:break-word}
+    .ai-req-badge{background:var(--r-ailabelbg);color:#fff;font-size:0.68rem;padding:2px 8px;border-radius:10px;margin-left:8px;font-weight:700;vertical-align:middle}
     /* Mermaid フロー図 */
-    .mermaid-wrap{background:#fafbfc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:8px;overflow-x:auto;text-align:center}
+    .mermaid-wrap{background:var(--r-softbg);border:1px solid var(--r-border);border-radius:8px;padding:16px;margin-bottom:8px;overflow-x:auto;text-align:center}
     .mermaid-wrap pre{display:inline-block;text-align:left}
     /* 価格チャート */
-    .chart-wrap{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:8px}
-    .tx-price-label{font-size:0.82rem;color:#dc2626;font-weight:600;margin-bottom:8px;text-align:right}
-    .chart-error{color:#94a3b8;font-size:0.82rem;text-align:center;padding:20px 0}
+    .chart-wrap{background:var(--r-card);border:1px solid var(--r-border);border-radius:8px;padding:16px;margin-bottom:8px}
+    .tx-price-label{font-size:0.82rem;color:var(--r-accentink);font-weight:600;margin-bottom:8px;text-align:right}
+    .chart-error{color:var(--r-ink2);font-size:0.82rem;text-align:center;padding:20px 0}
     .page-break{page-break-before:always}
     /* ── スマホ対応 ── */
     @media (max-width:640px){
@@ -1672,7 +1697,7 @@ ${r.txid}
       .flow-node{padding:10px 10px}
     }
     @media print{
-      body{background:#fff;padding:0}
+      body{background:var(--r-page);padding:0}
       .print-bar{display:none}
       .tx-section{border:none;padding:0;margin-bottom:40px}
       .cover{border-radius:0}
@@ -1696,7 +1721,7 @@ ${r.txid}
     </div>
     <p class="print-hint">⚠️ LINEアプリ内ではPDF保存できません</p>
     <div class="mobile-open-section">
-      <p style="font-size:0.83rem;font-weight:700;color:#1a1a2e;margin:0 0 10px">📸 カメラでQRコードを読み取ってSafariで開く</p>
+      <p style="font-size:0.83rem;font-weight:700;color:var(--r-ink);margin:0 0 10px">📸 カメラでQRコードを読み取ってSafariで開く</p>
       <div class="qr-wrap">
         <img class="qr-img" src="https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=__REPORT_URL__" alt="QRコード" />
         <ol class="qr-steps">
@@ -1707,7 +1732,7 @@ ${r.txid}
           <li>「<strong>PDFとして保存</strong>」を選択</li>
         </ol>
       </div>
-      <p style="font-size:0.78rem;color:#64748b;margin:4px 0 8px">▼ QRが読めない場合はURLをコピーしてSafariに貼り付け</p>
+      <p style="font-size:0.78rem;color:var(--r-ink2);margin:4px 0 8px">▼ QRが読めない場合はURLをコピーしてSafariに貼り付け</p>
       <div class="url-box">
         <input type="text" id="urlInput" class="url-input" readonly value="__REPORT_URL__" onclick="selectUrl(this)" />
         <button class="copy-btn" id="copyBtn" onclick="copyUrl()">📋 コピー</button>
