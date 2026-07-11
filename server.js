@@ -21,6 +21,8 @@ const PORT = process.env.PORT || 3000;
 const BLOCKCHAIR_KEY            = process.env.BLOCKCHAIR_API_KEY;
 const ETHERSCAN_KEY             = process.env.ETHERSCAN_API_KEY;
 const GEMINI_KEY                = process.env.GEMINI_API_KEY;
+// gemini-2.5-flash は新規プロジェクトでは提供終了。既定を現行の別名モデルにし、env で上書き可能に。
+const GEMINI_MODEL              = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const LINE_CHANNEL_SECRET       = process.env.LINE_CHANNEL_SECRET;
 const STRIPE_SECRET_KEY         = process.env.STRIPE_SECRET_KEY;
@@ -1943,7 +1945,7 @@ ${requestBlocks}
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2447,7 +2449,7 @@ app.get('/api/xrp/tx/:txid', async (req, res) => {
 app.post('/api/ai/analyze', express.json(), async (req, res) => {
   try { const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: 'promptが必要です' });
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 1000, thinkingConfig: { thinkingBudget: 0 } } }),
     });
@@ -3113,7 +3115,7 @@ ${history}
 
 サポート担当としての返信のみを出力してください。`;
       try {
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
@@ -3300,7 +3302,7 @@ ${refundBlock}
 
       const prompt = brand === 'bitto' ? bittoPrompt : connectionPrompt;
       try {
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
