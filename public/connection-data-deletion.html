@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>データ削除のご請求 — Connection</title>
+<meta name="description" content="Connection（Himesen株式会社）における、お客様の個人データ・アカウント削除のご請求方法について。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Noto+Serif+JP:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0c12; --bg2:#0e1119; --panel:#12151f;
+  --line:#232838; --line2:#2a3045;
+  --gold:#c9a96e; --gold2:#e3cfa4; --gold-dim:rgba(201,169,110,.14);
+  --text:#eae6dc; --sub:#8b91a0; --sub2:#b8bcc8;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Noto Sans JP',sans-serif;font-size:14.5px;line-height:1.95;-webkit-font-smoothing:antialiased;padding-bottom:60px}
+a{color:var(--gold)}
+header{position:sticky;top:0;z-index:30;background:rgba(10,12,18,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--line);padding:18px 24px;text-align:center}
+.logo{font-family:'Cormorant Garamond',serif;font-size:24px;letter-spacing:2.5px;font-weight:600;background:linear-gradient(180deg,#f0e2b6,#c9a96e 60%,#a8854a);-webkit-background-clip:text;background-clip:text;color:transparent;display:inline-block}
+.ornament{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:8px}
+.ornament span{display:block;width:60px;height:1px;background:linear-gradient(90deg,transparent,var(--gold))}
+.ornament span:last-child{background:linear-gradient(90deg,var(--gold),transparent)}
+.ornament i{color:var(--gold2);font-style:normal;font-size:11px}
+.wrap{max-width:760px;margin:0 auto;padding:40px 24px}
+h1{font-family:'Noto Serif JP',serif;font-size:22px;font-weight:600;letter-spacing:3px;text-align:center;margin-bottom:10px}
+.lead{text-align:center;color:var(--sub2);font-size:13px;margin-bottom:8px;line-height:2}
+.updated{text-align:center;color:var(--sub);font-size:12px;letter-spacing:1px;margin-bottom:40px}
+h2{font-family:'Noto Serif JP',serif;font-size:15.5px;font-weight:600;color:var(--gold2);letter-spacing:1px;margin:34px 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+h2 .n{font-family:'Cormorant Garamond',serif;color:var(--gold);font-size:18px;font-weight:600}
+p{color:var(--sub2);margin-bottom:12px}
+ul{list-style:none;margin:6px 0 14px}
+li{color:var(--sub2);position:relative;padding-left:20px;margin-bottom:9px}
+li::before{content:'─';color:var(--gold);position:absolute;left:0}
+.box{background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:18px 20px;margin:10px 0 16px}
+.box .k{color:var(--gold);font-size:12px;letter-spacing:1px}
+.box .v{color:var(--text);margin-bottom:2px}
+.tbl{width:100%;border-collapse:collapse;margin:10px 0 16px;font-size:13px}
+.tbl th,.tbl td{border:1px solid var(--line2);padding:11px 13px;text-align:left;vertical-align:top}
+.tbl th{background:var(--gold-dim);color:var(--gold2);white-space:nowrap;font-weight:500}
+.tbl td{color:var(--sub2)}
+.form{background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:22px 20px;margin:16px 0}
+.form label{display:block;color:var(--gold2);font-size:12.5px;letter-spacing:.5px;margin:14px 0 6px}
+.form label.req::after{content:' *';color:#e0a06a}
+.form input,.form textarea{width:100%;background:var(--bg2);border:1px solid var(--line2);border-radius:8px;color:var(--text);font-family:inherit;font-size:14px;padding:11px 12px;outline:none}
+.form input:focus,.form textarea:focus{border-color:var(--gold)}
+.form textarea{min-height:80px;resize:vertical}
+.form .hint{color:var(--sub);font-size:12px;margin-top:5px;line-height:1.7}
+.btn{margin-top:20px;width:100%;background:linear-gradient(180deg,#e3cfa4,#c9a96e 60%,#b28f52);color:#1a1206;border:none;border-radius:8px;font-family:'Noto Serif JP',serif;font-weight:600;font-size:15px;letter-spacing:2px;padding:14px;cursor:pointer}
+.btn:disabled{opacity:.5;cursor:default}
+.msg{margin-top:16px;border-radius:8px;padding:14px 16px;font-size:13.5px;line-height:1.8;display:none}
+.msg.ok{display:block;background:rgba(120,170,120,.12);border:1px solid #4d7a4d;color:#cfe6cf}
+.msg.err{display:block;background:rgba(200,90,90,.12);border:1px solid #7a4d4d;color:#e6cfcf}
+.footlink{text-align:center;margin-top:40px;font-size:12.5px;color:var(--sub)}
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">Connection</span>
+  <div class="ornament"><span></span><i>&#10022;</i><span></span></div>
+</header>
+<div class="wrap">
+  <h1>データ削除のご請求</h1>
+  <p class="lead">Connection をご利用のお客様は、当社が保有するお客様の個人データ・<br>アカウント情報の削除をいつでもご請求いただけます。</p>
+  <p class="updated">Himesen株式会社（HIMESEN K.K.）</p>
+
+  <h2><span class="n">1.</span>削除の対象となるデータ</h2>
+  <p>ご請求に基づき、当社が保有する以下の情報を削除します。</p>
+  <table class="tbl">
+    <tr><th>お申込み情報</th><td>お名前、メールアドレス、電話番号</td></tr>
+    <tr><td style="color:var(--gold2)">調査・注文情報</td><td>ご依頼のトランザクションID（TXID）、注文履歴、調査報告書、サポートチャットの内容</td></tr>
+  </table>
+  <p style="font-size:13px;color:var(--sub)">※ クレジットカード情報は決済代行会社（Stripe）が管理しており、当社は保持していません。ブロックチェーン上の公開取引データそのものは、当社が削除できる対象ではありません。</p>
+
+  <h2><span class="n">2.</span>削除をご請求いただく方法</h2>
+  <p>以下のいずれかの方法でご請求ください。<strong style="color:var(--gold2)">ご登録時のメールアドレス</strong>をお知らせいただくと、対象データを特定できます。</p>
+
+  <div class="form">
+    <label class="req" for="dname">お名前</label>
+    <input type="text" id="dname" placeholder="山田 太郎" autocomplete="name">
+    <label class="req" for="demail">ご登録のメールアドレス</label>
+    <input type="email" id="demail" placeholder="you@example.com" autocomplete="email">
+    <label for="ddetail">対象の注文情報・TXIDなど（任意）</label>
+    <textarea id="ddetail" placeholder="お申込み時の情報や、削除をご希望の内容があればご記入ください（任意）"></textarea>
+    <p class="hint">送信後、本人確認のためご登録のメールアドレス宛にご連絡する場合があります。</p>
+    <button class="btn" id="dsubmit" onclick="submitDeletion()">削除を請求する</button>
+    <div class="msg" id="dmsg"></div>
+  </div>
+
+  <p>フォームが使えない場合は、下記メールアドレスへ「データ削除希望」とご記入のうえ、ご登録のメールアドレスを添えてご連絡ください。</p>
+  <div class="box">
+    <div class="k">個人情報お問い合わせ窓口</div>
+    <div class="v"><a href="mailto:himesen.inc2512@gmail.com?subject=データ削除希望">himesen.inc2512@gmail.com</a></div>
+  </div>
+
+  <h2><span class="n">3.</span>削除までの流れと期間</h2>
+  <ul>
+    <li>ご請求を受け付け後、なりすまし防止のため本人確認を行う場合があります。</li>
+    <li>本人確認完了後、<strong style="color:var(--gold2)">原則30日以内</strong>に対象データを削除します。</li>
+    <li>削除の完了後、ご登録のメールアドレス宛に完了のご連絡をいたします。</li>
+  </ul>
+
+  <h2><span class="n">4.</span>削除後も一定期間保持する情報</h2>
+  <p>次の情報は、法令上の保存義務や正当な事業上の必要がある範囲に限り、削除後も所定の期間保持し、期間経過後に消去します。</p>
+  <ul>
+    <li>会計法・税法等に基づき保存が義務付けられた取引・決済に関する記録</li>
+    <li>不正利用の防止、紛争対応、法的請求への対応に必要な最小限の記録</li>
+  </ul>
+  <p style="font-size:13px;color:var(--sub)">これらは利用目的の範囲外での利用は行わず、保存期間の経過後に適切に消去します。</p>
+
+  <p class="footlink"><a href="/privacy">プライバシーポリシー</a> ／ Himesen株式会社</p>
+</div>
+<script>
+async function submitDeletion(){
+  var name=document.getElementById('dname').value.trim();
+  var email=document.getElementById('demail').value.trim();
+  var detail=document.getElementById('ddetail').value.trim();
+  var msg=document.getElementById('dmsg');
+  var btn=document.getElementById('dsubmit');
+  msg.className='msg'; msg.textContent='';
+  if(!name){ msg.className='msg err'; msg.textContent='お名前をご入力ください。'; return; }
+  if(!email || email.indexOf('@')<1){ msg.className='msg err'; msg.textContent='ご登録のメールアドレスをご入力ください。'; return; }
+  btn.disabled=true; btn.textContent='送信中…';
+  try{
+    var r=await fetch('/api/data-deletion-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,email:email,detail:detail})});
+    var j=await r.json();
+    if(!r.ok) throw new Error(j.error||'送信に失敗しました');
+    msg.className='msg ok';
+    msg.textContent='データ削除のご請求を受け付けました。本人確認のうえ、原則30日以内に対応いたします。ご登録のメールアドレスに確認のご連絡をお送りする場合があります。';
+    btn.textContent='受け付けました';
+  }catch(e){
+    msg.className='msg err';
+    msg.textContent=(e.message||'送信に失敗しました')+' 恐れ入りますが himesen.inc2512@gmail.com へメールでご連絡ください。';
+    btn.disabled=false; btn.textContent='削除を請求する';
+  }
+}
+</script>
+</body>
+</html>
