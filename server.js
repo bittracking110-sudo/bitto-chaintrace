@@ -409,12 +409,15 @@ function isExchange(label) {
 // アドレスの「振る舞い」から取引所・ホットウォレットを推定
 // txCount・balance・transferTime を使用（enrichPathWithAddressInfo 後に呼び出す）
 function inferExchangeByBehavior(node) {
-  // 1. TX件数が非常に多い → 大型取引所 or ミキサーの可能性
-  if (node.txCount != null && node.txCount >= 500000) return '大型取引所 Hot Wallet（推定）';
-  if (node.txCount != null && node.txCount >= 100000) return '主要取引所 Hot Wallet（推定）';
-  if (node.txCount != null && node.txCount >= 50000)  return '取引所系ウォレット（推定）';
+  const tx = node.txCount;
+  if (tx == null) return null;
+  // 1. TX件数が非常に多い → 大型取引所・サービスの可能性（残高の有無を問わない）
+  //    取引所ホットウォレットは残高を持ったままTXが積み上がるため、残高0を条件にしない。
+  if (tx >= 500000) return '大型取引所 Hot Wallet（推定）';
+  if (tx >= 100000) return '主要取引所 Hot Wallet（推定）';
+  if (tx >= 20000)  return '取引所・サービス系ウォレット（推定）';
   // 2. 残高ほぼゼロ かつ TX件数が多い → ホットウォレット / 使い捨て
-  if (node.txCount != null && node.txCount >= 500 && node.balance != null && node.balance < 0.001) {
+  if (tx >= 500 && node.balance != null && node.balance < 0.001) {
     return 'ホットウォレット候補（残高0・TX多数）';
   }
   return null;
