@@ -25,6 +25,7 @@ const GEMINI_KEY                = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL              = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 // 価格定数（トップレベルの文字列テンプレートでも使うため、ファイル冒頭で定義）
 const BITTO_PRICE              = 6600;  // BitToの報告書価格（Web/LINEのStripe用。IAP価格はストア側で設定）
+const BITTO_PRODUCT_ID         = process.env.BITTO_PRODUCT_ID || 'bitto_report';  // BitToアプリIAPの商品ID
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const LINE_CHANNEL_SECRET       = process.env.LINE_CHANNEL_SECRET;
 const STRIPE_SECRET_KEY         = process.env.STRIPE_SECRET_KEY;
@@ -3484,6 +3485,107 @@ app.post('/api/connection/iap/verify', express.json(), async (req, res) => {
         <p>続けて、以下のフォームから調査対象の <b>TXID</b> をご入力ください（${n}件）：<br>
           <a href="${formUrl}">${formUrl}</a></p>
         <p>調査完了後、<b>調査報告書</b>と<b>専任サポートチャット</b>を、このメールアドレスとアプリ内でお届けします。</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:18px 0">
+        <p style="font-size:13px;color:#666">
+          ■ お申し込み時に<b>利用規約に同意</b>いただいています。主な内容：<br>
+          ・本サービスは公開ブロックチェーン情報に基づく調査・情報提供サービスです。<br>
+          ・デジタルコンテンツの性質上、決済後のキャンセル・返金はお受けできません。<br>
+          ・本サービスは被害の回復・資産の奪還・犯人の特定を保証するものではありません。<br>
+          ・本サービスは法律事務を提供するものではありません。<br>
+          プライバシーポリシー：<a href="${BASE_URL}/privacy">${BASE_URL}/privacy</a>
+        </p>
+        <p style="font-size:13px;color:#666">運営：Himesen株式会社　お問い合わせ：himesen.inc2512@gmail.com</p>
+      </div>`
+    ).catch(console.error);
+
+    res.json({ ok: true, formUrl });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── BitToアプリ IAP（App内課金）レシート検証 ──────────────────
+// Connection版(/api/connection/iap/verify)と同型。商品IDを BITTO_PRODUCT_ID に限定して分離。
+// REVENUECAT_SECRET_KEY 未設定時は 503（承認前は安全に無効化）。
+app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
+  try {
+    const { appUserId, transactionIds, productId, platform, name, email, phone, count } = req.body || {};
+    const want = Math.max(1, Math.min(10, parseInt(count) ||
+      (Array.isArray(transactionIds) ? transactionIds.length : 1)));
+    if (!email)     return res.status(400).json({ error: 'メールアドレスが必要です' });
+    if (!appUserId) return res.status(400).json({ error: '購入情報が不足しています' });
+    if (!REVENUECAT_SECRET_KEY)
+      return res.status(503).json({ error: 'IAP検証は準備中です（ストアアカウント承認後に有効化）' });
+
+    const rcRes = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, {
+      headers: { Authorization: `Bearer ${REVENUECAT_SECRET_KEY}`, 'Content-Type': 'application/json' },
+    });
+    if (!rcRes.ok) return res.status(502).json({ error: '購入の確認に失敗しました' });
+    const rcData = await rcRes.json();
+    const nonSubs = (rcData.subscriber && rcData.subscriber.non_subscriptions) || {};
+
+    // 消費型購入を平坦化（BitTo商品のみ・未消費のみ）
+    const txList = [];
+    for (const pid of Object.keys(nonSubs)) {
+      if (pid !== BITTO_PRODUCT_ID) continue;   // BitToの商品だけ受け付ける
+      for (const t of (nonSubs[pid] || [])) {
+        const tid = t.store_transaction_id || t.id;
+        if (!tid || consumedIapTx.has(tid)) continue;
+        txList.push({ pid, tid, ms: Date.parse(t.purchase_date || '') || 0, sandbox: !!t.is_sandbox });
+      }
+    }
+    txList.sort((a, b) => b.ms - a.ms);
+
+    const provided = new Set((transactionIds || []).filter(Boolean));
+    const chosen = [];
+    for (const tx of txList) {
+      if (chosen.length >= want) break;
+      if (provided.has(tx.tid)) chosen.push(tx);
+    }
+    if (chosen.length < want) {
+      const cutoff = Date.now() - 60 * 60 * 1000;
+      for (const tx of txList) {
+        if (chosen.length >= want) break;
+        if (chosen.includes(tx)) continue;
+        if (tx.ms && tx.ms < cutoff) continue;
+        chosen.push(tx);
+      }
+    }
+    if (!chosen.length) return res.status(402).json({ error: '有効な購入が確認できませんでした' });
+
+    chosen.forEach(tx => consumedIapTx.add(tx.tid));
+    const n = chosen.length;
+
+    // TXID入力フォームのトークンを発行（brand=bitto）
+    const formToken = crypto.randomUUID();
+    const sessionId = `bitto-${formToken.slice(0, 8)}`;
+    txidFormTokens.set(formToken, {
+      sessionId, userId: '', count: n,
+      customerName: name || 'お客様', email, phone: phone || '',
+      brand: 'bitto', used: false, createdAt: Date.now(),
+      prefillTxid: '', status: 'paid_waiting_txid',
+      iap: {
+        platform: platform || '', appUserId,
+        productId: productId || (chosen[0] && chosen[0].pid) || '',
+        transactionIds: chosen.map(c => c.tid), sandbox: chosen.some(c => c.sandbox),
+      },
+    });
+    const formUrl = `${BASE_URL}/txid-form/${formToken}`;
+
+    // 申込記録
+    const submittedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+    appendToSheet([
+      submittedAt, name || '', phone || '', email, '', String(n),
+      String(BITTO_PRICE * n), sessionId, '', '申込済み(BitTo/IAP)',
+    ]).catch(console.error);
+
+    // 申込確認・利用規約同意メール
+    sendEmail(email, '【BitTo】お申し込みを受け付けました（正式調査報告書）',
+      `<div style="font-family:sans-serif;line-height:1.8;color:#222">
+        <p>${name || 'お客様'} 様</p>
+        <p>正式調査報告書のお申し込みを受け付けました。ご利用ありがとうございます。</p>
+        <p><b>調査件数：</b>${n}件　<b>お支払い：</b>¥${(BITTO_PRICE * n).toLocaleString()}（税込）</p>
+        <p>続けて、以下のフォームから調査対象の <b>TXID</b> をご入力ください（${n}件）：<br>
+          <a href="${formUrl}">${formUrl}</a></p>
+        <p>調査完了後、<b>調査報告書</b>を、このメールアドレスとアプリ内でお届けします。</p>
         <hr style="border:none;border-top:1px solid #eee;margin:18px 0">
         <p style="font-size:13px;color:#666">
           ■ お申し込み時に<b>利用規約に同意</b>いただいています。主な内容：<br>
