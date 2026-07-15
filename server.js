@@ -3525,7 +3525,9 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
     // 消費型購入を平坦化（BitTo商品のみ・未消費のみ）
     const txList = [];
     for (const pid of Object.keys(nonSubs)) {
-      if (pid !== BITTO_PRODUCT_ID) continue;   // BitToの商品だけ受け付ける
+      // BitToの商品だけ受け付ける。新Google Play方式は product_id:購入オプション の
+      // 複合IDになるため、`bitto_report` と `bitto_report:<option>` の両形式を許可。
+      if (pid !== BITTO_PRODUCT_ID && !pid.startsWith(BITTO_PRODUCT_ID + ':')) continue;
       for (const t of (nonSubs[pid] || [])) {
         const tid = t.store_transaction_id || t.id;
         if (!tid || consumedIapTx.has(tid)) continue;
