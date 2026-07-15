@@ -2936,6 +2936,8 @@ app.get('/connection', (_req, res) => res.sendFile(path.join(__dirname, 'public'
 app.get('/bitto', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'bitto.html')));
 app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-privacy.html')));
 app.get('/connection/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-privacy.html')));
+app.get('/bitto/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'bitto-privacy.html')));
+app.get('/bitto-privacy', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'bitto-privacy.html')));
 
 // ── データ削除ページ（Google Playアカウント削除要件：公開URLとフォーム） ──
 app.get('/data-deletion', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-data-deletion.html')));
