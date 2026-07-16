@@ -1116,10 +1116,19 @@ function getMailer() {
 }
 
 // Resend（HTTP API）でメール送信。Railwayでもポートブロックを受けない
-async function sendViaResend(to, subject, html) {
+// 差出人の表示名だけブランド別に切替（アドレス部は MAIL_FROM と共通）。
+// brand='bitto' 以外は従来どおり MAIL_FROM（Connection）。
+function mailFromFor(brand) {
+  if (String(brand || '').toLowerCase() !== 'bitto') return MAIL_FROM;
+  const m = MAIL_FROM.match(/<([^>]+)>/);
+  return `BitTo <${m ? m[1] : MAIL_FROM}>`;
+}
+
+async function sendViaResend(to, subject, html, brand) {
   // テストドメイン（onboarding@resend.dev）では本人以外・BCCに送れないため、
   // 独自ドメイン認証後（MAIL_FROMがresend.dev以外）のみ運営者控えBCCを付ける
-  const domainVerified = !/onboarding@resend\.dev/.test(MAIL_FROM);
+  const from = mailFromFor(brand);
+  const domainVerified = !/onboarding@resend\.dev/.test(from);
   const bccTarget = SMTP_USER && SMTP_USER !== to ? [SMTP_USER] : undefined;
   const bcc = domainVerified ? bccTarget : undefined;
   const r = await fetch('https://api.resend.com/emails', {
@@ -1128,18 +1137,18 @@ async function sendViaResend(to, subject, html) {
       'Authorization': `Bearer ${RESEND_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ from: MAIL_FROM, to: [to], bcc, subject, html }),
+    body: JSON.stringify({ from, to: [to], bcc, subject, html }),
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`Resend ${r.status}: ${data.message || JSON.stringify(data)}`);
   return data.id;
 }
 
-async function sendEmail(to, subject, html) {
+async function sendEmail(to, subject, html, brand) {
   // ① Resend（推奨：HTTP経由でRailway対応）
   if (RESEND_API_KEY) {
     try {
-      const id = await sendViaResend(to, subject, html);
+      const id = await sendViaResend(to, subject, html, brand);
       console.log('[Mail] Resend送信完了 → to:', to, '/ id:', id);
       return;
     } catch (e) {
@@ -1153,7 +1162,7 @@ async function sendEmail(to, subject, html) {
     if (!mailer) { console.log('[Mail] メール未設定（スキップ）'); return; }
     const bcc = SMTP_USER && SMTP_USER !== to ? SMTP_USER : undefined;
     const info = await mailer.sendMail({
-      from: `"BitTo 調査サービス" <${SMTP_USER}>`,
+      from: `"${String(brand || '').toLowerCase() === 'bitto' ? 'BitTo' : 'Connection'} 調査サービス" <${SMTP_USER}>`,
       to, bcc, subject, html,
     });
     console.log('[Mail] SMTP送信完了 → to:', to, '/ bcc:', bcc || 'なし', '/ messageId:', info.messageId);
@@ -2965,7 +2974,8 @@ app.post('/api/data-deletion-request', express.json(), async (req, res) => {
          <tr><td style="padding:4px 10px;color:#64748b">お名前</td><td style="padding:4px 10px">${name}</td></tr>
          <tr><td style="padding:4px 10px;color:#64748b">メール</td><td style="padding:4px 10px">${esc(email)}</td></tr>
          <tr><td style="padding:4px 10px;color:#64748b;vertical-align:top">詳細</td><td style="padding:4px 10px;white-space:pre-wrap">${detail || '（記載なし）'}</td></tr>
-       </table>`
+       </table>`,
+      brand
     ).catch(e => console.error('[DataDeletion] 運営通知失敗:', e.message));
     // 申請者へ受付確認
     await sendEmail(email, `【${brand}】データ削除のご請求を受け付けました`,
@@ -2975,7 +2985,8 @@ app.post('/api/data-deletion-request', express.json(), async (req, res) => {
        なお、法令上の保存義務がある取引・会計記録は、法定期間の経過後に消去いたします。</p>
        <p style="color:#64748b;font-size:13px">受付日時：${at}</p>
        <p style="color:#64748b;font-size:13px">本メールにお心当たりがない場合は、破棄してください。</p>
-       <p>${brand}（Himesen株式会社）</p>`
+       <p>${brand}（Himesen株式会社）</p>`,
+      brand
     ).catch(e => console.error('[DataDeletion] 申請者確認失敗:', e.message));
     console.log(`[DataDeletion] 受付(${brand}): ${name} / ${email}`);
     res.json({ ok: true });
@@ -3597,10 +3608,11 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
           ・デジタルコンテンツの性質上、決済後のキャンセル・返金はお受けできません。<br>
           ・本サービスは被害の回復・資産の奪還・犯人の特定を保証するものではありません。<br>
           ・本サービスは法律事務を提供するものではありません。<br>
-          プライバシーポリシー：<a href="${BASE_URL}/privacy">${BASE_URL}/privacy</a>
+          プライバシーポリシー：<a href="${BASE_URL}/bitto/privacy">${BASE_URL}/bitto/privacy</a>
         </p>
-        <p style="font-size:13px;color:#666">運営：Himesen株式会社　お問い合わせ：himesen.inc2512@gmail.com</p>
-      </div>`
+        <p style="font-size:13px;color:#666">運営：Himesen株式会社　お問い合わせ：info@himesen-25.com</p>
+      </div>`,
+      'bitto'
     ).catch(console.error);
 
     res.json({ ok: true, formUrl });
