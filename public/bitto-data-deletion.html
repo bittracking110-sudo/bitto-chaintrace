@@ -85,7 +85,7 @@ li::before{content:'▸';color:var(--teal);position:absolute;left:0}
   <p>フォームが使えない場合は、下記メールアドレスへ「データ削除希望」とご記入のうえ、ご登録のメールアドレスを添えてご連絡ください。</p>
   <div class="box">
     <div class="k">個人情報お問い合わせ窓口</div>
-    <div><a href="mailto:himesen.inc2512@gmail.com?subject=データ削除希望（BitTo）">himesen.inc2512@gmail.com</a></div>
+    <div><a href="mailto:info@himesen-25.com?subject=データ削除希望（BitTo）">info@himesen-25.com</a></div>
   </div>
 
   <h2><span class="n">3.</span>削除までの流れと期間</h2>
@@ -126,7 +126,7 @@ async function submitDeletion(){
     btn.textContent='受け付けました';
   }catch(e){
     msg.className='msg err';
-    msg.textContent=(e.message||'送信に失敗しました')+' 恐れ入りますが himesen.inc2512@gmail.com へメールでご連絡ください。';
+    msg.textContent=(e.message||'送信に失敗しました')+' 恐れ入りますが info@himesen-25.com へメールでご連絡ください。';
     btn.disabled=false; btn.textContent='削除を請求する';
   }
 }
