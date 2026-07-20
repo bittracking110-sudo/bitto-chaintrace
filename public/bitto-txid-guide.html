@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>TXIDの見つけ方ガイド｜BitTo</title>
+<style>
+:root{
+  --bg:#0a1416; --bg2:#10212a; --card:#132530;
+  --accent:#2dd4bf; --accent2:#0d9488; --accentText:#04211d;
+  --text:#e8f1f0; --muted:#8fa6a6; --border:rgba(45,212,191,.16); --glow:rgba(45,212,191,.14);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+  line-height:1.7; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:720px;margin:0 auto;padding:0 18px 80px}
+header.hero{
+  position:relative; text-align:center; padding:44px 18px 30px;
+  background:
+    radial-gradient(120% 90% at 50% -10%, var(--glow), transparent 60%),
+    linear-gradient(180deg,var(--bg2),var(--bg));
+  border-bottom:1px solid var(--border);
+}
+.brand{font-size:13px;letter-spacing:.28em;color:var(--accent);font-weight:700;text-transform:uppercase}
+.hero h1{font-size:26px;line-height:1.35;margin:12px 0 6px;font-weight:800}
+.hero h1 .hl{color:var(--accent)}
+.hero p{color:var(--muted);font-size:14px;margin:6px auto 0;max-width:32em}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px 18px;margin:18px 0}
+.card h2{font-size:16px;margin:0 0 8px;display:flex;align-items:center;gap:9px}
+.card h2 .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);flex:none}
+.card p{margin:6px 0;font-size:14.5px}
+.muted{color:var(--muted)}
+.warn{background:rgba(239,68,68,.10);border:1px solid rgba(239,68,68,.42);border-radius:16px;padding:16px 18px;margin:18px 0}
+.warn h2{color:#ff8f8f;font-size:15.5px;margin:0 0 6px;display:flex;align-items:center;gap:8px}
+.warn p{margin:4px 0;font-size:14px}
+.warn b{color:#ffbcbc}
+.section-title{font-size:18px;font-weight:800;margin:34px 0 4px}
+.section-title .n{color:var(--accent);margin-right:8px}
+.sub{color:var(--muted);font-size:13.5px;margin:0 0 14px}
+.tabs{display:flex;gap:8px;overflow-x:auto;padding:4px 2px 10px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.pill{flex:none;background:var(--bg2);color:var(--muted);border:1px solid var(--border);
+  border-radius:999px;padding:9px 16px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;transition:.15s}
+.pill.active{background:var(--accent);color:var(--accentText);border-color:var(--accent)}
+.step{display:flex;gap:16px;align-items:flex-start;background:var(--card);border:1px solid var(--border);
+  border-radius:16px;padding:18px;margin:14px 0}
+.step-txt{flex:1;min-width:0}
+.step-num{display:inline-block;font-size:11.5px;font-weight:800;letter-spacing:.05em;color:var(--accentText);
+  background:var(--accent);border-radius:6px;padding:3px 9px;margin-bottom:9px}
+.step-txt h3{font-size:16px;margin:0 0 7px;line-height:1.4}
+.step-txt p{font-size:14px;color:var(--text);margin:0}
+.phone{flex:none;width:150px;border-radius:16px;overflow:hidden;border:1px solid var(--border);background:#000;
+  box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.phone img{display:block;width:100%;height:auto}
+.fullshot{margin:14px 0;border-radius:14px;overflow:hidden;border:1px solid var(--border);background:#000;
+  box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.fullshot img{display:block;width:100%;max-width:360px;margin:0 auto;height:auto}
+.note{background:var(--bg2);border:1px dashed var(--border);border-radius:12px;padding:12px 14px;font-size:13.5px;color:var(--muted);margin:6px 0 16px}
+.tmpl{position:relative}
+pre.tmpl-box{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:14px 14px;
+  font-size:13.5px;white-space:pre-wrap;word-break:break-word;margin:10px 0 0;font-family:inherit;color:var(--text)}
+.copybtn{margin-top:12px;background:var(--accent);color:var(--accentText);border:none;border-radius:10px;
+  padding:11px 18px;font-size:14px;font-weight:800;cursor:pointer;width:100%}
+.copybtn:active{opacity:.85}
+ul.chk{list-style:none;padding:0;margin:8px 0 0}
+ul.chk li{padding:7px 0 7px 30px;position:relative;font-size:14.5px;border-bottom:1px solid var(--border)}
+ul.chk li:last-child{border-bottom:none}
+ul.chk li::before{content:"✓";position:absolute;left:4px;top:7px;color:var(--accent);font-weight:900}
+ol.trouble{padding-left:20px;margin:8px 0 0}
+ol.trouble li{margin:8px 0;font-size:14px}
+ol.trouble b{color:var(--accent)}
+.cta{text-align:center;margin:36px 0 0}
+.cta a{display:inline-block;background:var(--accent);color:var(--accentText);text-decoration:none;
+  font-weight:800;font-size:15px;padding:15px 34px;border-radius:12px}
+.cta p{color:var(--muted);font-size:13.5px;margin:14px 0 0}
+footer{text-align:center;color:var(--muted);font-size:12px;margin-top:40px;border-top:1px solid var(--border);padding-top:20px}
+@media(max-width:480px){
+  .step{flex-direction:column;align-items:center;text-align:left}
+  .step-txt{width:100%}
+  .phone{width:210px;margin-top:4px}
+  .hero h1{font-size:22px}
+}
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="brand">BitTo</div>
+  <h1>TXID（取引ID）の<br><span class="hl">見つけ方</span>ガイド</h1>
+  <p>お使いの取引所を選んで、画面を見ながらそのまま操作してください。TXIDが見つかったら、アプリのチャットに貼り付けて送るだけです。</p>
+</header>
+<div class="wrap">
+
+  <div class="card">
+    <h2><span class="dot"></span>TXID（取引ID）とは？</h2>
+    <p>暗号資産の送金をブロックチェーン上で特定するための<b>「取引番号」</b>です。<span class="muted">トランザクションID／取引ハッシュ とも呼ばれ、送金が「いつ・どの通貨で・どこへ」動いたかを確認する手がかりになります。</span></p>
+    <p class="muted">例：<span style="word-break:break-all">18cb80d07a4c386afa02a16bcfa889ea458bd67ef61576b98b635e334705e75b</span></p>
+  </div>
+
+  <div class="warn">
+    <h2>⚠ 送ってはいけないもの</h2>
+    <p><b>パスワード ／ 2段階認証コード ／ 秘密鍵 ／ シードフレーズ ／ 本人確認書類</b></p>
+    <p>これらは調査・確認に一切不要です。絶対に送らないでください。スクショを送る場合、氏名・メール・残高などは隠してOKです。</p>
+  </div>
+
+  <div class="section-title"><span class="n">01</span>取引所を選んで手順を確認</div>
+  <p class="sub">下のタブから、送金した取引所を選んでください。</p>
+  <div class="tabs"><button class="pill active" data-target="bitflyer">bitFlyer</button><button class="pill" data-target="coincheck">Coincheck</button><button class="pill" data-target="bitbank">bitbank</button><button class="pill" data-target="gmo">GMOコイン</button><button class="pill" data-target="generic">その他の取引所</button></div>
+  <section class="ex-section" data-ex="bitflyer" style="display:block">
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 1</div>
+    <h3>ホーム画面で「入出金」を選択</h3>
+    <p>画面下部のメニューにある「入出金」をタップします。青い丸と矢印が目印です。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/bitflyer/s3_1.jpg" alt="bitFlyer STEP1"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 2</div>
+    <h3>右上の「︙」メニューをタップ</h3>
+    <p>入出金画面が開いたら、右上の「︙」をタップして履歴メニューを開きます。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/bitflyer/s4_1.jpg" alt="bitFlyer STEP2"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 3</div>
+    <h3>「入出金履歴」を選択</h3>
+    <p>メニューから「入出金履歴」をタップ。入金・出金・送付の履歴がまとめて表示されます。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/bitflyer/s5_1.jpg" alt="bitFlyer STEP3"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 4</div>
+    <h3>「送付」履歴を開いてTXIDを確認</h3>
+    <p>「送付」と表示された取引をタップし、詳細画面の「TXID／トランザクションID」の文字列をコピーします（省略せず全文）。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/bitflyer/s6_1.jpg" alt="bitFlyer STEP4"></div>
+</div>
+</section>
+<section class="ex-section" data-ex="coincheck" style="display:none">
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 1</div>
+    <h3>ログインして「取引履歴」を開く</h3>
+    <p>アプリまたはWebでログインし、画面下部メニューから「取引履歴」をタップします。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/coincheck/s3_1.jpg" alt="Coincheck STEP1"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 2</div>
+    <h3>送金した履歴を選ぶ</h3>
+    <p>「送金」と書かれた履歴（例：ETH 送金）をタップします。「購入・売却・入金」ではなく、外部へ送った履歴です。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/coincheck/s4_1.jpg" alt="Coincheck STEP2"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 3</div>
+    <h3>送金詳細でTXIDを確認</h3>
+    <p>詳細画面の下部にある「取引ID／TXID」の文字列をコピーします（赤枠部分・全文）。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/coincheck/s5_1.jpg" alt="Coincheck STEP3"></div>
+</div>
+</section>
+<section class="ex-section" data-ex="bitbank" style="display:none">
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 1</div>
+    <h3>右下の「メニュー」を開く</h3>
+    <p>ログイン後、ホーム画面の右下にある「メニュー」をタップします（赤枠が目印）。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/bitbank/s4_1.jpg" alt="bitbank STEP1"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 2</div>
+    <h3>メニュー内の「出金」を選択</h3>
+    <p>メニュー一覧から「出金」をタップします。入金ではなく、出金履歴へ進みます。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/bitbank/s5_1.jpg" alt="bitbank STEP2"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 3</div>
+    <h3>調べたい通貨を選ぶ</h3>
+    <p>送金した通貨と同じものを選びます（例：BTCを送ったなら「ビットコイン」）。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/bitbank/s6_1.jpg" alt="bitbank STEP3"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 4</div>
+    <h3>引出履歴の「Txid」を確認</h3>
+    <p>引出履歴までスクロールし、対象の取引の「Txid」欄の文字列をコピーします。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/bitbank/s7_1.jpg" alt="bitbank STEP4"></div>
+</div>
+</section>
+<section class="ex-section" data-ex="gmo" style="display:none">
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 1</div>
+    <h3>左上の「三」メニューをタップ</h3>
+    <p>ログイン後、画面左上のメニュー（三）をタップします（赤丸・赤矢印の位置）。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/gmo/s3_1.jpg" alt="GMOコイン STEP1"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 2</div>
+    <h3>「暗号資産」を開き通貨を選択</h3>
+    <p>「入出金」→「暗号資産」を開き、送金した通貨（ETH／BTC／XRP など）を選びます。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/gmo/s4_1.jpg" alt="GMOコイン STEP2"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 3</div>
+    <h3>「取引履歴」を開き期間を合わせる</h3>
+    <p>タブを右にスクロールして「取引履歴」を選択。7日以内でなければ期間を変更し、授受区分が「送付」の履歴を探します。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/gmo/s5_1.jpg" alt="GMOコイン STEP3"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 4</div>
+    <h3>TXID（Transaction Hash）をコピー</h3>
+    <p>対象履歴を右にスライド→トランザクションIDを開くとEtherscanへ移動。「Transaction Hash」のコピーアイコンで全文をコピーします。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/gmo/s6_1.jpg" alt="GMOコイン STEP4"></div>
+</div>
+<div class="step">
+  <div class="step-txt">
+    <div class="step-num">STEP 5</div>
+    <h3>From／Toアドレスもコピー</h3>
+    <p>Etherscanを下にスクロールし、送金元（From）・送金先（To）アドレスもコピーしておくと確認が速くなります。</p>
+  </div>
+  <div class="phone"><img loading="lazy" src="/txid-guide/img/gmo/s7_1.jpg" alt="GMOコイン STEP5"></div>
+</div>
+</section>
+<section class="ex-section" data-ex="generic" style="display:none">
+<p class="note">お使いの取引所が一覧にない場合の一般的な手順です（Bybitなどの海外取引所の例）。画面の名称は取引所ごとに多少異なりますが、「資産 → 出金（出庫）→ 通貨選択 → 履歴 → 参照」の流れは共通です。</p>
+<div class="fullshot"><img loading="lazy" src="/txid-guide/img/generic/s1_1.jpg" alt="その他の取引所 手順"></div>
+<div class="fullshot"><img loading="lazy" src="/txid-guide/img/generic/s2_1.jpg" alt="その他の取引所 手順"></div>
+<div class="fullshot"><img loading="lazy" src="/txid-guide/img/generic/s3_1.jpg" alt="その他の取引所 手順"></div>
+<div class="fullshot"><img loading="lazy" src="/txid-guide/img/generic/s4_1.jpg" alt="その他の取引所 手順"></div>
+<div class="fullshot"><img loading="lazy" src="/txid-guide/img/generic/s5_1.jpg" alt="その他の取引所 手順"></div>
+</section>
+
+  <div class="section-title"><span class="n">02</span>問い合わせに送る内容</div>
+  <p class="sub">TXIDと一緒に下記を送ると、確認・調査がスムーズです。下のテンプレートをコピーして使えます。</p>
+  <div class="card tmpl">
+    <pre class="tmpl-box" id="tmpl">送金しました。TXIDを共有します。
+取引所：
+通貨：（BTC / ETH / XRP など）
+送金日時：
+送金数量：
+TXID：
+（分かれば）送金先アドレス：</pre>
+    <button class="copybtn" id="copyBtn">テンプレートをコピー</button>
+  </div>
+  <div class="card">
+    <h2><span class="dot"></span>送信前チェック</h2>
+    <ul class="chk">
+      <li>TXIDの文字列をコピーした（途中で切れていないか確認）</li>
+      <li>通貨名（BTC／ETH／XRP など）が分かる</li>
+      <li>送金日時・数量も控えた</li>
+      <li>パスワードや認証情報は含めていない</li>
+    </ul>
+  </div>
+
+  <div class="section-title"><span class="n">03</span>TXIDが見つからないとき</div>
+  <p class="sub">よくある原因を順番に確認してください。</p>
+  <div class="card">
+    <ol class="trouble">
+      <li><b>送金がまだ完了していない</b> … 出金処理中はTXIDがまだ表示されないことがあります。</li>
+      <li><b>通貨を間違えている</b> … BTCを送ったのにETHの履歴を見ている、など。</li>
+      <li><b>「入金」側を見ている</b> … 自分が送った履歴は「出金／送付」から確認します。</li>
+      <li><b>履歴の期間が違う</b> … 過去の日付・別の履歴ページも確認してください。</li>
+      <li><b>アプリ表示が古い</b> … アプリ更新・再ログイン・ブラウザ版の確認も有効です。</li>
+    </ol>
+    <p class="muted" style="margin-top:12px">それでも分からない場合は、<b>通貨名・送金日時・数量・履歴画面のスクショ</b>をアプリのチャットに送ってください。こちらで確認箇所をご案内します。</p>
+  </div>
+
+  <div class="cta">
+    <a href="/bitto">アプリに戻ってTXIDを送る</a>
+    <p>見つけたTXIDを、アプリのチャットに貼り付けて送信してください。</p>
+  </div>
+
+  <footer>
+    BitTo｜暗号資産 資金追跡サービス<br>
+    ※本ガイドは操作案内です。返金・資産回復を保証するものではありません。
+  </footer>
+</div>
+
+<script>
+(function(){
+  var pills=document.querySelectorAll('.pill');
+  var secs=document.querySelectorAll('.ex-section');
+  pills.forEach(function(p){
+    p.addEventListener('click',function(){
+      pills.forEach(function(x){x.classList.remove('active')});
+      p.classList.add('active');
+      var t=p.getAttribute('data-target');
+      secs.forEach(function(s){s.style.display = (s.getAttribute('data-ex')===t)?'block':'none';});
+      window.scrollTo({top:document.querySelector('.tabs').getBoundingClientRect().top+window.scrollY-70,behavior:'smooth'});
+    });
+  });
+  var btn=document.getElementById('copyBtn');
+  btn.addEventListener('click',function(){
+    var txt=document.getElementById('tmpl').innerText;
+    navigator.clipboard.writeText(txt).then(function(){
+      btn.textContent='✓ コピーしました';
+      setTimeout(function(){btn.textContent='テンプレートをコピー';},1800);
+    }).catch(function(){
+      var r=document.createRange();r.selectNode(document.getElementById('tmpl'));
+      var s=window.getSelection();s.removeAllRanges();s.addRange(r);
+      try{document.execCommand('copy');btn.textContent='✓ コピーしました';
+      setTimeout(function(){btn.textContent='テンプレートをコピー';},1800);}catch(e){}
+      s.removeAllRanges();
+    });
+  });
+})();
+</script>
+</body>
+</html>

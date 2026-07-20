@@ -2954,6 +2954,13 @@ app.get('/connection/data-deletion', (_req, res) => res.sendFile(path.join(__dir
 app.get('/bitto/data-deletion', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'bitto-data-deletion.html')));
 app.get('/bitto-data-deletion', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'bitto-data-deletion.html')));
 
+// TXIDの見つけ方ガイド
+app.get('/bitto/txid-guide', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'bitto-txid-guide.html')));
+app.get('/bitto/txid', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'bitto-txid-guide.html')));
+app.get('/connection/txid-guide', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-txid-guide.html')));
+app.get('/connection/txid', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-txid-guide.html')));
+app.get('/txid-guide', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-txid-guide.html')));
+
 // データ削除リクエストの受付（運営に通知＋申請者に受付確認）
 app.post('/api/data-deletion-request', express.json(), async (req, res) => {
   try {
