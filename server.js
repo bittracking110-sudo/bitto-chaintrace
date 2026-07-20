@@ -2959,7 +2959,8 @@ app.get('/bitto/txid-guide', (_req, res) => res.sendFile(path.join(__dirname, 'p
 app.get('/bitto/txid', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'bitto-txid-guide.html')));
 app.get('/connection/txid-guide', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-txid-guide.html')));
 app.get('/connection/txid', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-txid-guide.html')));
-app.get('/txid-guide', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'connection-txid-guide.html')));
+// NOTE: no bare '/txid-guide' route — it collides with the static public/txid-guide/ image dir.
+// Canonical URLs are /bitto/txid-guide and /connection/txid-guide.
 
 // データ削除リクエストの受付（運営に通知＋申請者に受付確認）
 app.post('/api/data-deletion-request', express.json(), async (req, res) => {
