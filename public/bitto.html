@@ -104,6 +104,11 @@
   .b-guess{background:rgba(251,191,36,.16);color:var(--amber);border:1px solid rgba(251,191,36,.42)}
   .b-via{background:rgba(125,180,255,.16);color:#A9CBFF;border:1px solid rgba(125,180,255,.42)}
   .b-unk{background:rgba(124,143,168,.18);color:#A9BBD0;border:1px solid rgba(124,143,168,.42)}
+  /* 取引所ノードを強調（資金の到達先＝最重要の情報） */
+  .node.ex-known{border-color:rgba(61,220,151,.7);
+    box-shadow:inset 0 0 0 999px rgba(61,220,151,.08),0 0 0 1.5px rgba(61,220,151,.45),0 2px 12px rgba(61,220,151,.16)}
+  .node.ex-guess{border-color:rgba(251,191,36,.58);
+    box-shadow:inset 0 0 0 999px rgba(251,191,36,.07),0 0 0 1.5px rgba(251,191,36,.3)}
   .arrow{flex:none;align-self:center;color:var(--sub);font-size:15px}
   .legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:9px;font-size:10.5px;color:var(--sub)}
   .legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
@@ -235,6 +240,14 @@ function nodeBadge(n){
   if (n.isExchange)                   return `<span class="badge b-guess">推定</span>`;
   return `<span class="badge b-unk">未特定</span>`;
 }
+/* 取引所ノードの強調クラス／アイコン（到達先を目立たせる） */
+function nodeCls(n){
+  if (isBridgeLike(n))         return '';
+  if (n.isExchange && n.label) return 'ex-known';
+  if (n.isExchange)            return 'ex-guess';
+  return '';
+}
+function exIcon(n){ return (n.isExchange && !isBridgeLike(n)) ? '🏦 ' : ''; }
 function hopName(i, total){
   if (i === 0) return '送金元';
   if (i === total - 1) return `${i}次先`;
@@ -246,9 +259,9 @@ function flowHTML(path){
   const nodes = path;   // 最終到達先まで全て表示（横スクロール）
   return `<div class="flow">` + nodes.map((n,i) => `
     ${i ? '<div class="arrow">→</div>' : ''}
-    <div class="node">
+    <div class="node ${nodeCls(n)}">
       <div class="hop">${esc(hopName(i, nodes.length))}</div>
-      <div class="nm">${esc(n.label || (n.isExchange ? '取引所系ウォレット' : 'ウォレット'))}</div>
+      <div class="nm">${exIcon(n)}${esc(n.label || (n.isExchange ? '取引所系ウォレット' : 'ウォレット'))}</div>
       <div class="ad">${esc(shortAddr(n.address))}</div>
       ${n.amount != null ? `<div class="am">${esc(String(n.amount).slice(0,10))}${n.token ? ' ' + esc(n.token) : ''}</div>` : ''}
       ${Number.isFinite(n.txCount) ? `<div class="meta${n.txCount >= HIGH_TX ? ' hi' : ''}">取引 ${fmtNum(n.txCount)}回</div>` : ''}
