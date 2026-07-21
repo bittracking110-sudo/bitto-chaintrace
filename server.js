@@ -2297,11 +2297,15 @@ app.post('/stripe-webhook',
         });
         const txidFormUrl = `${BASE_URL}/txid-form/${formToken}`;
 
-        // LINEにTXID入力リンクを送信
-        await lineClient.pushMessage(userId, {
-          type: 'text',
-          text: `✅ お支払いありがとうございます！\n\n📝 以下のURLから調査するTXIDを入力してください\n（${count}件まで入力できます）\n\n${txidFormUrl}\n\n⚠️ このURLは1回のみ使用可能です`,
-        });
+        // LINEにTXID入力リンクを送信（LINE経由の申込のみ。Web決済はuidが無いのでスキップ）
+        if (userId) {
+          try {
+            await lineClient.pushMessage(userId, {
+              type: 'text',
+              text: `✅ お支払いありがとうございます！\n\n📝 以下のURLから調査するTXIDを入力してください\n（${count}件まで入力できます）\n\n${txidFormUrl}\n\n⚠️ このURLは1回のみ使用可能です`,
+            });
+          } catch (e) { console.error('[LINE push] TXIDフォーム送信失敗:', e.message); }
+        }
 
         // Sheetsに支払い確認を記録
         updateSheetReportUrl(sessionId, `[TXID待ち] ${txidFormUrl}`).catch(console.error);
@@ -2318,9 +2322,13 @@ app.post('/stripe-webhook',
         pendingSessions.delete(sessionId);
       } catch (e) {
         console.error('Stripe webhook エラー:', e);
-        await lineClient.pushMessage(userId, {
-          type: 'text', text: `⚠️ エラーが発生しました\n${e.message}\nサポートにご連絡ください`,
-        });
+        if (userId) {
+          try {
+            await lineClient.pushMessage(userId, {
+              type: 'text', text: `⚠️ エラーが発生しました\n${e.message}\nサポートにご連絡ください`,
+            });
+          } catch (_) {}
+        }
       }
     }
     res.json({ received: true });
@@ -2330,7 +2338,7 @@ app.post('/stripe-webhook',
 // 申し込みフォームからの決済セッション作成
 app.post('/api/create-checkout', express.json(), async (req, res) => {
   try {
-    const { uid, name, phone, email, address, txid_count } = req.body;
+    const { uid, name, phone, email, address, txid_count, source } = req.body;
     const count  = Math.max(1, Math.min(10, parseInt(txid_count) || 1));
     const amount = BITTO_PRICE * count;
     const sessionId = crypto.randomUUID();
@@ -2378,7 +2386,7 @@ app.post('/api/create-checkout', express.json(), async (req, res) => {
       }],
       mode: 'payment',
       success_url: `${BASE_URL}/payment/success?sid=${sessionId}`,
-      cancel_url:  `${BASE_URL}/apply?uid=${encodeURIComponent(uid || '')}`,
+      cancel_url:  source === 'web' ? `${BASE_URL}/bitto` : `${BASE_URL}/apply?uid=${encodeURIComponent(uid || '')}`,
       metadata: {
         sessionId,
         userId:       uid || '',
@@ -2421,9 +2429,9 @@ h1{color:#34d399;font-size:1.4rem;margin:12px 0 8px}.icon{font-size:3rem;margin-
 
   <div class="steps">
     <h2>📋 次のステップ</h2>
-    <div class="step"><div class="badge">1</div><div>LINEに <strong>TXID入力フォームのURL</strong> をお送りします。<br>数秒〜1分ほどお待ちください。</div></div>
+    <div class="step"><div class="badge">1</div><div>ご登録のメールアドレスに <strong>TXID入力フォームのURL</strong> をお送りします（LINE連携の場合はLINEにも届きます）。<br>数秒〜1分ほどお待ちください。迷惑メールフォルダもご確認ください。</div></div>
     <div class="step"><div class="badge">2</div><div>届いたURLを開き、<strong>調査対象のTXID</strong>（トランザクションID）を入力してください。</div></div>
-    <div class="step"><div class="badge">3</div><div>調査完了後、<strong>レポートURLをLINEとメール</strong>にお送りします。</div></div>
+    <div class="step"><div class="badge">3</div><div>調査完了後、<strong>レポートURLをメール</strong>（LINE連携の場合はLINEにも）にお送りします。</div></div>
   </div>
 
   <div class="note">
@@ -3308,6 +3316,7 @@ app.post('/api/connection/consult', express.json(), async (req, res) => {
 - TXID（取引ID）を送ると、資金の流れを追跡して可視化します（追跡は無料）
 - 対応チェーン：ビットコイン(BTC)／イーサリアム(ETH)／XRP
 - 到達した取引所の候補を「判明／推定／未特定」に分けて表示します
+- 警察・取引所に提出する正式な書面が必要な方には、任意で「正式調査報告書」（税込¥6,600・買い切り／1TXID）をご用意しています。取引所への資産凍結要請、警察・弁護士提出用の調査報告書、AI総合分析、購入後のサポートを含みます
 
 【ご相談者の追跡結果】
 ${caseInfo}
@@ -3322,8 +3331,10 @@ ${caseInfo}
 - DEX・海外取引所・匿名化を経由している場合は、最終特定が難しい可能性を正直に伝える
 - 被害の回復・資産の奪還・犯人特定・凍結を「保証」する表現は絶対に使わない
 - 法律判断・返金交渉の代行はしない（弁護士法に配慮）。制度の一般的な説明にとどめる
-- BitToは**無料の追跡ツール**です。**報告書・凍結要請状などの書面は一切作成しません**。「弊社が作成します」とは絶対に述べず、凍結要請はご相談者ご自身が取引所へ行うものとして案内する
-- **有料サービスや金額の案内・営業は一切しない**（このアプリでは販売していません）
+- 画面上の追跡結果は無料。正式な書面が必要な場合のみ、任意で正式調査報告書（税込¥6,600・買い切り）を自然にご案内する（押し売りはしない）
+- 取引所名が**判明**している場合：報告書に取引所向けの資産凍結要請を添えられること、警察へ提出できる資料になることを前向きに伝える。ただし凍結の可否は取引所の判断であり、返金・資産回収を保証しないことも正直に添える
+- 取引所名が**推定・未特定**の場合：資産凍結要請は作成できないと正直に伝え、報告書の価値は「資金経路の客観的な記録」「警察へ提出する資料」に限定して説明する（過大な期待を持たせない）
+- 高額な着手金や成功報酬を求める他社と異なり、BitToの報告書は税込¥6,600の買い切り1回のみで追加請求はない。この違いは、押し売りにならない範囲で正直に伝えてよい
 - TXIDの場所・見つけ方が分からない様子のときは、送金・出金履歴の詳細画面に長い英数字で表示されていることを伝え、取引所別の「TXIDの見つけ方ガイド」で確認できると案内する（画面にガイドを開くボタンが表示されます）
 - 不安を煽らない
 
