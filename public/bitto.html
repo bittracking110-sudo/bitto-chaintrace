@@ -202,6 +202,9 @@
   .buycta{display:block;width:100%;margin-top:10px;background:linear-gradient(180deg,#3DEAD1,#34E1C8 55%,#22b7a3);
     color:#062A25;border:none;border-radius:10px;font-weight:800;font-size:14px;padding:13px;cursor:pointer;font-family:inherit}
   .buynote{font-size:11px;color:var(--sub);text-align:center;margin-top:6px;line-height:1.7}
+  .packcta{display:block;width:100%;margin-top:10px;background:var(--panel2);border:1px solid var(--teal);
+    color:#c8f5ea;border-radius:10px;font-weight:800;font-size:13.5px;padding:12px;cursor:pointer;font-family:inherit}
+  .packcta:hover{background:#20375c}
   #buyModal{position:fixed;inset:0;z-index:60;background:rgba(4,10,20,.66);display:none;align-items:flex-end;justify-content:center}
   #buyModal.on{display:flex}
   .bm-card{width:100%;max-width:460px;background:var(--panel);border:1px solid var(--line);border-radius:16px 16px 0 0;
@@ -268,8 +271,8 @@
 <section id="view-menu"></section>
 
 <nav>
-  <button data-tab="navi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2.2 4.8-4.8 2.2 2.2-4.8z"/></svg>初動ナビ</button>
-  <button data-tab="chat" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"/></svg>AI調査チャット</button>
+  <button data-tab="navi" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2.2 4.8-4.8 2.2 2.2-4.8z"/></svg>初動ナビ</button>
+  <button data-tab="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"/></svg>AI調査チャット</button>
   <button data-tab="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>解析履歴</button>
   <button data-tab="menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h16"/></svg>メニュー</button>
 </nav>
@@ -475,6 +478,11 @@ function resultCard(results){
 
   return `調査が完了しました。以下が結果の概要です。\n\n${summaryLine}${stats}${risk}${flows}
     <div class="note">本結果は公開ブロックチェーン情報に基づく情報提供です。資産の回復・犯人の特定を保証するものではありません。</div>
+    <div class="card" style="text-align:center">
+      <div style="font-size:13px;color:var(--sub2);line-height:1.9">警察・取引所への連絡にそのまま使える<b>初動パック</b>（無料）</div>
+      <button class="packcta" onclick="openInitialPack()">🆓 初動パックを作成（TXID一覧・時系列・連絡文）</button>
+      <div class="buynote">上の解析結果が自動で入ります。印刷／PDF保存できます。</div>
+    </div>
     ${buyCTA()}`;
 }
 function buyCTA(){
@@ -550,6 +558,7 @@ async function runInvestigation(txids){
 
   setBubble(row, resultCard(results));
   saveHistory(results);   // 解析履歴に保存（この端末のブラウザのみ）
+  lastResults = results;  // 初動パックに反映
 
   // AI相談に渡す文脈を保存
   const r0 = results[0];
@@ -674,6 +683,133 @@ function renderMenu(){
   }));
 }
 
+/* ── 無料の初動パック（印刷・PDF保存できる書類を生成） ── */
+let lastResults = null;
+function packRowsHTML(){
+  const rs = Array.isArray(lastResults) ? lastResults : [];
+  if (!rs.length){
+    return `<tr><td colspan="5" style="color:#777">（TXIDの解析結果がまだありません。「AI調査チャット」でTXIDを送信すると、ここに自動で入ります）</td></tr>`;
+  }
+  return rs.map(r => {
+    const path = r.path || [];
+    const dest = path.length ? path[path.length - 1] : null;
+    const ex = [...new Set(path.filter(n => n.isExchange && n.label).map(n => n.label))];
+    const amt = r.tokenAmount != null ? `${r.tokenAmount} ${r.tokenSymbol || ''}` : `${r.amount != null ? r.amount : ''} ${r.chain || ''}`;
+    return `<tr><td>${esc(r.chain || '')}</td><td class="mono">${esc(r.txid || '')}</td><td>${esc(amt)}</td><td class="mono">${esc((dest && dest.address) || '')}</td><td>${ex.length ? esc(ex.join('、')) + '（推定）' : '未特定'}</td></tr>`;
+  }).join('');
+}
+function buildPackHTML(){
+  const now = new Date().toLocaleString('ja-JP');
+  const blankRow = '<tr><td><span class="fill">&nbsp;</span></td><td><span class="fill" style="min-width:420px">&nbsp;</span></td></tr>';
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BitTo 初動パック</title><style>
+body{font-family:-apple-system,'Hiragino Kaku Gothic ProN','Noto Sans JP',Meiryo,sans-serif;color:#111;line-height:1.8;max-width:820px;margin:0 auto;padding:28px 22px;font-size:14px}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:26px 0 8px;padding-bottom:5px;border-bottom:2px solid #111}
+.meta{color:#666;font-size:12px;margin-bottom:6px}
+.note{background:#f5f5f5;border-left:3px solid #999;padding:10px 12px;font-size:12px;color:#444;margin:10px 0}
+table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12.5px}
+th,td{border:1px solid #ccc;padding:7px 8px;text-align:left;vertical-align:top}
+th{background:#f0f0f0}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;word-break:break-all}
+.fill{border-bottom:1px solid #999;display:inline-block;min-width:180px}
+ul{margin:6px 0 6px 20px;padding:0}li{margin:4px 0}
+.warn{background:#fff3f3;border:1px solid #e0a0a0;padding:12px 14px;border-radius:6px}
+.warn b{color:#b32}
+pre{background:#f7f7f7;border:1px solid #ddd;padding:12px;white-space:pre-wrap;font-family:inherit;font-size:12.5px;border-radius:5px}
+.btns{margin:18px 0}
+button{font:inherit;padding:9px 16px;border:1px solid #333;background:#111;color:#fff;border-radius:6px;cursor:pointer}
+@media print{.btns{display:none}body{padding:0}}
+</style></head><body>
+<h1>BitTo 初動パック（無料）</h1>
+<div class="meta">作成日時：${esc(now)}　／　作成：BitTo（公開ブロックチェーン解析ツール）</div>
+<div class="note">本資料は、公開ブロックチェーン情報にもとづく<b>解析結果と初動の整理用テンプレート</b>です。到達取引所等は<b>推定を含みます</b>。資産の回収・返還を保証するものではありません。</div>
+<div class="btns"><button onclick="window.print()">印刷 / PDFで保存</button></div>
+<h2>1. 調査対象の記録</h2>
+<table><tr><th>チェーン</th><th>TXID</th><th>数量</th><th>最終確認アドレス</th><th>到達取引所（推定）</th></tr>${packRowsHTML()}</table>
+<table>
+<tr><th style="width:32%">送金日時</th><td><span class="fill">&nbsp;</span></td></tr>
+<tr><th>送金元（取引所・ウォレット）</th><td><span class="fill">&nbsp;</span></td></tr>
+<tr><th>被害額（日本円換算・概算）</th><td><span class="fill">&nbsp;</span></td></tr>
+<tr><th>相手との接触経路</th><td><span class="fill">&nbsp;</span>（SNS／マッチング／広告／電話 等）</td></tr>
+</table>
+<h2>2. 証拠保全チェックリスト</h2>
+<ul>
+<li>☐ TXID（取引ID）を控えた（途中で切れていないか確認）</li>
+<li>☐ 送金日時・数量・通貨（BTC／ETH／XRP等）を控えた</li>
+<li>☐ 送金元の取引所の出金履歴のスクリーンショット</li>
+<li>☐ 相手とのやり取り（SNS・チャット・メール）のスクリーンショット</li>
+<li>☐ 相手のサイトURL・アプリ名・口座／ウォレット情報</li>
+<li>☐ 銀行振込がある場合は振込明細（銀行・日時・金額・口座）</li>
+<li>☐ 本資料（初動パック）を保存・印刷</li>
+</ul>
+<div class="note">※ パスワード・2段階認証コード・秘密鍵・シードフレーズは<b>誰にも渡さないでください</b>。調査・確認に一切不要です。</div>
+<h2>3. 時系列メモ（警察・取引所への説明用）</h2>
+<table><tr><th style="width:22%">日時</th><th>出来事（誰から・どこで・何を言われ・いくら送ったか）</th></tr>${blankRow.repeat(6)}</table>
+<h2>4. 取引所への連絡文（テンプレート）</h2>
+<div class="note">送金元の取引所、および（判明していれば）到達先の取引所のサポート窓口へ提出してください。<b>凍結の可否は取引所の判断です。</b></div>
+<pre>件名：不正利用（詐欺被害）に関するご報告と記録保全のお願い
+
+お世話になっております。以下の送金について、詐欺被害に遭ったため報告いたします。
+可能な範囲での記録の保全と、必要なご案内をお願いいたします。
+
+■ 送金情報
+・TXID：
+・チェーン／通貨：
+・送金日時：
+・数量：
+・送金元（当方）アカウント：
+・送金先アドレス：
+
+■ 被害の経緯（概要）
+
+
+■ 依頼事項
+・上記取引に関する記録の保全
+・貴社所定の手続きのご案内
+・警察への相談を予定しており、必要書類があればご教示ください
+
+■ 連絡先
+・氏名：
+・メールアドレス：
+・電話番号：
+</pre>
+<h2>5. ⚠️ 二次被害（回収詐欺）への注意</h2>
+<div class="warn">被害後に接触してくる「回収業者」による<b>二次被害</b>が多発しています。以下は詐欺の典型的なサインです。
+<ul>
+<li><b>「必ず取り戻せる」と保証する</b></li>
+<li><b>回収の前に高額な前払い金を要求する</b></li>
+<li>税金・保証金・解除費用などの名目で追加の支払いを求める</li>
+<li>遠隔操作アプリの導入を求める</li>
+<li>シードフレーズ・秘密鍵・2段階認証コードを聞いてくる</li>
+<li>警察・政府機関との「特別な関係」を主張する</li>
+<li>「凍結済みだが解除費用が必要」と言う</li>
+<li>追加の暗号資産送金を求める</li>
+</ul>
+FBI・CFTCも、前払いを求める暗号資産回収サービスについて注意を呼びかけています。</div>
+<h2>6. BitToができること／できないこと</h2>
+<table><tr><th style="width:50%">できること</th><th>できないこと</th></tr>
+<tr><td>公開チェーンの資金経路の解析<br>着金先取引所・サービスの推定<br>警察・取引所への提出資料の整理<br>不正利用申告文の作成<br>資金移動の継続監視<br>相談先・必要書類の案内</td>
+<td>取引所へ凍結を命令する<br>KYC情報を強制的に取得する<br>資金の残存を保証する<br>被害資金の返還を保証する<br>強制処分を行う<br>秘密鍵で資金を取り戻す</td></tr></table>
+<div class="note">緊急・進行中の犯罪は110。緊急でない警察相談は#9110、被害届は最寄りの警察署、消費者トラブルは188、詐欺的投資・無登録業者は金融庁の相談窓口が候補です。</div>
+</body></html>`;
+}
+function openInitialPack(){
+  const html = buildPackHTML();
+  let w = null;
+  try { w = window.open('', '_blank'); } catch(_) {}
+  if (w && w.document){
+    w.document.open(); w.document.write(html); w.document.close();
+  } else {
+    const blob = new Blob([html], {type:'text/html;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `BitTo_初動パック_${new Date().toISOString().slice(0,10)}.html`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+    toast('初動パックをダウンロードしました');
+  }
+}
+
 /* ── 初動ナビのロジック ── */
 (function(){
   const root = document.getElementById('view-navi');
@@ -717,12 +853,14 @@ function renderMenu(){
       <div class="sec"><h2><span class="n">◆</span> 今すぐやる3つ</h2>
       ${top3.map((t,i)=>`<div class="todo"><div class="num">${i+1}</div><div class="tx">${esc(t[0])}<div class="sub">${esc(t[1])}</div></div></div>`).join('')}</div>
       <button class="track" id="naviTrack">🔎 TXIDを追跡して着金先の取引所を推定する →</button>
+      <button class="track" id="naviPack" style="margin-top:-12px">🆓 初動パックを作成（無料・印刷可）</button>
       <div class="sec"><h2><span class="n">◆</span> 相談先（このケースの推奨順）</h2>
       ${routes.map(r=>`<div class="route"><div class="dot"></div><div class="rt">${esc(r[0])}</div><div class="rd">${esc(r[1])}</div></div>`).join('')}</div>
       ${bn}
       <div class="nvnote"><b>BitToができること：</b>資金経路の解析／着金先取引所の推定／提出資料の整理／不正利用申告文の作成／継続監視／相談先の案内。<br><b>できないこと：</b>取引所への凍結命令／資金の残存・返還の保証／秘密鍵での取戻し。結果は<b>推定</b>を含みます。</div>`;
     out.style.display = 'block';
     out.querySelector('#naviTrack').addEventListener('click', goChatTab);
+    out.querySelector('#naviPack').addEventListener('click', openInitialPack);
     out.scrollIntoView({behavior:'smooth', block:'start'});
   });
 })();
@@ -738,6 +876,9 @@ addAi(`こんにちは。<b>BitTo</b> の調査AIです。\n\n調べたい送金
   nc.innerHTML = `<span class="nc-ic">🆘</span><span class="nc-body"><span class="nc-t">詐欺被害にあってしまったら｜初動ナビ</span><span class="nc-d">状況を選ぶだけで「緊急度・今すぐやる3つ・相談先の順番」を表示します。</span></span><span class="nc-arw">›</span>`;
   chat.appendChild(nc);
 })();
+
+/* 起動時は「初動ナビ」を表示（被害直後に最初に開く画面） */
+showTab('navi');
 </script>
 </body>
 </html>
