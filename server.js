@@ -2018,24 +2018,12 @@ ${requestBlocks}
     let lastErr = '不明';
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { temperature: 0.3, maxOutputTokens: 2500, thinkingConfig: { thinkingBudget: 0 } },
-            }),
-          }
-        );
-        const j = await res.json();
-        if (!res.ok) throw new Error(j.error?.message || 'API error');
-        const text = j.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const text = await geminiGenerate(prompt, { temperature: 0.3, maxOutputTokens: 2500 });
+        if (!text) throw new Error('Geminiが応答しませんでした（詳細は [Gemini] ログを参照）');
 
         const aMatch   = text.match(/\[ANALYSIS\]([\s\S]*?)\[\/ANALYSIS\]/);
         const analysis = aMatch ? aMatch[1].trim() : null;
-        if (!analysis) throw new Error('ANALYSISタグが返らなかった（' + (j.candidates?.[0]?.finishReason || '理由不明') + '）');
+        if (!analysis) throw new Error('ANALYSISタグが返らなかった');
 
         const requests = results.map((_, idx) => {
           const m = text.match(new RegExp(`\\[REQUEST_${idx}\\]([\\s\\S]*?)\\[/REQUEST_${idx}\\]`));
@@ -2531,13 +2519,9 @@ app.get('/api/xrp/tx/:txid', async (req, res) => {
 app.post('/api/ai/analyze', express.json(), async (req, res) => {
   try { const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: 'promptが必要です' });
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 1000, thinkingConfig: { thinkingBudget: 0 } } }),
-    });
-    const j = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: j.error?.message });
-    res.json({ text: j.candidates?.[0]?.content?.parts?.[0]?.text || '' });
+    const text = await geminiGenerate(prompt, { temperature: 0.2, maxOutputTokens: 1000 });
+    if (text === null) return res.status(502).json({ error: 'AIが応答しませんでした（詳細は [Gemini] ログを参照）' });
+    res.json({ text });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -3251,18 +3235,8 @@ ${chat.reportSummary}
 ${history}
 
 サポート担当としての返信のみを出力してください。`;
-      try {
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.4, maxOutputTokens: 600, thinkingConfig: { thinkingBudget: 0 } },
-          }),
-        });
-        const j = await r.json();
-        const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) reply = text.trim();
-      } catch (e) { console.error('[Connection] チャットAI:', e.message); }
+      const text = await geminiGenerate(prompt, { temperature: 0.4, maxOutputTokens: 600 });
+      if (text) reply = text;
     }
 
     chat.messages.push({ role: 'assistant', text: reply, at: Date.now() });
