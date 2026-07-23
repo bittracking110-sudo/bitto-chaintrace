@@ -138,7 +138,7 @@
   .disc{font-size:10px;color:var(--sub);text-align:center;margin-top:7px;line-height:1.5}
 
   /* ── 下部ナビ ── */
-  nav{flex:none;display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);
+  nav{flex:none;display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);
     background:#0F2039;padding-bottom:env(safe-area-inset-bottom)}
   nav button{background:none;border:none;color:var(--sub);cursor:pointer;padding:9px 2px 10px;
     display:grid;justify-items:center;gap:3px;font-size:9px;line-height:1.2;font-family:inherit}
@@ -147,6 +147,8 @@
 
   /* ── 初動ナビ ── */
   #view-navi{flex:1;overflow-y:auto;padding:18px 16px 24px;display:none}
+  #view-navi .navback{background:none;border:none;color:var(--teal);font-size:12.5px;font-family:inherit;
+    padding:0 0 12px;cursor:pointer;display:block}
   #view-navi h1{font-size:18px;font-weight:800;margin:2px 0 4px}
   #view-navi .lead{font-size:12px;color:var(--sub);margin:0 0 18px;line-height:1.7}
   #view-navi .q{margin-bottom:16px}
@@ -270,6 +272,7 @@
 </div>
 
 <section id="view-navi">
+  <button class="navback" onclick="goChatTab()">← AI調査チャットに戻る</button>
   <h1>暗号資産の被害｜今すぐの動き方</h1>
   <p class="lead">状況を一度選ぶだけで、<b style="color:var(--sub2)">緊急度・今すぐやること・相談先の順番</b>を表示します。BitToは公開ブロックチェーンの解析ツールです（結果は推定を含み、資金の回収・返還を保証するものではありません）。</p>
   <div class="q" data-q="from"><div class="ql">Q1. どこから送金しましたか？</div><div class="chips">
@@ -309,8 +312,7 @@
 <section id="view-menu"></section>
 
 <nav>
-  <button data-tab="navi" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2.2 4.8-4.8 2.2 2.2-4.8z"/></svg>初動ナビ</button>
-  <button data-tab="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"/></svg>AI調査チャット</button>
+  <button data-tab="chat" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"/></svg>AI調査チャット</button>
   <button data-tab="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>解析履歴</button>
   <button data-tab="menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h16"/></svg>メニュー</button>
 </nav>
@@ -658,7 +660,9 @@ msgEl.addEventListener('input', () => { msgEl.style.height='auto'; msgEl.style.h
 
 /* ── 下部ナビ：タブ切替（初動ナビ／AI調査チャット／解析履歴／メニュー） ── */
 function showTab(tab){
-  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === tab));
+  // 初動ナビは「AI調査チャット」から入る下位画面（タブは持たない）
+  const navOn = (tab === 'navi') ? 'chat' : tab;
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === navOn));
   const isChat = (tab === 'chat');
   document.getElementById('chat').style.display     = isChat ? '' : 'none';
   document.getElementById('inputbar').style.display = isChat ? '' : 'none';
@@ -967,8 +971,8 @@ addAi(`こんにちは。<b>BitTo</b> の調査AIです。\n\n調べたい送金
   chat.appendChild(nc);
 })();
 
-/* 起動時は「初動ナビ」を表示（被害直後に最初に開く画面） */
-showTab('navi');
+/* 起動時はAI調査チャットを表示（初動ナビは挨拶下のカードから入る） */
+showTab('chat');
 </script>
 </body>
 </html>
