@@ -3121,7 +3121,10 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
 
 app.get('/api/connection/job/:id', (req, res) => {
   const job = connectionJobs.get(req.params.id);
-  if (!job) return res.status(404).json({ error: 'ジョブが見つかりません' });
+  // 不明なジョブ（保存期間切れ or サーバー再起動で消失）。旧BitToアプリ(1.0)は 404 を
+  // 握りつぶして無限ポーリング＝ハングするため、200 + status:error で返し、
+  // どのクライアントでも「エラー表示して停止」できるようにする（Connection/新BitToはerrorを処理済）。
+  if (!job) return res.json({ status: 'error', error: '調査データが見つかりませんでした（保存期間切れ、またはサーバー更新の可能性）。お手数ですが、もう一度TXIDを送信してください。' });
   res.json({ status: job.status, result: job.status === 'done' ? job.result : undefined, error: job.error });
 });
 
