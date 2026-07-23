@@ -23,6 +23,8 @@ const ETHERSCAN_KEY             = process.env.ETHERSCAN_API_KEY;
 const GEMINI_KEY                = process.env.GEMINI_API_KEY;
 // gemini-2.5-flash は新規プロジェクトでは提供終了。既定を現行の別名モデルにし、env で上書き可能に。
 const GEMINI_MODEL              = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+// モデルの提供終了・パラメータ非対応で全AI機能が止まるのを防ぐため、順に切り替えて試すフォールバック。
+const GEMINI_FALLBACK_MODELS    = [GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'];
 // 価格定数（トップレベルの文字列テンプレートでも使うため、ファイル冒頭で定義）
 const BITTO_PRICE              = 6600;  // BitToの報告書価格（Web/LINEのStripe用。IAP価格はストア側で設定）
 const BITTO_PRODUCT_ID         = process.env.BITTO_PRODUCT_ID || 'bitto_report';  // BitToアプリIAPの商品ID
@@ -67,6 +69,38 @@ const lineClient = new line.Client(lineConfig);
 // state: idle → waiting_txid → investigating → done
 const userSessions    = new Map(); // userId → session
 const txidCache       = new Map(); // txid（小文字）→ { result, investigatedAt }
+// ── Gemini 呼び出し（モデル終了・パラメータ非対応に強い版）──────────────
+// thinkingConfig 非対応やモデルの提供終了で全AI機能が止まらないよう、
+// 「モデル × thinkingConfigあり/なし」を順に試し、最初に成功したものを返す。
+// すべて失敗した場合のみ null を返し、原因をログに残す。
+async function geminiGenerate(prompt, { temperature = 0.4, maxOutputTokens = 1000 } = {}) {
+  if (!GEMINI_KEY) return null;
+  const tried = [];
+  for (const model of [...new Set(GEMINI_FALLBACK_MODELS)]) {
+    for (const useThinking of [true, false]) {
+      const generationConfig = { temperature, maxOutputTokens };
+      if (useThinking) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+      try {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig }),
+        });
+        const j = await r.json();
+        const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+          if (tried.length) console.warn(`[Gemini] 復旧 model=${model} thinking=${useThinking} ／ 失敗した組み合わせ: ${tried.join(' | ')}`);
+          return text.trim();
+        }
+        tried.push(`${model}${useThinking ? '+think' : ''}: ${j.error?.message || j.candidates?.[0]?.finishReason || 'empty'}`);
+      } catch (e) {
+        tried.push(`${model}${useThinking ? '+think' : ''}: ${e.message}`);
+      }
+    }
+  }
+  console.error('[Gemini] 全ての組み合わせで失敗:', tried.join(' | '));
+  return null;
+}
+
 const pendingSessions = new Map(); // sessionId → { userId, txidCount, stripeId }
 const reportCache     = new Map(); // reportId  → { html }（メモリキャッシュ）
 const txidFormTokens  = new Map();
@@ -3408,20 +3442,9 @@ ${refundBlock}
 相談員としての返信のみを出力してください。`;
 
       const prompt = brand === 'bitto' ? bittoPrompt : connectionPrompt;
-      try {
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            // 500文字の日本語回答が途中で切れないよう余裕を持たせる
-            generationConfig: { temperature: 0.5, maxOutputTokens: 1400, thinkingConfig: { thinkingBudget: 0 } },
-          }),
-        });
-        const j = await r.json();
-        const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) reply = text.trim();
-        else console.warn('[Consult] 応答が空:', j.candidates?.[0]?.finishReason || j.error?.message || 'unknown');
-      } catch (e) { console.error('[Connection] 初回相談AI:', e.message); }
+      // 500文字の日本語回答が途中で切れないよう余裕を持たせる
+      const text = await geminiGenerate(prompt, { temperature: 0.5, maxOutputTokens: 1400 });
+      if (text) reply = text;
     }
     if (asksRefund) reply = `${REFUND_NOTICE}
 
