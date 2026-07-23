@@ -182,6 +182,26 @@
   #view-navi .nvnote{background:rgba(148,168,196,.08);border:1px solid var(--line);border-radius:10px;padding:12px 13px;font-size:11px;color:var(--sub);line-height:1.75}
   #view-navi .nvnote b{color:var(--sub2)}
 
+  /* ── 二次被害防止シールド ── */
+  #shield{margin-top:30px;padding-top:22px;border-top:1px solid var(--line)}
+  #shield .sh-h{font-size:15px;font-weight:800;margin:0 0 6px}
+  #shield .sh-lead{font-size:12px;color:var(--sub);margin:0 0 14px;line-height:1.7}
+  #shield .sh-list{display:grid;gap:8px;margin-bottom:14px}
+  #shield .sh-item{display:flex;gap:10px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.6;cursor:pointer}
+  #shield .sh-item:hover{border-color:#3a5a86}
+  #shield .sh-item input{margin:3px 0 0;accent-color:var(--teal);flex:none;width:16px;height:16px}
+  #shOut{margin-top:18px;display:none}
+  #shield .sh-lv{border-radius:12px;padding:13px 15px;margin-bottom:14px;border:1px solid var(--line)}
+  #shield .sh-lv .t{font-size:16px;font-weight:800}
+  #shield .sh-lv .d{font-size:12px;color:var(--sub2);margin-top:3px;line-height:1.7}
+  #shield .sh-lv.bad{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.5)}
+  #shield .sh-lv.bad .t{color:#F87171}
+  #shield .sh-lv.warn{background:rgba(251,191,36,.10);border-color:rgba(251,191,36,.45)}
+  #shield .sh-lv.warn .t{color:var(--amber)}
+  #shield .sh-lv.info{background:rgba(148,168,196,.10);border-color:var(--line)}
+  #shield .sh-lv.info .t{color:var(--sub2)}
+
   /* ── 解析履歴・メニュー ── */
   #view-history,#view-menu{flex:1;overflow-y:auto;padding:18px 16px 24px;display:none}
   .vh{font-size:15px;font-weight:800;margin:0 0 14px}
@@ -264,6 +284,24 @@
     <button class="chip" data-v="yes">はい</button><button class="chip" data-v="no">いいえ／わからない</button></div></div>
   <button class="go" id="naviGo" disabled>今すぐの動き方を表示</button>
   <div id="naviOut"></div>
+
+  <div id="shield">
+    <h2 class="sh-h">🛡 回収業者・二次被害チェック</h2>
+    <p class="sh-lead">「取り戻せます」と持ちかける業者による<b>二次被害</b>が多発しています。検討中の業者について、<b>当てはまるものを選んでください</b>。</p>
+    <div class="sh-list">
+      <label class="sh-item"><input type="checkbox"><span>「必ず取り戻せる」と保証している</span></label>
+      <label class="sh-item"><input type="checkbox"><span>回収の前に高額な前払い金を求められた</span></label>
+      <label class="sh-item"><input type="checkbox"><span>税金・保証金・解除費用などの名目で追加の支払いを求められた</span></label>
+      <label class="sh-item"><input type="checkbox"><span>遠隔操作アプリの導入を求められた</span></label>
+      <label class="sh-item"><input type="checkbox"><span>シードフレーズ・秘密鍵・2段階認証コードを聞かれた</span></label>
+      <label class="sh-item"><input type="checkbox"><span>警察・政府機関との「特別な関係」を主張している</span></label>
+      <label class="sh-item"><input type="checkbox"><span>「凍結済みだが、解除に費用が必要」と言われた</span></label>
+      <label class="sh-item"><input type="checkbox"><span>追加の暗号資産の送金を求められた</span></label>
+    </div>
+    <button class="go" id="shGo">チェック結果を見る</button>
+    <div id="shOut"></div>
+  </div>
+
   <p style="font-size:10.5px;color:var(--sub);margin-top:16px;line-height:1.7;text-align:center">※ 本ナビは操作・相談先の案内です。特定の結果・回収を保証するものではありません。緊急時・進行中の犯罪は110へ。</p>
 </section>
 
@@ -672,11 +710,13 @@ function renderHistory(){
 function renderMenu(){
   const el = document.getElementById('view-menu');
   el.innerHTML = `<h3 class="vh">メニュー</h3>
+    <div class="litem" data-shield="1"><div class="li-t">🛡 回収業者・二次被害チェック</div><div class="li-d">「取り戻せます」と持ちかける業者の危険サインを確認</div></div>
     <div class="litem" data-open="/bitto/txid-guide"><div class="li-t">📘 TXIDの見つけ方ガイド</div><div class="li-d">取引所別に、送金のTXIDを確認する手順</div></div>
     <div class="litem" data-open="/bitto/data-deletion"><div class="li-t">🗑 データ削除のご請求</div><div class="li-d">当社が保有するお客様のデータの削除を、いつでも請求できます</div></div>
     <div class="litem" data-open="/bitto/privacy"><div class="li-t">📄 利用規約・プライバシーポリシー</div><div class="li-d">ご利用条件と個人情報の取扱いについて</div></div>
     <div class="litem" data-mail="1"><div class="li-t">✉️ お問い合わせ</div><div class="li-d">info@himesen-25.com</div></div>
     <div class="litem" style="cursor:default"><div class="li-t">ℹ️ サービス情報</div><div class="li-d">BitTo（Web版）／運営：Himesen株式会社<br>公開ブロックチェーン情報にもとづく解析ツールです。結果は推定を含み、資産の回収・返還を保証するものではありません。</div></div>`;
+  el.querySelectorAll('.litem[data-shield]').forEach(x => x.addEventListener('click', openShield));
   el.querySelectorAll('.litem[data-open]').forEach(x => x.addEventListener('click', () => window.open(x.dataset.open, '_blank')));
   el.querySelectorAll('.litem[data-mail]').forEach(x => x.addEventListener('click', () => {
     location.href = 'mailto:info@himesen-25.com?subject=' + encodeURIComponent('BitTo お問い合わせ');
@@ -854,6 +894,7 @@ function openInitialPack(){
       ${top3.map((t,i)=>`<div class="todo"><div class="num">${i+1}</div><div class="tx">${esc(t[0])}<div class="sub">${esc(t[1])}</div></div></div>`).join('')}</div>
       <button class="track" id="naviTrack">🔎 TXIDを追跡して着金先の取引所を推定する →</button>
       <button class="track" id="naviPack" style="margin-top:-12px">🆓 初動パックを作成（無料・印刷可）</button>
+      <button class="track" id="naviShield" style="margin-top:-12px">🛡 回収業者を検討中の方へ（二次被害チェック）</button>
       <div class="sec"><h2><span class="n">◆</span> 相談先（このケースの推奨順）</h2>
       ${routes.map(r=>`<div class="route"><div class="dot"></div><div class="rt">${esc(r[0])}</div><div class="rd">${esc(r[1])}</div></div>`).join('')}</div>
       ${bn}
@@ -861,6 +902,55 @@ function openInitialPack(){
     out.style.display = 'block';
     out.querySelector('#naviTrack').addEventListener('click', goChatTab);
     out.querySelector('#naviPack').addEventListener('click', openInitialPack);
+    out.querySelector('#naviShield').addEventListener('click', openShield);
+    out.scrollIntoView({behavior:'smooth', block:'start'});
+  });
+})();
+
+/* ── 二次被害防止シールド（回収業者チェック） ── */
+function openShield(){
+  showTab('navi');
+  setTimeout(() => document.getElementById('shield').scrollIntoView({behavior:'smooth', block:'start'}), 60);
+}
+(function(){
+  const box = document.getElementById('shield');
+  const out = document.getElementById('shOut');
+  document.getElementById('shGo').addEventListener('click', () => {
+    const hits = [...box.querySelectorAll('.sh-item input')]
+      .filter(i => i.checked)
+      .map(i => i.parentElement.querySelector('span').textContent.trim());
+    let cls, title, desc;
+    if (hits.length >= 3){
+      cls = 'bad'; title = '強い注意';
+      desc = '詐欺の典型的なサインに<b>複数一致</b>しています。支払い・送金・個人情報の提供は行わず、下記の窓口にご相談ください。';
+    } else if (hits.length >= 1){
+      cls = 'warn'; title = '注意要素あり';
+      desc = '詐欺で使われる手口に該当する項目があります。契約・支払いの前に、下記の確認とご相談を強くおすすめします。';
+    } else {
+      cls = 'info'; title = '情報不足';
+      desc = '該当はありませんでしたが、これだけで安全とは判断できません。下記の項目をご自身で必ずご確認ください。';
+    }
+    out.innerHTML = `
+      <div class="sh-lv ${cls}"><div class="t">${title}</div><div class="d">${desc}</div></div>
+      ${hits.length ? `<div class="sec"><h2><span class="n">◆</span> 該当した項目</h2>${hits.map(h => `<div class="todo"><div class="num">!</div><div class="tx">${esc(h)}</div></div>`).join('')}</div>` : ''}
+      <div class="sec"><h2><span class="n">◆</span> 契約前に必ず確認すること</h2>
+        <div class="nvnote" style="margin-bottom:0">
+        ・法人情報（会社名・法人番号・登記の有無）<br>
+        ・所在地が実在するか<br>
+        ・料金の総額と追加費用の有無が明示されているか<br>
+        ・「返金」「成功」の定義が契約書に明記されているか<br>
+        ・回収を<b>保証</b>する表現がないか（回収の保証は誰にもできません）<br>
+        ・弁護士連携の実体（弁護士名・所属事務所）<br>
+        ・高額な前払いを求めていないか<br>
+        ・公的機関との「特別な関係」を主張していないか
+        </div></div>
+      <div class="sec"><h2><span class="n">◆</span> 迷ったときの相談先</h2>
+        <div class="route"><div class="dot"></div><div class="rt">消費者ホットライン 188</div><div class="rd">契約・解約・請求に関するトラブルの相談</div></div>
+        <div class="route"><div class="dot"></div><div class="rt">警察相談専用 #9110</div><div class="rd">緊急でない相談。被害届は最寄りの警察署</div></div>
+        <div class="route"><div class="dot"></div><div class="rt">弁護士</div><div class="rd">契約内容の確認・法的手続きが必要な場合</div></div>
+      </div>
+      <div class="nvnote"><b>ご注意：</b>BitToは特定の事業者を「詐欺」と断定するものではありません。判断材料の提示にとどめています。最終的なご判断はご自身で行ってください。<br>FBI・CFTCも、前払いを求める暗号資産の回収サービスについて注意を呼びかけています。</div>`;
+    out.style.display = 'block';
     out.scrollIntoView({behavior:'smooth', block:'start'});
   });
 })();
