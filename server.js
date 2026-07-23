@@ -487,7 +487,11 @@ async function fetchT(url, opts = {}, ms = FETCH_TIMEOUT_MS) {
 }
 // マルチホップ追跡の時間予算。これを超えたら、それまでに判明したホップだけで打ち切る。
 // アプリ側は最大3分（90回×2秒）ポーリングするため、それより十分手前で必ず完了させる。
-const TRACE_BUDGET_MS = 35000;
+const TRACE_BUDGET_MS = 30000;
+// アドレス情報付与(enrich)の時間予算。USDT等の巨大コントラクトが混じっても全体を止めない。
+const ENRICH_BUDGET_MS = 25000;
+// investigateETH の内部呼び出し(calls)ラベル取得の時間予算。
+const CALLS_BUDGET_MS = 15000;
 
 async function getAddressInfo(addr, chain) {
   try {
@@ -529,9 +533,11 @@ async function getAddressInfo(addr, chain) {
 
 async function enrichPathWithAddressInfo(path, chain) {
   let exchangeCount = 0;                 // 判明＋推定を合わせた取引所ノード数
+  const deadline = Date.now() + ENRICH_BUDGET_MS;  // 巨大コントラクト混在でも全体を止めない
   for (let idx = 0; idx < path.length; idx++) {
     const node = path[idx];
     if (!node.address) continue;
+    if (Date.now() > deadline) { console.log(`[enrich] 時間予算に達したため残りノードの情報付与を省略（index ${idx}）`); break; }
     await new Promise(res => setTimeout(res, 250)); // レート制限対策
     const info = await getAddressInfo(node.address, chain);
     if (info) {
@@ -915,7 +921,9 @@ async function investigateETH(hash) {
   if (isRecipEx) exchanges.push({ name: recipLbl, address: tx.recipient, amount: parseFloat(tx.value)/1e18 });
 
   // 内部呼び出し（calls）を全て追加 — 金額あり または 既知アドレス
+  const callsDeadline = Date.now() + CALLS_BUDGET_MS;
   for (const call of calls) {
+    if (Date.now() > callsDeadline) { console.log('[ETH] callsラベル取得が時間予算に達したため打ち切り'); break; }
     if (!call.recipient) continue;
     const callRecipLower = call.recipient.toLowerCase();
     if (callRecipLower === tx.sender?.toLowerCase()) continue; // 送信者へのコールはスキップ
