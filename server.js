@@ -2481,6 +2481,18 @@ app.post('/webhook', line.middleware(lineConfig), async (req, res) => {
 
 app.use(cors());
 app.use(express.json());
+
+// ── APIレスポンスをキャッシュさせない ──────────────────────────
+// 調査の進捗確認（/api/connection/job/:id）は同じURLを数秒ごとに叩くため、
+// Cache-Control が無いとiOSのWebViewが応答をキャッシュし、
+// 調査が完了しても古い "running" を返し続けてアプリ側がタイムアウトしてしまう。
+app.use('/api', (_req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── REST API ────────────────────────────────────────────────
