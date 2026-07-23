@@ -471,7 +471,7 @@ async function getUSDPrice(chain) {
   try {
     const ids = { btc: 'bitcoin', eth: 'ethereum', xrp: 'ripple' }[key];
     if (!ids) return 0;
-    const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`);
+    const r = await fetchT(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`);
     const j = await r.json();
     const price = j[ids]?.usd || 0;
     priceCache.set(key, { price, ts: Date.now() });
@@ -479,11 +479,21 @@ async function getUSDPrice(chain) {
   } catch { return 0; }
 }
 
+// 外部API（Etherscan / Blockchair 等）が応答しない場合に調査全体が停止しないよう、
+// fetch に上限時間を付ける。時間切れは例外になり、各呼び出し側の try/catch で握られる。
+const FETCH_TIMEOUT_MS = 8000;
+async function fetchT(url, opts = {}, ms = FETCH_TIMEOUT_MS) {
+  return fetch(url, { ...opts, signal: AbortSignal.timeout(ms) });
+}
+// マルチホップ追跡の時間予算。これを超えたら、それまでに判明したホップだけで打ち切る。
+// アプリ側は最大3分（90回×2秒）ポーリングするため、それより十分手前で必ず完了させる。
+const TRACE_BUDGET_MS = 35000;
+
 async function getAddressInfo(addr, chain) {
   try {
     if (chain === 'eth') {
       const url = `https://api.blockchair.com/ethereum/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-      const r = await fetch(url);
+      const r = await fetchT(url);
       const j = await r.json();
       const d = j.data?.[addr.toLowerCase()]?.address;
       if (!d) return null;
@@ -495,7 +505,7 @@ async function getAddressInfo(addr, chain) {
     }
     if (chain === 'btc') {
       const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-      const r = await fetch(url);
+      const r = await fetchT(url);
       const j = await r.json();
       const d = j.data?.[addr]?.address;
       if (!d) return null;
@@ -505,7 +515,7 @@ async function getAddressInfo(addr, chain) {
       return { balance: balNative, txCount: d.transaction_count || 0, balanceUSD: balNative * price, bcLabel };
     }
     if (chain === 'xrp') {
-      const r = await fetch(`https://api.xrpscan.com/api/v1/account/${addr}`);
+      const r = await fetchT(`https://api.xrpscan.com/api/v1/account/${addr}`);
       const j = await r.json();
       const balNative = parseFloat(j.xrpBalance || 0);
       const price     = await getUSDPrice('xrp');
@@ -591,7 +601,7 @@ async function fetchAddressLabel(addr, chain) {
   if (chain === 'eth' && ETHERSCAN_KEY) {
     try {
       const url = `https://api.etherscan.io/v2/api?chainid=1&module=contract&action=getsourcecode&address=${addr}&apikey=${ETHERSCAN_KEY}`;
-      const r = await fetch(url);
+      const r = await fetchT(url);
       const j = await r.json();
       const name = j.result?.[0]?.ContractName || '';
       // 意味のあるコントラクト名のみ採用（"Vyper_contract"などは除外）
@@ -608,7 +618,7 @@ async function fetchAddressLabel(addr, chain) {
       const chain2 = chain === 'btc' ? 'bitcoin' : 'ethereum';
       const addrKey = chain === 'eth' ? addr.toLowerCase() : addr;
       const url = `https://api.blockchair.com/${chain2}/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-      const r = await fetch(url);
+      const r = await fetchT(url);
       const j = await r.json();
       const d = j.data?.[addrKey]?.address;
       const bcLbl = d?.label || d?.contract_name || '';
@@ -622,7 +632,7 @@ async function fetchAddressLabel(addr, chain) {
   // ④ XRPScan アカウント名（XRP のみ）
   if (!label && chain === 'xrp') {
     try {
-      const r = await fetch(`https://api.xrpscan.com/api/v1/account/${addr}`);
+      const r = await fetchT(`https://api.xrpscan.com/api/v1/account/${addr}`);
       const j = await r.json();
       const xrpName = j.accountName?.name || j.username || '';
       if (xrpName) {
@@ -647,14 +657,14 @@ function normalizeTimeStr(t) {
 async function getNextTxBTC(addr, afterTime) {
   try {
     const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-    const r = await fetch(url);
+    const r = await fetchT(url);
     const j = await r.json();
     const txHashes = j.data?.[addr]?.transactions || [];
     const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
     for (const txHash of txHashes.slice(0, 8)) {
       await new Promise(res => setTimeout(res, 250));
       try {
-        const tr = await fetch(`https://api.blockchair.com/bitcoin/dashboards/transaction/${txHash}?key=${BLOCKCHAIR_KEY}`);
+        const tr = await fetchT(`https://api.blockchair.com/bitcoin/dashboards/transaction/${txHash}?key=${BLOCKCHAIR_KEY}`);
         const tj = await tr.json();
         const tdata = tj.data?.[txHash];
         if (!tdata) continue;
@@ -680,7 +690,7 @@ async function getNextTxETH(addr, afterTime) {
   // ① 通常TX（EOAからの送金）
   try {
     const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
-    const r = await fetch(url);
+    const r = await fetchT(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
     console.log(`[HOP] Etherscan TX: ${txs.length}件`);
@@ -711,7 +721,7 @@ async function getNextTxETH(addr, afterTime) {
   // ※ sort=desc で最新TX から取得（古いコントラクトはascだと過去TXしか取れない問題を修正）
   try {
     const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlistinternal&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=desc&apikey=${ETHERSCAN_KEY}`;
-    const r = await fetch(url);
+    const r = await fetchT(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
     console.log(`[HOP] Internal TX: ${txs.length}件`);
@@ -742,7 +752,7 @@ async function getNextTxETH(addr, afterTime) {
 
   try {
     const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=desc&apikey=${ETHERSCAN_KEY}`;
-    const r = await fetch(url);
+    const r = await fetchT(url);
     const j = await r.json();
     const txs = Array.isArray(j.result) ? j.result : [];
     const tokenCandidates = [];
@@ -766,12 +776,12 @@ async function getNextTxETH(addr, afterTime) {
 
   try {
     const url = `https://api.blockchair.com/ethereum/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}&limit=10`;
-    const r = await fetch(url);
+    const r = await fetchT(url);
     const j = await r.json();
     const txHashes = j.data?.[addr.toLowerCase()]?.transactions || [];
-    for (const txHash of txHashes.slice(0, 8)) {
+    for (const txHash of txHashes.slice(0, 4)) {
       await new Promise(res => setTimeout(res, 300));
-      const tr = await fetch(`https://api.blockchair.com/ethereum/dashboards/transaction/${txHash}?key=${BLOCKCHAIR_KEY}`);
+      const tr = await fetchT(`https://api.blockchair.com/ethereum/dashboards/transaction/${txHash}?key=${BLOCKCHAIR_KEY}`);
       const tj = await tr.json();
       const txData = tj.data?.[txHash.toLowerCase()];
       if (!txData) continue;
@@ -790,7 +800,7 @@ async function getNextTxETH(addr, afterTime) {
 
 async function getNextTxXRP(addr, afterTime) {
   try {
-    const r = await fetch(`https://api.xrpscan.com/api/v1/account/${addr}/transactions`);
+    const r = await fetchT(`https://api.xrpscan.com/api/v1/account/${addr}/transactions`);
     const j = await r.json();
     const txs = j.transactions || j || [];
     const refMs = new Date(afterTime).getTime();
@@ -804,13 +814,14 @@ async function getNextTxXRP(addr, afterTime) {
   return null;
 }
 
-async function traceHops(startAddr, startTime, chain, maxHops = 10) {
+async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = Date.now() + TRACE_BUDGET_MS) {
   const hops = [];
   let currentAddr = startAddr;
   let currentTime = startTime;
   const visited = new Set([startAddr.toLowerCase()]);
   let exCount = 0;                       // ラベルで判明した取引所の数
   for (let i = 0; i < maxHops; i++) {
+    if (Date.now() > deadline) { console.log(`[traceHops] 時間予算に達したため打ち切り（${i}ホップで部分結果を返す）`); break; }
     let next = null;
     if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime);
     else if (chain === 'eth') next = await getNextTxETH(currentAddr, currentTime);
@@ -843,7 +854,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10) {
 
 async function investigateBTC(txid) {
   const url  = `https://api.blockchair.com/bitcoin/dashboards/transaction/${txid}?key=${BLOCKCHAIR_KEY}`;
-  const r    = await fetch(url);
+  const r    = await fetchT(url);
   const j    = await r.json();
   const data = j.data?.[txid];
   if (!data) throw new Error('BTC TXが見つかりません');
@@ -866,8 +877,10 @@ async function investigateBTC(txid) {
   // 全ての送金先アドレスからホップ追跡（取引所が見つかっていない送金先のみ）
   // ※ 安全のため最大10件（一括送金TXでの過負荷防止）
   const nonExPaths = path.filter(p => !p.isExchange);
+  const btcDeadline = Date.now() + TRACE_BUDGET_MS;   // 全送金先の追跡を合計でこの時間内に収める
   for (const startNode of nonExPaths.slice(0, 10)) {
-    const hops = await traceHops(startNode.address, tx.time, 'btc', 10);
+    if (Date.now() > btcDeadline) break;
+    const hops = await traceHops(startNode.address, tx.time, 'btc', 10, btcDeadline);
     for (const hop of hops) {
       if (!path.some(p => p.address === hop.address)) {
         path.push(hop);
@@ -883,7 +896,7 @@ async function investigateBTC(txid) {
 async function investigateETH(hash) {
   const h   = hash.startsWith('0x') ? hash : '0x' + hash;
   const url = `https://api.blockchair.com/ethereum/dashboards/transaction/${h}?key=${BLOCKCHAIR_KEY}`;
-  const r   = await fetch(url);
+  const r   = await fetchT(url);
   const j   = await r.json();
   const data = j.data?.[h.toLowerCase()];
   if (!data) throw new Error('ETH TXが見つかりません');
@@ -925,7 +938,7 @@ async function investigateETH(hash) {
   if (parseFloat(tx.value) === 0 && tx.block_id) {
     try {
       const etUrl = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${tx.sender}&startblock=${tx.block_id}&endblock=${tx.block_id}&sort=asc&apikey=${ETHERSCAN_KEY}`;
-      const etR = await fetch(etUrl);
+      const etR = await fetchT(etUrl);
       const etJ = await etR.json();
       const tokenTxs = Array.isArray(etJ.result) ? etJ.result : [];
       const matchTx = tokenTxs.find(t => t.hash.toLowerCase() === h.toLowerCase());
@@ -950,7 +963,7 @@ async function investigateETH(hash) {
   // 直接送金先が取引所でない場合 → 送金先からホップ追跡
   const traceFrom = tokenRecipient || tx.recipient;
   if (!isRecipEx && !exchanges.length) {
-    const hops = await traceHops(traceFrom, tx.time, 'eth', 10);
+    const hops = await traceHops(traceFrom, tx.time, 'eth', 10, Date.now() + TRACE_BUDGET_MS);
     for (const hop of hops) {
       if (!path.some(p => p.address?.toLowerCase() === hop.address?.toLowerCase())) {
         path.push(hop);
@@ -966,7 +979,7 @@ async function investigateETH(hash) {
 
 async function investigateXRP(txid) {
   const h = txid.toUpperCase();
-  const r = await fetch(`https://api.xrpscan.com/api/v1/tx/${h}`);
+  const r = await fetchT(`https://api.xrpscan.com/api/v1/tx/${h}`);
   const t = await r.text();
   if (t === 'Not found') throw new Error('XRP TXが見つかりません');
   const tx = JSON.parse(t);
