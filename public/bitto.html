@@ -138,7 +138,7 @@
   .disc{font-size:10px;color:var(--sub);text-align:center;margin-top:7px;line-height:1.5}
 
   /* ── 下部ナビ ── */
-  nav{flex:none;display:grid;grid-template-columns:repeat(6,1fr);border-top:1px solid var(--line);
+  nav{flex:none;display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);
     background:#0F2039;padding-bottom:env(safe-area-inset-bottom)}
   nav button{background:none;border:none;color:var(--sub);cursor:pointer;padding:9px 2px 10px;
     display:grid;justify-items:center;gap:3px;font-size:9px;line-height:1.2;font-family:inherit}
@@ -181,6 +181,16 @@
   #view-navi .track{display:block;width:100%;text-align:center;background:var(--panel2);border:1px solid var(--teal);color:#c8f5ea;border-radius:11px;padding:13px;font-size:13.5px;font-weight:700;margin:4px 0 20px;cursor:pointer;font-family:inherit}
   #view-navi .nvnote{background:rgba(148,168,196,.08);border:1px solid var(--line);border-radius:10px;padding:12px 13px;font-size:11px;color:var(--sub);line-height:1.75}
   #view-navi .nvnote b{color:var(--sub2)}
+
+  /* ── 解析履歴・メニュー ── */
+  #view-history,#view-menu{flex:1;overflow-y:auto;padding:18px 16px 24px;display:none}
+  .vh{font-size:15px;font-weight:800;margin:0 0 14px}
+  .litem{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin-bottom:9px;cursor:pointer;transition:.12s}
+  .litem:hover{border-color:#3a5a86}
+  .litem .li-t{font-size:13px;font-weight:700}
+  .litem .li-d{font-size:11.5px;color:var(--sub);margin-top:3px;line-height:1.6}
+  .litem .li-a{font-size:11px;color:var(--teal);margin-top:5px}
+  .vempty{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:24px 16px;text-align:center;font-size:12.5px;color:var(--sub);line-height:1.9}
 
   /* トースト */
   #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--navh) + 78px);
@@ -254,12 +264,13 @@
   <p style="font-size:10.5px;color:var(--sub);margin-top:16px;line-height:1.7;text-align:center">※ 本ナビは操作・相談先の案内です。特定の結果・回収を保証するものではありません。緊急時・進行中の犯罪は110へ。</p>
 </section>
 
+<section id="view-history"></section>
+<section id="view-menu"></section>
+
 <nav>
-  <button data-tab="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10l9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>ホーム</button>
   <button data-tab="navi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2.2 4.8-4.8 2.2 2.2-4.8z"/></svg>初動ナビ</button>
   <button data-tab="chat" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"/></svg>AI調査チャット</button>
   <button data-tab="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>解析履歴</button>
-  <button data-tab="watch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 3v6c0 4.4-3 8.1-7 9-4-.9-7-4.6-7-9V6z"/></svg>ウォレット監視</button>
   <button data-tab="menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h16"/></svg>メニュー</button>
 </nav>
 
@@ -529,6 +540,7 @@ async function runInvestigation(txids){
         if (q.status === 'error') throw new Error(q.error || '調査に失敗しました');
       }
       if (!done) throw new Error('調査がタイムアウトしました');
+      done.txid = done.txid || txid;   // 履歴表示用にTXIDを保持
       results.push(done);
     }catch(e){
       setBubble(row, `⚠️ ${esc(e.message || '調査に失敗しました')}\n\nTXIDが正しいか確認のうえ、もう一度お試しください。`);
@@ -537,6 +549,7 @@ async function runInvestigation(txids){
   }
 
   setBubble(row, resultCard(results));
+  saveHistory(results);   // 解析履歴に保存（この端末のブラウザのみ）
 
   // AI相談に渡す文脈を保存
   const r0 = results[0];
@@ -596,27 +609,70 @@ msgEl.addEventListener('keydown', e => {
 });
 msgEl.addEventListener('input', () => { msgEl.style.height='auto'; msgEl.style.height = Math.min(msgEl.scrollHeight,110)+'px'; });
 
-/* ── 下部ナビ：初動ナビ／チャット切替（他は準備中） ── */
-function showNaviView(on){
-  document.getElementById('chat').style.display = on ? 'none' : '';
-  document.getElementById('inputbar').style.display = on ? 'none' : '';
-  document.getElementById('view-navi').style.display = on ? 'block' : 'none';
+/* ── 下部ナビ：タブ切替（初動ナビ／AI調査チャット／解析履歴／メニュー） ── */
+function showTab(tab){
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === tab));
+  const isChat = (tab === 'chat');
+  document.getElementById('chat').style.display     = isChat ? '' : 'none';
+  document.getElementById('inputbar').style.display = isChat ? '' : 'none';
+  document.getElementById('view-navi').style.display    = (tab === 'navi')    ? 'block' : 'none';
+  document.getElementById('view-history').style.display = (tab === 'history') ? 'block' : 'none';
+  document.getElementById('view-menu').style.display    = (tab === 'menu')    ? 'block' : 'none';
+  if (tab === 'history') renderHistory();
+  if (tab === 'menu')    renderMenu();
+  if (tab === 'navi')    document.getElementById('view-navi').scrollTop = 0;
 }
-function goChatTab(){
-  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'chat'));
-  showNaviView(false);
+function goChatTab(){ showTab('chat'); }
+function goNaviTab(){ showTab('navi'); }
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+
+/* ── 解析履歴（この端末のブラウザにのみ保存） ── */
+const HISTORY_KEY = 'bitto_history_v1';
+const getJSON = k => { try { return JSON.parse(localStorage.getItem(k) || '[]'); } catch(_) { return []; } };
+function saveHistory(results){
+  try{
+    const list = getJSON(HISTORY_KEY);
+    results.forEach(r => {
+      const ex = [...new Set((r.path||[]).filter(n => n.isExchange && n.label).map(n => n.label))];
+      list.unshift({ txid: r.txid || '', chain: r.chain || '', at: Date.now(), ex: ex.join('、') });
+    });
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0,50)));
+  }catch(_){}
 }
-function goNaviTab(){
-  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'navi'));
-  showNaviView(true);
-  document.getElementById('view-navi').scrollTop = 0;
+function renderHistory(){
+  const el = document.getElementById('view-history');
+  const list = getJSON(HISTORY_KEY);
+  if (!list.length){
+    el.innerHTML = `<h3 class="vh">解析履歴</h3><div class="vempty">まだ解析履歴がありません。<br>「AI調査チャット」でTXIDを送信すると、ここに残ります。</div>`;
+    return;
+  }
+  el.innerHTML = `<h3 class="vh">解析履歴</h3>` + list.map(h => `
+    <div class="litem" data-tx="${esc(h.txid)}">
+      <div class="li-t">${esc(h.chain)}　${esc(String(h.txid).slice(0,10))}…${esc(String(h.txid).slice(-6))}</div>
+      <div class="li-d">${new Date(h.at).toLocaleString('ja-JP')}${h.ex ? '　🏦 ' + esc(h.ex) : ''}</div>
+      <div class="li-a">タップで再解析</div>
+    </div>`).join('')
+    + `<div style="font-size:10.5px;color:var(--sub);margin-top:12px;line-height:1.7">※ 履歴はこの端末のブラウザにのみ保存されます（サーバーには保存されません）。</div>`;
+  el.querySelectorAll('.litem').forEach(x => x.addEventListener('click', () => {
+    if (!x.dataset.tx) return;
+    goChatTab(); msgEl.value = x.dataset.tx; send();
+  }));
 }
-document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => {
-  const tab = b.dataset.tab;
-  if (tab === 'navi'){ goNaviTab(); return; }
-  if (tab === 'chat' || tab === 'home'){ goChatTab(); return; }
-  toast('この機能は準備中です（近日公開）');
-}));
+
+/* ── メニュー ── */
+function renderMenu(){
+  const el = document.getElementById('view-menu');
+  el.innerHTML = `<h3 class="vh">メニュー</h3>
+    <div class="litem" data-open="/bitto/txid-guide"><div class="li-t">📘 TXIDの見つけ方ガイド</div><div class="li-d">取引所別に、送金のTXIDを確認する手順</div></div>
+    <div class="litem" data-open="/bitto/data-deletion"><div class="li-t">🗑 データ削除のご請求</div><div class="li-d">当社が保有するお客様のデータの削除を、いつでも請求できます</div></div>
+    <div class="litem" data-open="/bitto/privacy"><div class="li-t">📄 利用規約・プライバシーポリシー</div><div class="li-d">ご利用条件と個人情報の取扱いについて</div></div>
+    <div class="litem" data-mail="1"><div class="li-t">✉️ お問い合わせ</div><div class="li-d">info@himesen-25.com</div></div>
+    <div class="litem" style="cursor:default"><div class="li-t">ℹ️ サービス情報</div><div class="li-d">BitTo（Web版）／運営：Himesen株式会社<br>公開ブロックチェーン情報にもとづく解析ツールです。結果は推定を含み、資産の回収・返還を保証するものではありません。</div></div>`;
+  el.querySelectorAll('.litem[data-open]').forEach(x => x.addEventListener('click', () => window.open(x.dataset.open, '_blank')));
+  el.querySelectorAll('.litem[data-mail]').forEach(x => x.addEventListener('click', () => {
+    location.href = 'mailto:info@himesen-25.com?subject=' + encodeURIComponent('BitTo お問い合わせ');
+  }));
+}
 
 /* ── 初動ナビのロジック ── */
 (function(){
