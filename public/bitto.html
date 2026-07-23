@@ -56,6 +56,16 @@
   .row.me .bubble{background:var(--blue);border-color:transparent;color:#fff;border-bottom-right-radius:5px}
   .row.ai .bubble{border-bottom-left-radius:5px}
   .who{font-size:11px;color:var(--sub);margin-bottom:4px}
+  /* 初動ナビへのカテゴリーカード（挨拶の下・控えめ） */
+  .navicard{display:flex;align-items:center;gap:11px;margin:-2px 0 16px 39px;width:min(78%,560px);
+    background:var(--panel2);border:1px solid rgba(52,225,200,.42);border-radius:12px;
+    padding:11px 13px;cursor:pointer;text-align:left;font-family:inherit;color:var(--text);transition:.12s}
+  .navicard:hover{border-color:var(--teal);background:#20375c}
+  .navicard .nc-ic{font-size:20px;flex:none;line-height:1}
+  .navicard .nc-body{flex:1;min-width:0}
+  .navicard .nc-t{display:block;font-size:12.5px;font-weight:800;color:#c8f5ea}
+  .navicard .nc-d{display:block;font-size:11px;color:var(--sub);margin-top:2px;line-height:1.5}
+  .navicard .nc-arw{color:var(--teal);font-size:20px;flex:none;font-weight:700}
   .row.me .who{text-align:right}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;opacity:.95}
 
@@ -596,13 +606,14 @@ function goChatTab(){
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'chat'));
   showNaviView(false);
 }
+function goNaviTab(){
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'navi'));
+  showNaviView(true);
+  document.getElementById('view-navi').scrollTop = 0;
+}
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => {
   const tab = b.dataset.tab;
-  if (tab === 'navi'){
-    document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'navi'));
-    showNaviView(true);
-    return;
-  }
+  if (tab === 'navi'){ goNaviTab(); return; }
   if (tab === 'chat' || tab === 'home'){ goChatTab(); return; }
   toast('この機能は準備中です（近日公開）');
 }));
@@ -662,6 +673,15 @@ document.querySelectorAll('nav button').forEach(b => b.addEventListener('click',
 
 /* ── 初回メッセージ ── */
 addAi(`こんにちは。<b>BitTo</b> の調査AIです。\n\n調べたい送金の <b>トランザクションID（TXID）</b> を貼り付けて送信してください。ビットコイン・イーサリアム・XRP に対応しています。\n\n資金がどのアドレスを経由し、どの取引所に到達したかを追跡して表示します。<span class="mono">（追跡は無料です）</span>`);
+
+/* 挨拶の下に初動ナビのカテゴリーカード（控えめ・B案） */
+(function(){
+  const nc = document.createElement('button');
+  nc.className = 'navicard';
+  nc.addEventListener('click', goNaviTab);
+  nc.innerHTML = `<span class="nc-ic">🆘</span><span class="nc-body"><span class="nc-t">詐欺被害にあってしまったら｜初動ナビ</span><span class="nc-d">状況を選ぶだけで「緊急度・今すぐやる3つ・相談先の順番」を表示します。</span></span><span class="nc-arw">›</span>`;
+  chat.appendChild(nc);
+})();
 </script>
 </body>
 </html>
