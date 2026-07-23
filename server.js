@@ -2486,7 +2486,12 @@ app.use(express.json());
 // 調査の進捗確認（/api/connection/job/:id）は同じURLを数秒ごとに叩くため、
 // Cache-Control が無いとiOSのWebViewが応答をキャッシュし、
 // 調査が完了しても古い "running" を返し続けてアプリ側がタイムアウトしてしまう。
-app.use('/api', (_req, res, next) => {
+// さらに、ExpressはETagを付けて条件付きリクエスト(If-None-Match)に 304 Not Modified を返すため、
+// no-store を無視するiOS WebViewだと 304 経由でキャッシュ済みの "running" を出し続けてしまう。
+// 受信側の条件付きヘッダを削除して 304 を発生させず、毎回かならず完全な本文を返す。
+app.use('/api', (req, res, next) => {
+  delete req.headers['if-none-match'];
+  delete req.headers['if-modified-since'];
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
