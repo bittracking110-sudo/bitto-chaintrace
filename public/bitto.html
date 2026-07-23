@@ -128,12 +128,49 @@
   .disc{font-size:10px;color:var(--sub);text-align:center;margin-top:7px;line-height:1.5}
 
   /* ── 下部ナビ ── */
-  nav{flex:none;display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--line);
+  nav{flex:none;display:grid;grid-template-columns:repeat(6,1fr);border-top:1px solid var(--line);
     background:#0F2039;padding-bottom:env(safe-area-inset-bottom)}
   nav button{background:none;border:none;color:var(--sub);cursor:pointer;padding:9px 2px 10px;
-    display:grid;justify-items:center;gap:3px;font-size:9.5px;font-family:inherit}
+    display:grid;justify-items:center;gap:3px;font-size:9px;line-height:1.2;font-family:inherit}
   nav button svg{width:19px;height:19px}
   nav button.on{color:var(--teal)}
+
+  /* ── 初動ナビ ── */
+  #view-navi{flex:1;overflow-y:auto;padding:18px 16px 24px;display:none}
+  #view-navi h1{font-size:18px;font-weight:800;margin:2px 0 4px}
+  #view-navi .lead{font-size:12px;color:var(--sub);margin:0 0 18px;line-height:1.7}
+  #view-navi .q{margin-bottom:16px}
+  #view-navi .ql{font-size:13px;font-weight:700;margin-bottom:9px;color:var(--sub2)}
+  #view-navi .chips{display:flex;flex-wrap:wrap;gap:8px}
+  #view-navi .chip{border:1px solid var(--line);background:var(--panel);color:var(--sub2);border-radius:999px;padding:9px 14px;font-size:12.5px;cursor:pointer;font-family:inherit}
+  #view-navi .chip.on{background:rgba(52,225,200,.14);border-color:var(--teal);color:#c8f5ea;font-weight:700}
+  #view-navi .go{width:100%;margin-top:6px;background:linear-gradient(180deg,#3DEAD1,#34E1C8 55%,#22b7a3);color:#062A25;border:none;border-radius:11px;font-weight:800;font-size:15px;padding:15px;cursor:pointer;font-family:inherit}
+  #view-navi .go:disabled{opacity:.5}
+  #naviOut{margin-top:24px;display:none}
+  #view-navi .urg{display:flex;align-items:center;gap:10px;border-radius:12px;padding:13px 15px;margin-bottom:16px;border:1px solid var(--line)}
+  #view-navi .urg .lv{font-size:18px;font-weight:800}
+  #view-navi .urg .d{font-size:12px;color:var(--sub2)}
+  #view-navi .urg.hi{background:rgba(248,113,113,.10);border-color:rgba(248,113,113,.45)} #view-navi .urg.hi .lv{color:#F87171}
+  #view-navi .urg.mid{background:rgba(251,191,36,.10);border-color:rgba(251,191,36,.42)} #view-navi .urg.mid .lv{color:var(--amber)}
+  #view-navi .urg.low{background:rgba(52,225,200,.09);border-color:rgba(52,225,200,.4)} #view-navi .urg.low .lv{color:var(--teal)}
+  #view-navi .nvwarn{background:rgba(248,113,113,.12);border:1px solid rgba(248,113,113,.5);border-radius:12px;padding:13px 15px;margin-bottom:16px;font-size:12.5px;line-height:1.7}
+  #view-navi .nvwarn b{color:#ffb3b3}
+  #view-navi .sec{margin-bottom:20px}
+  #view-navi .sec h2{font-size:13px;font-weight:800;color:var(--sub2);letter-spacing:.4px;margin:0 0 10px}
+  #view-navi .sec h2 .n{color:var(--teal)}
+  #view-navi .todo{display:flex;gap:11px;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin-bottom:9px}
+  #view-navi .todo .num{flex:none;width:23px;height:23px;border-radius:50%;background:rgba(52,225,200,.16);color:var(--teal);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;margin-top:1px}
+  #view-navi .todo .tx{font-size:13px}
+  #view-navi .todo .tx .sub{font-size:11.5px;color:var(--sub);margin-top:2px}
+  #view-navi .route{position:relative;padding-left:20px;margin-bottom:8px}
+  #view-navi .route::before{content:"";position:absolute;left:5px;top:20px;bottom:-8px;width:2px;background:var(--line)}
+  #view-navi .route:last-child::before{display:none}
+  #view-navi .route .dot{position:absolute;left:0;top:5px;width:12px;height:12px;border-radius:50%;background:var(--panel);border:2px solid var(--teal)}
+  #view-navi .route .rt{font-size:13px;font-weight:700}
+  #view-navi .route .rd{font-size:11.5px;color:var(--sub);margin-top:1px}
+  #view-navi .track{display:block;width:100%;text-align:center;background:var(--panel2);border:1px solid var(--teal);color:#c8f5ea;border-radius:11px;padding:13px;font-size:13.5px;font-weight:700;margin:4px 0 20px;cursor:pointer;font-family:inherit}
+  #view-navi .nvnote{background:rgba(148,168,196,.08);border:1px solid var(--line);border-radius:10px;padding:12px 13px;font-size:11px;color:var(--sub);line-height:1.75}
+  #view-navi .nvnote b{color:var(--sub2)}
 
   /* トースト */
   #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--navh) + 78px);
@@ -189,8 +226,27 @@
   <div class="disc">AIの回答は参考情報であり、投資・法的判断の根拠にはなりません。</div>
 </div>
 
+<section id="view-navi">
+  <h1>暗号資産の被害｜今すぐの動き方</h1>
+  <p class="lead">状況を一度選ぶだけで、<b style="color:var(--sub2)">緊急度・今すぐやること・相談先の順番</b>を表示します。BitToは公開ブロックチェーンの解析ツールです（結果は推定を含み、資金の回収・返還を保証するものではありません）。</p>
+  <div class="q" data-q="from"><div class="ql">Q1. どこから送金しましたか？</div><div class="chips">
+    <button class="chip" data-v="jp">国内取引所</button><button class="chip" data-v="ovs">海外取引所</button><button class="chip" data-v="wallet">自分のウォレット</button><button class="chip" data-v="unknown">わからない</button></div></div>
+  <div class="q" data-q="time"><div class="ql">Q2. 送金からどのくらい経ちましたか？</div><div class="chips">
+    <button class="chip" data-v="1h">1時間以内</button><button class="chip" data-v="24h">24時間以内</button><button class="chip" data-v="over">それ以上</button></div></div>
+  <div class="q" data-q="kind"><div class="ql">Q3. きっかけは何ですか？</div><div class="chips">
+    <button class="chip" data-v="sns">SNS・マッチングアプリの投資</button><button class="chip" data-v="fake">偽の取引所・投資サイト</button><button class="chip" data-v="imp">サポート／公的機関を装った連絡</button><button class="chip" data-v="other">その他</button></div></div>
+  <div class="q" data-q="more"><div class="ql">Q4. いま追加の送金や費用（税金・保証金・解除料など）を要求されていますか？</div><div class="chips">
+    <button class="chip" data-v="yes">はい</button><button class="chip" data-v="no">いいえ</button></div></div>
+  <div class="q" data-q="bank"><div class="ql">Q5. 被害の中に「国内銀行口座への振込み」は含まれますか？</div><div class="chips">
+    <button class="chip" data-v="yes">はい</button><button class="chip" data-v="no">いいえ／わからない</button></div></div>
+  <button class="go" id="naviGo" disabled>今すぐの動き方を表示</button>
+  <div id="naviOut"></div>
+  <p style="font-size:10.5px;color:var(--sub);margin-top:16px;line-height:1.7;text-align:center">※ 本ナビは操作・相談先の案内です。特定の結果・回収を保証するものではありません。緊急時・進行中の犯罪は110へ。</p>
+</section>
+
 <nav>
   <button data-tab="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10l9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>ホーム</button>
+  <button data-tab="navi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2.2 4.8-4.8 2.2 2.2-4.8z"/></svg>初動ナビ</button>
   <button data-tab="chat" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"/></svg>AI調査チャット</button>
   <button data-tab="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>解析履歴</button>
   <button data-tab="watch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 3v6c0 4.4-3 8.1-7 9-4-.9-7-4.6-7-9V6z"/></svg>ウォレット監視</button>
@@ -530,12 +586,79 @@ msgEl.addEventListener('keydown', e => {
 });
 msgEl.addEventListener('input', () => { msgEl.style.height='auto'; msgEl.style.height = Math.min(msgEl.scrollHeight,110)+'px'; });
 
-/* ── 下部ナビ（コア以外は準備中） ── */
+/* ── 下部ナビ：初動ナビ／チャット切替（他は準備中） ── */
+function showNaviView(on){
+  document.getElementById('chat').style.display = on ? 'none' : '';
+  document.getElementById('inputbar').style.display = on ? 'none' : '';
+  document.getElementById('view-navi').style.display = on ? 'block' : 'none';
+}
+function goChatTab(){
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'chat'));
+  showNaviView(false);
+}
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => {
   const tab = b.dataset.tab;
-  if (tab === 'chat') return;
+  if (tab === 'navi'){
+    document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'navi'));
+    showNaviView(true);
+    return;
+  }
+  if (tab === 'chat' || tab === 'home'){ goChatTab(); return; }
   toast('この機能は準備中です（近日公開）');
 }));
+
+/* ── 初動ナビのロジック ── */
+(function(){
+  const root = document.getElementById('view-navi');
+  const nvAns = {};
+  root.querySelectorAll('.q').forEach(q => {
+    const key = q.dataset.q;
+    q.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
+      q.querySelectorAll('.chip').forEach(x => x.classList.remove('on'));
+      c.classList.add('on'); nvAns[key] = c.dataset.v;
+      root.querySelector('#naviGo').disabled = !(nvAns.from && nvAns.time && nvAns.more);
+    }));
+  });
+  const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  root.querySelector('#naviGo').addEventListener('click', () => {
+    const {from, time, kind, more, bank} = nvAns;
+    let urg='low', ul='低', ud='初動の締め切りは過ぎている可能性がありますが、記録保全と相談は今も有効です。';
+    if (more==='yes' || time==='1h'){ urg='hi'; ul='高'; ud='今が分かれ目です。追加送金を止め、下記を今すぐ進めてください。'; }
+    else if (time==='24h'){ urg='mid'; ul='中'; ud='まだ間に合う可能性があります。早めに下記を進めてください。'; }
+    let warn='';
+    if (more==='yes') warn=`<div class="nvwarn">⚠️ <b>追加の送金・費用の支払いはしないでください。</b>「税金・保証金・解除料を払えば出金できる」は、<b>出金させないための口実</b>として詐欺で頻繁に使われます。回収を持ちかける業者・偽の公的機関にもご注意ください。</div>`;
+    const todos=[];
+    if (more==='yes') todos.push(['追加の送金・支払いを止める','要求は詐欺の継続手口の可能性が高いです']);
+    if (from==='jp') todos.push(['送金元の国内取引所へ不正利用を申告','出金の一時停止・記録の依頼（凍結可否は取引所判断）']);
+    else if (from==='ovs') todos.push(['送金元の取引所へ不正利用を申告','海外取引所の場合、英語での申告文が有効です']);
+    todos.push(['証拠を保全する','相手との連絡履歴・サイトURL・TXID・送金日時/金額のスクショ']);
+    todos.push(['警察へ相談する準備','時系列メモを作成（いつ・どこで・いくら・どう誘われたか）']);
+    const top3=todos.slice(0,3);
+    const routes=[];
+    if (from==='jp' || from==='ovs') routes.push(['送金元取引所へ不正利用申告','初動＝資金の動きを止める依頼']);
+    routes.push(['警察に相談・被害届','緊急でない相談は #9110／被害届は最寄りの警察署／サイバー事案は警察庁オンライン受付']);
+    if (kind==='sns' || kind==='fake') routes.push(['金融庁 金融サービス利用者相談室','詐欺的投資・無登録業者に関する情報提供']);
+    routes.push(['消費者ホットライン 188','契約・追加請求などの消費者トラブル相談']);
+    if (bank==='yes') routes.push(['銀行＋振り込め詐欺救済法の届出を検討','被害の中の「国内銀行口座への振込み」部分が対象になり得ます']);
+    routes.push(['弁護士','返還請求など法的手続きが必要な場合']);
+    let bn='';
+    if (bank==='yes') bn=`<div class="nvnote" style="margin-bottom:20px"><b>国内銀行への振込みが含まれる場合：</b>振り込め詐欺救済法は「預金口座等への振込み」を対象とします。暗号資産をウォレットへ直接送った部分はそのまま同法の救済（残高分配）には乗りませんが、<b>被害過程の銀行送金部分</b>については、金融機関・警察への届出を相談できる可能性があります。</div>`;
+    const out = root.querySelector('#naviOut');
+    out.innerHTML = `
+      <div class="urg ${urg}"><div class="lv">緊急度：${ul}</div><div class="d">${ud}</div></div>
+      ${warn}
+      <div class="sec"><h2><span class="n">◆</span> 今すぐやる3つ</h2>
+      ${top3.map((t,i)=>`<div class="todo"><div class="num">${i+1}</div><div class="tx">${esc(t[0])}<div class="sub">${esc(t[1])}</div></div></div>`).join('')}</div>
+      <button class="track" id="naviTrack">🔎 TXIDを追跡して着金先の取引所を推定する →</button>
+      <div class="sec"><h2><span class="n">◆</span> 相談先（このケースの推奨順）</h2>
+      ${routes.map(r=>`<div class="route"><div class="dot"></div><div class="rt">${esc(r[0])}</div><div class="rd">${esc(r[1])}</div></div>`).join('')}</div>
+      ${bn}
+      <div class="nvnote"><b>BitToができること：</b>資金経路の解析／着金先取引所の推定／提出資料の整理／不正利用申告文の作成／継続監視／相談先の案内。<br><b>できないこと：</b>取引所への凍結命令／資金の残存・返還の保証／秘密鍵での取戻し。結果は<b>推定</b>を含みます。</div>`;
+    out.style.display = 'block';
+    out.querySelector('#naviTrack').addEventListener('click', goChatTab);
+    out.scrollIntoView({behavior:'smooth', block:'start'});
+  });
+})();
 
 /* ── 初回メッセージ ── */
 addAi(`こんにちは。<b>BitTo</b> の調査AIです。\n\n調べたい送金の <b>トランザクションID（TXID）</b> を貼り付けて送信してください。ビットコイン・イーサリアム・XRP に対応しています。\n\n資金がどのアドレスを経由し、どの取引所に到達したかを追跡して表示します。<span class="mono">（追跡は無料です）</span>`);
