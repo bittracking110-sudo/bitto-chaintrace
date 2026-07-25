@@ -450,8 +450,11 @@ function resultCard(results){
   // 金額はチェーンごとに集計（為替換算はしない＝推測値を出さない）
   const byChain = {};
   results.forEach(r => {
-    const unit = r.tokenSymbol || r.chain;
-    const amt  = r.tokenAmount != null ? r.tokenAmount : r.amount;
+    // ネイティブ送金では tokenAmount が 0 で返るため、tokenSymbol の有無で判断する。
+    // （!= null で見ると 0 を採用してしまい「追跡総額 0 ETH」と表示されていた）
+    const isToken = !!r.tokenSymbol;
+    const unit = isToken ? r.tokenSymbol : r.chain;
+    const amt  = isToken ? r.tokenAmount : r.amount;
     if (amt != null) byChain[unit] = (byChain[unit] || 0) + Number(amt);
   });
   const amountText = Object.entries(byChain).map(([u,v]) => `${(+v.toFixed(6))} ${u}`).join(' / ') || '—';
@@ -495,7 +498,10 @@ function resultCard(results){
   const flows = results.map((r,i) => {
     const p = r.path || [];
     const hiTx = p.filter(n => Number.isFinite(n.txCount) && n.txCount >= HIGH_TX);
-    const ex = [...new Set((r.exchanges || []).filter(n => !hasKey(n, BRIDGE_KEYS) && !hasKey(n, MIXER_KEYS)))];
+    // サーバーの exchanges は {name,address,amount} の配列。名称だけを取り出して判定・表示する
+    const ex = [...new Set((r.exchanges || [])
+      .map(n => n && n.name)
+      .filter(name => name && !hasKey(name, BRIDGE_KEYS) && !hasKey(name, MIXER_KEYS)))];
     return `
     <div class="card"><h4>資金フロー（概要）${results.length>1 ? ` ${i+1}/${results.length}` : ''} — ${esc(r.chain)}</h4>
       ${flowHTML(p)}
@@ -596,7 +602,16 @@ async function runInvestigation(txids){
     }
   }
 
-  setBubble(row, resultCard(results));
+  // 表示の組み立てで例外が出ると「解析中…」のまま止まり、利用者からは
+  // 調査が終わらないようにしか見えない。必ず結果かエラーのどちらかを表示する。
+  let card;
+  try { card = resultCard(results); }
+  catch (e) {
+    console.error('[BitTo] 結果表示エラー:', e);
+    setBubble(row, '⚠️ 調査は完了しましたが、結果の表示に失敗しました。お手数ですが、もう一度お試しください。');
+    return;
+  }
+  setBubble(row, card);
   saveHistory(results);   // 解析履歴に保存（この端末のブラウザのみ）
   lastResults = results;  // 初動パックに反映
 
@@ -605,7 +620,7 @@ async function runInvestigation(txids){
   const exNames = [...new Set(results.flatMap(r => (r.path||[]).filter(n=>n.isExchange&&n.label).map(n=>n.label)))];
   lastContext = {
     chain: r0.chain,
-    amount: r0.tokenAmount != null ? `${r0.tokenAmount} ${r0.tokenSymbol||''}` : `${r0.amount} ${r0.chain}`,
+    amount: r0.tokenSymbol ? `${r0.tokenAmount} ${r0.tokenSymbol}` : `${r0.amount} ${r0.chain}`,
     hops: (r0.path||[]).length - 1,
     reachedExchange: results.some(r => (r.path||[]).some(n => n.isExchange)),
     exchanges: exNames,
@@ -738,7 +753,7 @@ function packRowsHTML(){
     const path = r.path || [];
     const dest = path.length ? path[path.length - 1] : null;
     const ex = [...new Set(path.filter(n => n.isExchange && n.label).map(n => n.label))];
-    const amt = r.tokenAmount != null ? `${r.tokenAmount} ${r.tokenSymbol || ''}` : `${r.amount != null ? r.amount : ''} ${r.chain || ''}`;
+    const amt = r.tokenSymbol ? `${r.tokenAmount} ${r.tokenSymbol}` : `${r.amount != null ? r.amount : ''} ${r.chain || ''}`;
     return `<tr><td>${esc(r.chain || '')}</td><td class="mono">${esc(r.txid || '')}</td><td>${esc(amt)}</td><td class="mono">${esc((dest && dest.address) || '')}</td><td>${ex.length ? esc(ex.join('、')) + '（推定）' : '未特定'}</td></tr>`;
   }).join('');
 }
