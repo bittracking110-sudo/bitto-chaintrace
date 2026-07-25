@@ -481,17 +481,20 @@ async function getUSDPrice(chain) {
 
 // 外部API（Etherscan / Blockchair 等）が応答しない場合に調査全体が停止しないよう、
 // fetch に上限時間を付ける。時間切れは例外になり、各呼び出し側の try/catch で握られる。
-const FETCH_TIMEOUT_MS = 8000;
+const FETCH_TIMEOUT_MS = 6000;
 async function fetchT(url, opts = {}, ms = FETCH_TIMEOUT_MS) {
   return fetch(url, { ...opts, signal: AbortSignal.timeout(ms) });
 }
-// マルチホップ追跡の時間予算。これを超えたら、それまでに判明したホップだけで打ち切る。
-// アプリ側は最大3分（90回×2秒）ポーリングするため、それより十分手前で必ず完了させる。
-const TRACE_BUDGET_MS = 30000;
+// 以下3つの時間予算は加算される（追跡→付帯情報→内部送金の順に直列実行）。
+// 合計が長いと利用者が結果を待ちきれず「調査が出ない」と受け取られるため、
+// 初回照会と合わせて約40秒で必ず返るよう配分する。超過分は部分結果で打ち切る。
+const TRACE_BUDGET_MS = 18000;
 // アドレス情報付与(enrich)の時間予算。USDT等の巨大コントラクトが混じっても全体を止めない。
-const ENRICH_BUDGET_MS = 25000;
+const ENRICH_BUDGET_MS = 10000;
 // investigateETH の内部呼び出し(calls)ラベル取得の時間予算。
-const CALLS_BUDGET_MS = 15000;
+const CALLS_BUDGET_MS = 6000;
+// 上記の予算をすべてすり抜けた場合に調査ジョブを強制終了させる上限時間。
+const INVESTIGATE_HARD_TIMEOUT_MS = 60000;
 
 async function getAddressInfo(addr, chain) {
   try {
@@ -2876,12 +2879,14 @@ setInterval(() => {
   for (const [id, job] of connectionJobs) if (job.createdAt < cutoff) connectionJobs.delete(id);
 }, 600000);
 
-// ── 簡易レート制限（IPごと 調査8回/時） ───────────────────────
+// ── 簡易レート制限（IPごと 調査30回/時） ──────────────────────
+// 8回/時では通常利用や動作確認の途中で遮断され、利用者からは「調査が出ない」と
+// 見分けがつかないため引き上げた。携帯回線はCGNATで多数の利用者が同一IPになる点にも配慮。
 const connRateMap = new Map();
 function connRateOk(ip) {
   const now = Date.now();
   const arr = (connRateMap.get(ip) || []).filter(t => now - t < 3600000);
-  if (arr.length >= 8) { connRateMap.set(ip, arr); return false; }
+  if (arr.length >= 30) { connRateMap.set(ip, arr); return false; }
   arr.push(now);
   connRateMap.set(ip, arr);
   return true;
@@ -3105,7 +3110,16 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
       const cacheKey = txid.toLowerCase();
       let result = txidCache.get(cacheKey)?.result;
       if (!result) {
-        result = await investigate(txid, chain);
+        // 内部の時間予算をすり抜けて investigate() が固まると、ジョブが running のまま残り
+        // クライアントは永久に「解析中」になる。最後の砦として全体に上限時間を課し、
+        // 必ず done か error のどちらかで終わらせる。
+        result = await Promise.race([
+          investigate(txid, chain),
+          new Promise((_, reject) => setTimeout(
+            () => reject(new Error('調査が時間内に完了しませんでした。時間をおいてもう一度お試しください。')),
+            INVESTIGATE_HARD_TIMEOUT_MS
+          )),
+        ]);
         txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
       }
       const job = connectionJobs.get(jobId);
