@@ -113,10 +113,31 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'public', 'reports
 const REPORTS_DIR = DATA_DIR;
 if (!fs.existsSync(REPORTS_DIR)) fs.mkdirSync(REPORTS_DIR, { recursive: true });
 // 起動時に保存先を明示ログ（Railwayログで永続化の有効/無効を確認できる）
-if (process.env.DATA_DIR) {
-  console.log(`[Storage] ✅ 永続ボリューム有効: DATA_DIR=${REPORTS_DIR}（再デプロイしても報告書は残ります）`);
-} else {
+// ⚠️ DATA_DIR が設定されていても、その先にボリュームがマウントされていなければ
+//   ただのコンテナ内ディレクトリで再デプロイのたびに消える。環境変数の有無だけでは
+//   永続しているか判定できないため、起動をまたいで残る目印ファイルで実測する。
+const STORAGE_CHECK_FILE = path.join(REPORTS_DIR, '.storage-check.json');
+let storageState = { dataDir: !!process.env.DATA_DIR, persistent: null, since: null, boots: 1 };
+try {
+  if (fs.existsSync(STORAGE_CHECK_FILE)) {
+    const prev = JSON.parse(fs.readFileSync(STORAGE_CHECK_FILE, 'utf8'));
+    // 前回の起動で書いた目印が残っている＝再デプロイをまたいでファイルが生き残った
+    storageState = { ...storageState, persistent: true, since: prev.since, boots: (prev.boots || 1) + 1 };
+  } else {
+    storageState.since = new Date().toISOString();
+  }
+  fs.writeFileSync(STORAGE_CHECK_FILE, JSON.stringify(storageState), 'utf8');
+} catch (e) {
+  console.error('[Storage] 永続判定に失敗:', e.message);
+}
+if (!storageState.dataDir) {
   console.log(`[Storage] ⚠️ 揮発モード（DATA_DIR未設定）: ${REPORTS_DIR}（再デプロイで消えます）`);
+} else if (storageState.persistent) {
+  console.log(`[Storage] ✅ 永続を実測で確認: DATA_DIR=${REPORTS_DIR}（${storageState.since} から ${storageState.boots} 回目の起動）`);
+} else {
+  console.log(`[Storage] ❓ DATA_DIR=${REPORTS_DIR} は設定済みだが永続かは未確定。` +
+    `目印ファイルを作成したので、次回デプロイ後の起動ログで「✅ 永続を実測で確認」が出れば本物。` +
+    `出なければボリュームが未マウント＝注文・報告書が毎回消えている。`);
 }
 
 // 申込（TXIDフォームトークン）の永続化：再デプロイで注文が消えないように
@@ -2528,6 +2549,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/status', (_req, res) => res.json({
   ok: true, mode: stripe ? 'production' : 'test（Stripeなし）',
   keys: { blockchair: !!BLOCKCHAIR_KEY, etherscan: !!ETHERSCAN_KEY, gemini: !!GEMINI_KEY, line: !!LINE_CHANNEL_ACCESS_TOKEN, stripe: !!stripe },
+  // 注文と報告書が再デプロイで消えないか（Railwayのログを見なくても外から確認できるように）
+  storage: storageState,
   webhook: `${BASE_URL}/webhook`,
 }));
 app.get('/api/btc/tx/:txid', async (req, res) => {
