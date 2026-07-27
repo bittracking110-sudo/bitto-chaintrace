@@ -99,7 +99,34 @@
   .risk.unk .ic{color:var(--grey)} .risk.unk .t{color:var(--sub2)}   /* ラベル情報なし＝判定不能 */
 
   /* フロー */
-  .flow{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;align-items:flex-start}
+  /* 横スクロールできると伝わらず2次先以降を見逃されるため、
+     案内文・現在地・端のぼかし・送りボタンを添えている */
+  .flow-wrap{position:relative}
+  .flow-hint{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    margin-bottom:7px;font-size:10.5px;color:var(--sub2)}
+  .fh-txt{display:flex;align-items:center;gap:5px}
+  .fh-txt::before{content:'👉';animation:fhSwipe 1.6s ease-in-out infinite}
+  @keyframes fhSwipe{0%,100%{transform:translateX(0);opacity:.65}50%{transform:translateX(4px);opacity:1}}
+  .fh-pos{flex:none;font-variant-numeric:tabular-nums;color:var(--sub);
+    background:var(--panel);border:1px solid var(--line);border-radius:99px;padding:1px 7px}
+  .flow-view{position:relative}
+  /* 端のぼかし。先頭・末尾ではその側だけ消し「まだ続きがある」ことを示す */
+  .flow-view::before,.flow-view::after{content:'';position:absolute;top:0;bottom:4px;width:26px;
+    pointer-events:none;transition:opacity .18s;z-index:1}
+  .flow-view::before{left:0;background:linear-gradient(90deg,var(--panel2),rgba(27,48,80,0))}
+  .flow-view::after{right:0;background:linear-gradient(270deg,var(--panel2),rgba(27,48,80,0))}
+  .flow-next{position:absolute;right:2px;top:calc(50% - 2px);transform:translateY(-50%);z-index:2;
+    width:26px;height:26px;padding:0;border-radius:50%;border:1px solid var(--line);
+    background:rgba(21,39,65,.94);color:var(--sub2);font-size:15px;line-height:1;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;transition:opacity .18s}
+  .flow-wrap.at-start .flow-view::before,
+  .flow-wrap.at-end   .flow-view::after,
+  .flow-wrap.no-scroll .flow-view::before,
+  .flow-wrap.no-scroll .flow-view::after{opacity:0}
+  .flow-wrap.at-end .flow-next,
+  .flow-wrap.no-scroll .flow-next{opacity:0;pointer-events:none}
+  .flow-wrap.no-scroll .flow-hint{display:none}
+  .flow{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;align-items:flex-start;scroll-behavior:smooth}
   .node{flex:none;min-width:132px;max-width:160px;background:var(--panel);border:1px solid var(--line);
     border-radius:10px;padding:9px 10px;position:relative}
   .node .hop{font-size:9.5px;color:var(--sub);letter-spacing:.5px}
@@ -389,10 +416,42 @@ function addAi(html, {typing=false} = {}){
     <div class="bubble${!typing && hasCard(html) ? ' wide' : ''}">${typing ? '<div class="dots"><i></i><i></i><i></i></div>' : html}</div></div>`;
   chat.appendChild(d); scrollDown(); return d;
 }
+/* 資金フローの横スクロールに、現在地・端のぼかし・送りボタンを連動させる。
+   イベントは要素に紐づくため、HTMLを差し替えるたびに呼ぶ必要がある */
+function initFlowScroll(root){
+  root.querySelectorAll('.flow-wrap').forEach(w => {
+    if (w.dataset.fsInit) return;
+    w.dataset.fsInit = '1';
+    const f = w.querySelector('.flow');
+    const pos = w.querySelector('.fh-pos');
+    const nodes = [...f.querySelectorAll('.node')];
+    // 左端に見えているノードを現在地とする
+    const curIdx = () => {
+      const i = nodes.findIndex(n => n.offsetLeft + n.offsetWidth > f.scrollLeft + 8);
+      return i < 0 ? nodes.length - 1 : i;
+    };
+    const update = () => {
+      const max = f.scrollWidth - f.clientWidth;
+      const atEnd = f.scrollLeft >= max - 4;
+      w.classList.toggle('no-scroll', max <= 4);
+      w.classList.toggle('at-start', f.scrollLeft <= 4);
+      w.classList.toggle('at-end', atEnd);
+      // 末尾では最後のノードが右端に見えているので、左端基準ではなく全件数を示す
+      if (pos && nodes.length) pos.textContent = `${atEnd ? nodes.length : curIdx() + 1} / ${nodes.length}`;
+    };
+    f.addEventListener('scroll', update, {passive:true});
+    const btn = w.querySelector('.flow-next');
+    if (btn) btn.addEventListener('click', () => {
+      const next = nodes[Math.min(nodes.length - 1, curIdx() + 1)];
+      f.scrollTo({ left: next ? Math.max(0, next.offsetLeft - 10) : f.scrollWidth, behavior:'smooth' });
+    });
+    update();
+  });
+}
 const setBubble = (row, html) => {
   const b = row.querySelector('.bubble');
   b.classList.toggle('wide', hasCard(html));
-  b.innerHTML = html; scrollDown();
+  b.innerHTML = html; initFlowScroll(b); scrollDown();
 };
 
 /* ── 結果カードの組み立て ── */
@@ -419,7 +478,13 @@ const HIGH_TX = 1000;   // これ以上の取引回数は「取引所/サービ�
 const fmtNum = n => Number(n).toLocaleString('ja-JP');
 function flowHTML(path){
   const nodes = path;   // 最終到達先まで全て表示（横スクロール）
-  return `<div class="flow">` + nodes.map((n,i) => `
+  return `<div class="flow-wrap at-start">
+    <div class="flow-hint">
+      <span class="fh-txt">横にスワイプすると2次先以降の経路が見られます</span>
+      <span class="fh-pos">1 / ${nodes.length}</span>
+    </div>
+    <div class="flow-view">
+    <div class="flow">` + nodes.map((n,i) => `
     ${i ? '<div class="arrow">→</div>' : ''}
     <div class="node ${nodeCls(n)}">
       <div class="hop">${esc(hopName(i, nodes.length))}</div>
@@ -429,6 +494,9 @@ function flowHTML(path){
       ${Number.isFinite(n.txCount) ? `<div class="meta${n.txCount >= HIGH_TX ? ' hi' : ''}">取引 ${fmtNum(n.txCount)}回</div>` : ''}
       ${nodeBadge(n)}
     </div>`).join('') + `</div>
+      <button class="flow-next" type="button" aria-label="次の経路を表示">›</button>
+    </div>
+    </div>
     <div class="legend">
       <span><i style="background:#3DDC97"></i>判明（取引所名あり）</span>
       <span><i style="background:#FBBF24"></i>推定（振る舞いから）</span>
