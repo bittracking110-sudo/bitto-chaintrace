@@ -28,15 +28,15 @@ const GEMINI_FALLBACK_MODELS    = [GEMINI_MODEL, 'gemini-flash-latest', 'gemini-
 // 価格定数（トップレベルの文字列テンプレートでも使うため、ファイル冒頭で定義）
 const BITTO_PRICE              = 6600;  // BitToの報告書価格（Web/LINEのStripe用。IAP価格はストア側で設定）
 const BITTO_PRODUCT_ID         = process.env.BITTO_PRODUCT_ID || 'bitto_report';  // BitToアプリIAPの商品ID
-// まとめ買い商品と付与件数の対応。被害者はTXIDを2〜6件持つことが多く、
-// 1件ずつしか買えないと手続きを繰り返させることになるため商品を分けている。
-// ストアに商品を追加したらここへ足す（アプリ側の表示はRevenueCatの応答から自動生成）。
-const BITTO_PRODUCT_UNITS = {
-  [BITTO_PRODUCT_ID]: 1,
-  [`${BITTO_PRODUCT_ID}_3`]: 3,
-  [`${BITTO_PRODUCT_ID}_5`]: 5,
-  [`${BITTO_PRODUCT_ID}_10`]: 10,
-};
+// 1回の申込で受け付けるTXIDの上限。
+const BITTO_MAX_TXID = 15;
+// 商品IDと付与件数の対応。被害者はTXIDを2〜6件持つことが多く、1件ずつしか
+// 買えないと手続きを繰り返させることになるため、件数ごとの商品を用意している。
+// アプリ内課金は数量を指定できないため、この対応表が件数の唯一の根拠になる。
+//   bitto_report(=1件) / bitto_report_2 … bitto_report_15
+// ストアに未作成の商品があっても害はない（アプリは存在する商品だけを選択肢に出す）。
+const BITTO_PRODUCT_UNITS = { [BITTO_PRODUCT_ID]: 1 };
+for (let i = 2; i <= BITTO_MAX_TXID; i++) BITTO_PRODUCT_UNITS[`${BITTO_PRODUCT_ID}_${i}`] = i;
 // Google Play の新方式は `商品ID:購入オプション` の複合IDになるため `:` より前で判定する。
 // 対象外の商品なら 0 を返す（＝受け付けない）。
 const bittoUnitsOf = pid => BITTO_PRODUCT_UNITS[String(pid || '').split(':')[0]] || 0;
@@ -2418,7 +2418,7 @@ app.post('/stripe-webhook',
 app.post('/api/create-checkout', express.json(), async (req, res) => {
   try {
     const { uid, name, phone, email, address, txid_count, source } = req.body;
-    const count  = Math.max(1, Math.min(10, parseInt(txid_count) || 1));
+    const count  = Math.max(1, Math.min(BITTO_MAX_TXID, parseInt(txid_count) || 1));
     const amount = BITTO_PRICE * count;
     const sessionId = crypto.randomUUID();
 
@@ -3628,7 +3628,7 @@ app.post('/api/connection/iap/verify', express.json(), async (req, res) => {
 app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
   try {
     const { appUserId, transactionIds, productId, platform, name, email, phone, count } = req.body || {};
-    const want = Math.max(1, Math.min(10, parseInt(count) ||
+    const want = Math.max(1, Math.min(BITTO_MAX_TXID, parseInt(count) ||
       (Array.isArray(transactionIds) ? transactionIds.length : 1)));
     if (!email)     return res.status(400).json({ error: 'メールアドレスが必要です' });
     if (!appUserId) return res.status(400).json({ error: '購入情報が不足しています' });

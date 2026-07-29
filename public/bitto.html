@@ -637,7 +637,7 @@ function openBuy(){ document.getElementById('bmErr').style.display='none'; buyMo
 function closeBuy(){ buyModal.classList.remove('on'); }
 /* 件数ステッパー。上限はサーバーの /api/create-checkout が受け付ける10件に合わせる */
 const BITTO_UNIT_PRICE = 6600;
-const BITTO_MAX_COUNT  = 10;
+const BITTO_MAX_COUNT  = 15;   // サーバーの BITTO_MAX_TXID と揃える
 let buyCount = 1;
 function renderBuyCount(){
   document.getElementById('bmCount').textContent = buyCount;
