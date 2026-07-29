@@ -267,6 +267,18 @@
   .bm-price{display:flex;align-items:baseline;gap:8px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:14px}
   .bm-price .amt{font-size:22px;font-weight:800;color:var(--teal)}
   .bm-price .u{font-size:12px;color:var(--sub2)}
+  /* 件数ステッパー。被害者は2〜6件のTXIDを持つことが多く、1件固定では
+     同じ手続きを繰り返させることになり大半が1件で離脱する */
+  .bm-stepper{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .bm-stp{width:42px;height:42px;flex:none;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;color:var(--teal);font-size:20px;line-height:1;cursor:pointer;
+    font-family:inherit;transition:border-color .18s,background .18s}
+  .bm-stp:hover{border-color:var(--teal);background:var(--panel2)}
+  .bm-stp:disabled{opacity:.35;cursor:default}
+  .bm-stv{font-size:22px;font-weight:800;min-width:34px;text-align:center;font-variant-numeric:tabular-nums}
+  .bm-stn{font-size:12px;color:var(--sub2)}
+  .bm-note{font-size:11.5px;color:var(--sub2);background:var(--panel2);border:1px solid var(--line);
+    border-radius:8px;padding:9px 12px;margin-bottom:14px;line-height:1.8}
   .bm-l{display:block;font-size:12px;color:var(--sub2);margin:12px 0 6px}
   .bm-l.req::after{content:' *';color:var(--teal)}
   /* こちらも16px未満だとフォーカス時にiOSが拡大する */
@@ -355,7 +367,15 @@
   <div class="bm-card">
     <div class="bm-h">正式調査報告書を作成</div>
     <div class="bm-sub">送金経路・到達取引所の特定、取引所への資産凍結要請、警察・弁護士提出用の正式な報告書をお作りします。決済後、TXIDのご入力フォームをメールでお送りします。</div>
-    <div class="bm-price"><span class="amt" id="bmAmt">¥6,600</span><span class="u">（税込・1件）</span></div>
+    <div class="bm-price"><span class="amt" id="bmAmt">¥6,600</span><span class="u" id="bmUnit">（税込・1件）</span></div>
+    <label class="bm-l" for="bmCount">調査件数（TXIDの数）</label>
+    <div class="bm-stepper">
+      <button type="button" class="bm-stp" id="bmMinus" aria-label="件数を減らす">−</button>
+      <span class="bm-stv" id="bmCount">1</span>
+      <button type="button" class="bm-stp" id="bmPlus" aria-label="件数を増やす">＋</button>
+      <span class="bm-stn">件 × ¥6,600</span>
+    </div>
+    <div class="bm-note" id="bmMultiNote" style="display:none">2件以上の場合も、決済後にお送りするフォームからまとめてご入力いただけます。</div>
     <label class="bm-l req" for="bmName">お名前</label>
     <input type="text" id="bmName" placeholder="山田 太郎" autocomplete="name">
     <label class="bm-l req" for="bmEmail">メールアドレス</label>
@@ -615,6 +635,26 @@ function buyCTA(){
 const buyModal = document.getElementById('buyModal');
 function openBuy(){ document.getElementById('bmErr').style.display='none'; buyModal.classList.add('on'); }
 function closeBuy(){ buyModal.classList.remove('on'); }
+/* 件数ステッパー。上限はサーバーの /api/create-checkout が受け付ける10件に合わせる */
+const BITTO_UNIT_PRICE = 6600;
+const BITTO_MAX_COUNT  = 10;
+let buyCount = 1;
+function renderBuyCount(){
+  document.getElementById('bmCount').textContent = buyCount;
+  document.getElementById('bmAmt').textContent   = '¥' + (BITTO_UNIT_PRICE * buyCount).toLocaleString('ja-JP');
+  document.getElementById('bmUnit').textContent  = `（税込・${buyCount}件）`;
+  document.getElementById('bmGo').textContent    = `決済に進む（¥${(BITTO_UNIT_PRICE * buyCount).toLocaleString('ja-JP')}）`;
+  document.getElementById('bmMultiNote').style.display = buyCount > 1 ? 'block' : 'none';
+  document.getElementById('bmMinus').disabled = buyCount <= 1;
+  document.getElementById('bmPlus').disabled  = buyCount >= BITTO_MAX_COUNT;
+}
+function chgBuyCount(d){
+  buyCount = Math.max(1, Math.min(BITTO_MAX_COUNT, buyCount + d));
+  renderBuyCount();
+}
+document.getElementById('bmMinus').addEventListener('click', () => chgBuyCount(-1));
+document.getElementById('bmPlus').addEventListener('click',  () => chgBuyCount(1));
+renderBuyCount();
 document.getElementById('bmClose').addEventListener('click', closeBuy);
 document.getElementById('bmTos').addEventListener('click', e => { e.preventDefault(); window.open(API + '/bitto/privacy', '_blank'); });
 buyModal.addEventListener('click', e => { if (e.target === buyModal) closeBuy(); });
@@ -631,14 +671,15 @@ document.getElementById('bmGo').addEventListener('click', async () => {
   try{
     const r = await fetch(API + '/api/create-checkout', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ name, email, phone, txid_count:1, brand:'bitto', source:'web' })
+      body: JSON.stringify({ name, email, phone, txid_count: buyCount, brand:'bitto', source:'web' })
     });
     const j = await r.json();
     if(!r.ok || !j.url) throw new Error(j.error || '決済ページを開けませんでした。時間をおいて再度お試しください。');
     window.location.href = j.url;
   }catch(e){
     errEl.textContent = e.message || '決済処理に失敗しました。'; errEl.style.display='block';
-    btn.disabled = false; btn.textContent = '決済に進む（¥6,600）';
+    // 件数を選んでいる場合があるので、固定文字列に戻さず現在の金額で描き直す
+    btn.disabled = false; renderBuyCount();
   }
 });
 
