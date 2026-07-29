@@ -28,6 +28,18 @@ const GEMINI_FALLBACK_MODELS    = [GEMINI_MODEL, 'gemini-flash-latest', 'gemini-
 // 価格定数（トップレベルの文字列テンプレートでも使うため、ファイル冒頭で定義）
 const BITTO_PRICE              = 6600;  // BitToの報告書価格（Web/LINEのStripe用。IAP価格はストア側で設定）
 const BITTO_PRODUCT_ID         = process.env.BITTO_PRODUCT_ID || 'bitto_report';  // BitToアプリIAPの商品ID
+// まとめ買い商品と付与件数の対応。被害者はTXIDを2〜6件持つことが多く、
+// 1件ずつしか買えないと手続きを繰り返させることになるため商品を分けている。
+// ストアに商品を追加したらここへ足す（アプリ側の表示はRevenueCatの応答から自動生成）。
+const BITTO_PRODUCT_UNITS = {
+  [BITTO_PRODUCT_ID]: 1,
+  [`${BITTO_PRODUCT_ID}_3`]: 3,
+  [`${BITTO_PRODUCT_ID}_5`]: 5,
+  [`${BITTO_PRODUCT_ID}_10`]: 10,
+};
+// Google Play の新方式は `商品ID:購入オプション` の複合IDになるため `:` より前で判定する。
+// 対象外の商品なら 0 を返す（＝受け付けない）。
+const bittoUnitsOf = pid => BITTO_PRODUCT_UNITS[String(pid || '').split(':')[0]] || 0;
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const LINE_CHANNEL_SECRET       = process.env.LINE_CHANNEL_SECRET;
 const STRIPE_SECRET_KEY         = process.env.STRIPE_SECRET_KEY;
@@ -3634,8 +3646,9 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
     const txList = [];
     for (const pid of Object.keys(nonSubs)) {
       // BitToの商品だけ受け付ける。新Google Play方式は product_id:購入オプション の
-      // 複合IDになるため、`bitto_report` と `bitto_report:<option>` の両形式を許可。
-      if (pid !== BITTO_PRODUCT_ID && !pid.startsWith(BITTO_PRODUCT_ID + ':')) continue;
+      // 複合IDになるため、`:` より前を見て判定する。
+      // まとめ買い商品（1回の購入で複数件）もここで許可される。
+      if (!(bittoUnitsOf(pid) > 0)) continue;
       for (const t of (nonSubs[pid] || [])) {
         const tid = t.store_transaction_id || t.id;
         if (!tid || consumedIapTx.has(tid)) continue;
@@ -3644,25 +3657,29 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
     }
     txList.sort((a, b) => b.ms - a.ms);
 
+    // まとめ買い商品は1トランザクションで複数件になるため、件数ではなく
+    // 付与件数の合計で必要分に達したかを判定する。
     const provided = new Set((transactionIds || []).filter(Boolean));
     const chosen = [];
+    let units = 0;
     for (const tx of txList) {
-      if (chosen.length >= want) break;
-      if (provided.has(tx.tid)) chosen.push(tx);
+      if (units >= want) break;
+      if (provided.has(tx.tid)) { chosen.push(tx); units += bittoUnitsOf(tx.pid); }
     }
-    if (chosen.length < want) {
+    if (units < want) {
       const cutoff = Date.now() - 60 * 60 * 1000;
       for (const tx of txList) {
-        if (chosen.length >= want) break;
+        if (units >= want) break;
         if (chosen.includes(tx)) continue;
         if (tx.ms && tx.ms < cutoff) continue;
-        chosen.push(tx);
+        chosen.push(tx); units += bittoUnitsOf(tx.pid);
       }
     }
     if (!chosen.length) return res.status(402).json({ error: '有効な購入が確認できませんでした' });
 
     chosen.forEach(tx => consumedIapTx.add(tx.tid));
-    const n = chosen.length;
+    // 実際に購入が確認できた分だけを付与する（クライアントの申告では増やせない）
+    const n = units;
 
     // TXID入力フォームのトークンを発行（brand=bitto）
     const formToken = crypto.randomUUID();
@@ -3710,7 +3727,8 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
       'bitto'
     ).catch(console.error);
 
-    res.json({ ok: true, formUrl });
+    // count は実際に付与した件数。アプリ側の記録と表示をこれに合わせる
+    res.json({ ok: true, formUrl, count: n });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
