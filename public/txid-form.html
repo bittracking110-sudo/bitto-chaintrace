@@ -167,9 +167,11 @@
         const data = await res.json();
 
         if (!res.ok) {
-          // TXID送信済み（used）のConnection申込は、報告書の状況を表示する
-          if (data.used && data.brand === 'connection') {
-            isConnection = true;
+          // TXID送信済み（used）なら、報告書の状況を表示する。
+          // 以前はConnectionだけを対象にしていたため、BitToではアプリのレポートタブから
+          // 開いても「使用済みです」で行き止まりになり、報告書にたどり着けなかった。
+          if (data.used) {
+            isConnection = (data.brand === 'connection');
             showStatusForUsedToken();
             return;
           }
@@ -297,10 +299,13 @@
     // 完成した報告書＋サポートチャットのリンクを表示
     function renderReport(report) {
       document.getElementById('successTitle').textContent = '正式調査報告書が完成しました';
-      document.getElementById('successMsg').innerHTML = '調査報告書と専任サポートチャットは、ご登録のメールアドレスにもお送りしています。';
+      // サポートチャットはConnectionのみ。BitToでは chatUrl が無いので出さない
+      document.getElementById('successMsg').innerHTML = report.chatUrl
+        ? '調査報告書と専任サポートチャットは、ご登録のメールアドレスにもお送りしています。'
+        : '調査報告書は、ご登録のメールアドレスにもお送りしています。';
       document.getElementById('resultArea').innerHTML =
         `<a href="${report.reportUrl}" target="_blank" style="display:block;background:#c9a96e;color:#0a0c12;text-decoration:none;padding:14px;border-radius:8px;font-weight:700;letter-spacing:1px;margin-bottom:12px">📄 調査報告書を開く</a>` +
-        `<a href="${report.chatUrl}" target="_blank" style="display:block;background:#2a2b2e;color:#c9a96e;text-decoration:none;padding:14px;border-radius:8px;font-weight:600;border:1px solid #c9a96e">💬 専任サポートチャット</a>` +
+        (report.chatUrl ? `<a href="${report.chatUrl}" target="_blank" style="display:block;background:#2a2b2e;color:#c9a96e;text-decoration:none;padding:14px;border-radius:8px;font-weight:600;border:1px solid #c9a96e">💬 専任サポートチャット</a>` : '') +
         `<p style="font-size:0.78rem;color:#8b91a0;margin-top:14px">このページのリンクは大切に保管してください。</p>`;
     }
 
@@ -315,7 +320,8 @@
 
     // TXID送信済み（used）の再アクセス時：完成済みなら報告書、調査中なら進捗を表示
     async function showStatusForUsedToken() {
-      applyConnectionHeader();
+      // BitToでもこの画面を使うため、Connection用の見出し差し替えは該当時のみ
+      if (isConnection) applyConnectionHeader();
       document.getElementById('loadingState').style.display = 'none';
       document.getElementById('mainForm').style.display = 'none';
       document.getElementById('successBox').style.display = 'block';

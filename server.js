@@ -2417,7 +2417,8 @@ app.post('/stripe-webhook',
           sendEmail(
             customerEmail,
             '【BitTo】TXIDの入力をお願いします',
-            buildTxidFormEmailHTML(cName, txidFormUrl, count)
+            buildTxidFormEmailHTML(cName, txidFormUrl, count),
+            'bitto'   // 渡さないと送信元が Connection 名義になる
           ).catch(console.error);
         }
 
@@ -2455,7 +2456,8 @@ app.post('/api/create-checkout', express.json(), async (req, res) => {
       sendEmail(
         email,
         '【BitTo】ご利用規約同意の確認',
-        buildTOSEmailHTML(name || '', count, amount, submittedAt)
+        buildTOSEmailHTML(name || '', count, amount, submittedAt),
+        'bitto'   // 渡さないと送信元が Connection 名義になる
       ).catch(console.error);
     }
 
@@ -2819,6 +2821,13 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
         });
       }
 
+      // 納品情報はブランド共通で記録する。
+      // 以前はConnectionの分岐内だけで設定していたため、BitToは報告書が完成しても
+      // status が investigating のまま残り、報告書URLも保存されず、アプリの
+      // レポートタブやフォーム再訪から報告書にたどり着けなかった（メールが唯一の導線だった）。
+      formData.status = 'done';
+      formData.report = { reportUrl, issuedAt };
+
       // ブランド別の納品処理
       if (formData.brand === 'connection') {
         // Connection：サポートチャットを開設
@@ -2831,9 +2840,8 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
           messages: [], createdAt: Date.now(),
         });
         saveConnectionChats();
-        // ブラウザのポーリング表示用に結果を保存
-        formData.status = 'done';
-        formData.report = { reportUrl, chatUrl, issuedAt };
+        // Connectionはサポートチャットも案内する
+        formData.report.chatUrl = chatUrl;
         // メールでも案内（Railwayのメール不達時はブラウザ表示でカバー）
         if (formData.email) {
           sendEmail(
@@ -2846,7 +2854,8 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
         sendEmail(
           formData.email,
           '【BitTo】詳細調査レポートが完成しました',
-          buildReportEmailHTML(formData.customerName, reportUrl, issuedAt)
+          buildReportEmailHTML(formData.customerName, reportUrl, issuedAt),
+          'bitto'   // 渡さないと送信元が Connection 名義になる（迷惑メール判定の一因）
         ).catch(console.error);
       }
 
