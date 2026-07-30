@@ -85,17 +85,28 @@ const txidCache       = new Map(); // txid（小文字）→ { result, investiga
 // thinkingConfig 非対応やモデルの提供終了で全AI機能が止まらないよう、
 // 「モデル × thinkingConfigあり/なし」を順に試し、最初に成功したものを返す。
 // すべて失敗した場合のみ null を返し、原因をログに残す。
+// Gemini 1回あたりの上限と、全モデルを試し切るまでの総上限。
+// AIの本文が無くても報告書自体は出せる（呼び出し側でフォールバックする）ので、
+// 待ち続けるより打ち切って納品する方がよい。
+const GEMINI_TIMEOUT_MS       = 30000;
+const GEMINI_TOTAL_TIMEOUT_MS = 90000;
 async function geminiGenerate(prompt, { temperature = 0.4, maxOutputTokens = 1000 } = {}) {
   if (!GEMINI_KEY) return null;
+  const deadline = Date.now() + GEMINI_TOTAL_TIMEOUT_MS;
   const tried = [];
   for (const model of [...new Set(GEMINI_FALLBACK_MODELS)]) {
     for (const useThinking of [true, false]) {
+      // 総上限を超えたら残りの組み合わせは試さない（全体が長引くのを防ぐ）
+      if (Date.now() >= deadline) { tried.push('総時間の上限に到達'); break; }
       const generationConfig = { temperature, maxOutputTokens };
       if (useThinking) generationConfig.thinkingConfig = { thinkingBudget: 0 };
       try {
+        // 上限を設けないと応答が返らないときに永久に待ち続け、報告書の生成が
+        // 「調査中」のまま止まる（有料の納品物なので致命的）。1回ごとに打ち切る。
         const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig }),
+          signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
         });
         const j = await r.json();
         const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -159,6 +170,18 @@ try {
     const saved = JSON.parse(fs.readFileSync(TXID_FORMS_FILE, 'utf8'));
     for (const [k, v] of Object.entries(saved)) txidFormTokens.set(k, v);
     console.log(`[Forms] 申込 ${txidFormTokens.size}件を復元`);
+    // 調査はメモリ上で走っているため、再起動をまたぐと処理が消える。
+    // 「調査中」のまま復元された申込は永久に完了しないので、放置せずエラーにして
+    // 気づけるようにする（利用者は支払い済みなので、取り残しが最も避けたい）。
+    let orphaned = 0;
+    for (const v of txidFormTokens.values()) {
+      if (v.status === 'investigating') {
+        v.status = 'error';
+        v.errorMsg = 'サーバー更新により調査が中断されました。サポートより折り返しご連絡いたします。';
+        orphaned++;
+      }
+    }
+    if (orphaned) console.warn(`[Forms] ⚠️ 再起動で中断された調査 ${orphaned}件をエラーに変更しました（要フォロー）`);
   }
 } catch (e) { console.error('[Forms] 復元失敗:', e.message); }
 function saveTxidForms() {
@@ -2771,7 +2794,15 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
       if (list.length === 0) throw new Error('全てのTXIDの調査に失敗しました');
 
       const issuedAt   = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
-      const aiData     = await generateAIContent(list, formData.customerName).catch(() => ({ analysis: null, requests: [] }));
+      // AI本文が無くても報告書は出せる。ここで待ち続けると納品が止まるので、
+      // 上限を超えたら本文なしで先へ進める（最後の砦）。
+      const aiData     = await Promise.race([
+        generateAIContent(list, formData.customerName),
+        new Promise(resolve => setTimeout(() => {
+          console.error('[Submit] AI生成が上限を超えたため本文なしで続行します');
+          resolve({ analysis: null, requests: [] });
+        }, GEMINI_TOTAL_TIMEOUT_MS + 15000)),
+      ]).catch(() => ({ analysis: null, requests: [] }));
       const reportId   = crypto.randomUUID();
       const reportUrl  = `${BASE_URL}/report/${reportId}`;
       const reportHtml = generateReportHTML(list, formData.customerName, issuedAt, aiData, reportUrl, formData.brand || 'bitto');
