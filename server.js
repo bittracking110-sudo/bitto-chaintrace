@@ -2729,8 +2729,10 @@ app.get('/api/test-txid-form', (req, res) => {
 app.get('/txid-form/:token', (req, res) => {
   const data = txidFormTokens.get(req.params.token);
   if (!data) return res.status(404).sendFile(path.join(__dirname, 'public', 'form-expired.html'));
-  // Connectionは使用済みでも報告書を表示するためフォームページを返す（BitToはLINE配信のため固定ページ）
-  if (data.used && data.brand !== 'connection') return res.status(410).sendFile(path.join(__dirname, 'public', 'form-used.html'));
+  // 使用済みでもフォームページを返す。ページ側が status を見て調査中／報告書リンクを表示する。
+  // 以前はBitToだけ手前で form-used.html に落としていたため、アプリのレポートタブから
+  // 開いても「使用済みです」で行き止まりになり、報告書にたどり着けなかった
+  // （txid-form.html 側の使用済み対応が実行される前に弾かれていた）。
   res.sendFile(path.join(__dirname, 'public', 'txid-form.html'));
 });
 
