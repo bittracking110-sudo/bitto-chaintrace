@@ -1968,7 +1968,7 @@ ${r.txid}
         lbl.textContent = '● 送金時価格: $' + txPrice.toLocaleString('en-US', { maximumFractionDigits: 2 });
       }
 
-      const chart = new Chart(canvas, {
+      new Chart(canvas, {
         type: 'line',
         data: {
           labels,
@@ -2020,23 +2020,6 @@ ${r.txid}
           }
         }
       });
-
-      // 描画結果を静止画に固定して canvas と差し替える。
-      // Androidのブラウザは画面外にある大きなcanvasのバックストアをメモリ節約のため
-      // 破棄することがあり、報告書のような縦長ページでは下方にある価格グラフが
-      // 空欄のまま残る（実測でchartは生成済み・サイズも正常なのに描画画素が0だった）。
-      // canvasは破棄されても自動で再描画されないため、印刷・PDF化でも同じく空になる。
-      try {
-        const img = new Image();
-        img.src = chart.toBase64Image('image/png', 1);
-        img.alt = coinId.toUpperCase() + ' 価格推移（送金前後30日）';
-        img.style.width = '100%';
-        img.style.height = 'auto';
-        canvas.replaceWith(img);
-        chart.destroy();
-      } catch (_) {
-        /* 画像化に失敗した場合はcanvasのまま残す（表示できる環境ではそのまま見える） */
-      }
     } catch (e) {
       canvas.parentElement.innerHTML = '<p class="chart-error">価格データ取得失敗（CoinGecko APIレート制限の可能性）</p>';
     }
