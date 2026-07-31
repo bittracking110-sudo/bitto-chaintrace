@@ -1997,6 +1997,11 @@ ${r.txid}
         },
         options: {
           responsive: true,
+          // アニメーションはrequestAnimationFrameで進むため、描画が走り切る前に
+          // 止まるとグラフが空のまま残る（実測で1画素も描かれていなかった）。
+          // 報告書は印刷してPDF化する前提でもあり、アニメーション中に印刷されると
+          // PDFも空になる。falseにすると生成と同時に同期で描画される。
+          animation: false,
           plugins: {
             legend: { position: 'top', labels: { font: { size: 11 }, boxWidth: 12 } }
           },
