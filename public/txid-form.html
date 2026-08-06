@@ -106,7 +106,8 @@
       <div class="icon">✅</div>
       <h2 id="successTitle">調査を開始しました！</h2>
       <p id="successMsg">TXIDを受け付けました。<br>
-      調査完了後、LINEとメールにレポートURLをお送りします。<br><br>
+      調査が完了すると、ご登録のメールアドレスにレポートURLをお送りします。<br>
+      アプリをご利用の場合は「レポート」タブからもご覧いただけます。<br><br>
       通常1〜3分でお届けします。</p>
       <div id="resultArea" style="margin-top:20px"></div>
     </div>
@@ -259,13 +260,16 @@
         document.getElementById('mainForm').style.display = 'none';
         document.getElementById('successBox').style.display = 'block';
 
-        if (isConnection) {
-          document.getElementById('successTitle').textContent = '調査を申請しました';
-          document.getElementById('successMsg').innerHTML =
-            'TXID ' + txids.length + '件を受け付けました。<br>ただいま調査を行っております。<br>' +
-            '<span style="color:#9aa0a6;font-size:0.85rem">通常10〜30分で完成します。このページを開いたままお待ちください。</span>';
-          startResultPolling();
-        }
+        document.getElementById('successTitle').textContent = '調査を申請しました';
+        document.getElementById('successMsg').innerHTML =
+          'TXID ' + txids.length + '件を受け付けました。<br>ただいま調査を行っております。<br>' +
+          '<span style="color:#9aa0a6;font-size:0.85rem">通常' + (isConnection ? '10〜30分' : '1〜3分') +
+          'で完成します。このページを開いたままお待ちください。</span>';
+        // 完成するとこの画面がそのまま報告書に変わる。
+        // 以前はConnectionのときだけポーリングしていたため、BitToでは送信後
+        // 「調査を開始しました」のまま変わらず、報告書は1分ほどでできているのに
+        // 利用者は画面を閉じてレポートタブから開き直す必要があった。
+        startResultPolling();
       } catch (e) {
         errorEl.textContent = 'エラー: ' + e.message;
         errorEl.style.display = 'block';

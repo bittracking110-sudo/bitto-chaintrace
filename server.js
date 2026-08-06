@@ -24,7 +24,12 @@ const GEMINI_KEY                = process.env.GEMINI_API_KEY;
 // gemini-2.5-flash は新規プロジェクトでは提供終了。既定を現行の別名モデルにし、env で上書き可能に。
 const GEMINI_MODEL              = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 // モデルの提供終了・パラメータ非対応で全AI機能が止まるのを防ぐため、順に切り替えて試すフォールバック。
-const GEMINI_FALLBACK_MODELS    = [GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'];
+// 使えないモデルを候補に残すと、報告書生成のたびに必ず失敗する呼び出しを重ねる。
+// 本番ログで次の2つは毎回同じ理由で失敗していたため外した。
+//   gemini-2.5-flash : 新規プロジェクトでは提供終了
+//   gemini-1.5-flash : v1beta に存在しない
+// gemini-2.0-flash は無料枠が0だが、課金を有効にすれば使えるので残す。
+const GEMINI_FALLBACK_MODELS    = [GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.0-flash'];
 // 価格定数（トップレベルの文字列テンプレートでも使うため、ファイル冒頭で定義）
 const BITTO_PRICE              = 6600;  // BitToの報告書価格（Web/LINEのStripe用。IAP価格はストア側で設定）
 const BITTO_PRODUCT_ID         = process.env.BITTO_PRODUCT_ID || 'bitto_report';  // BitToアプリIAPの商品ID
@@ -1848,25 +1853,25 @@ ${r.txid}
       </ol>
       <p style="margin:8px 0 0;color:#64748b;font-size:0.75rem">💡 QRコードでSafariから開くと、ボタン1つで保存できます</p>
     </div>
-    <p class="print-hint">⚠️ LINEアプリ内ではPDF保存できません</p>
+    <p class="print-hint">⚠️ アプリ内で開いている場合、PDF保存できないことがあります</p>
     <div class="mobile-open-section">
-      <p style="font-size:0.83rem;font-weight:700;color:var(--r-ink);margin:0 0 10px">📸 カメラでQRコードを読み取ってSafariで開く</p>
+      <p style="font-size:0.83rem;font-weight:700;color:var(--r-ink);margin:0 0 10px">📸 QRコードを読み取ってブラウザで開く</p>
       <div class="qr-wrap">
         <img class="qr-img" src="https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=__REPORT_URL__" alt="QRコード" />
         <ol class="qr-steps">
           <li><strong>カメラアプリ</strong>を開く</li>
           <li>QRコードに<strong>かざす</strong></li>
-          <li>通知をタップ →<strong>Safariで開く</strong></li>
-          <li>画面下の<strong>共有ボタン</strong>をタップ</li>
+          <li>通知をタップして<strong>ブラウザで開く</strong></li>
+          <li>上の<strong>「PDF保存 / 印刷」</strong>を押す</li>
           <li>「<strong>PDFとして保存</strong>」を選択</li>
         </ol>
       </div>
-      <p style="font-size:0.78rem;color:var(--r-ink2);margin:4px 0 8px">▼ QRが読めない場合はURLをコピーしてSafariに貼り付け</p>
+      <p style="font-size:0.78rem;color:var(--r-ink2);margin:4px 0 8px">▼ QRが読めない場合はURLをコピーしてブラウザに貼り付け</p>
       <div class="url-box">
         <input type="text" id="urlInput" class="url-input" readonly value="__REPORT_URL__" onclick="selectUrl(this)" />
         <button class="copy-btn" id="copyBtn" onclick="copyUrl()">📋 コピー</button>
       </div>
-      <p class="copy-hint">コピー後、SafariのURLバーに貼り付けてください</p>
+      <p class="copy-hint">コピー後、ブラウザのURLバーに貼り付けてください</p>
     </div>
   </div>
   <script>
