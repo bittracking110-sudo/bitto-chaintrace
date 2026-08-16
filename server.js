@@ -216,12 +216,31 @@ async function saveReport(reportId, html) {
 const PDF_TIMEOUT_MS = 60000;
 let pdfBrowser = null;
 
+/* Chromiumの場所を決める。
+   本番はOS側（apt）のchromiumを使う（同梱版はunzipが無く展開できないため）。
+   開発機ではpuppeteer同梱版が入っているのでそちらに任せる。 */
+function findChromium() {
+  const cands = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+  ].filter(Boolean);
+  for (const p of cands) {
+    try { if (fs.existsSync(p)) return p; } catch { /* 次の候補へ */ }
+  }
+  return undefined;   // undefined なら puppeteer 同梱版が使われる
+}
+
 async function getPdfBrowser() {
   if (pdfBrowser && pdfBrowser.connected) return pdfBrowser;
   const puppeteer = require('puppeteer');
+  const executablePath = findChromium();
+  console.log('[PDF] Chromium:', executablePath || '同梱版');
   // コンテナ内ではsandboxが使えない。共有メモリも小さいので /tmp を使わせる。
   pdfBrowser = await puppeteer.launch({
     headless: 'new',
+    executablePath,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--font-render-hinting=none'],
   });
   return pdfBrowser;
