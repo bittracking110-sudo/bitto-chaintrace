@@ -3678,6 +3678,67 @@ app.post('/api/connection/iap/verify', express.json(), async (req, res) => {
 // ── BitToアプリ IAP（App内課金）レシート検証 ──────────────────
 // Connection版(/api/connection/iap/verify)と同型。商品IDを BITTO_PRODUCT_ID に限定して分離。
 // REVENUECAT_SECRET_KEY 未設定時は 503（承認前は安全に無効化）。
+/* 購入済みの申込を復元する。
+   レポートタブは端末のlocalStorageに依存しているため、機種変更・再インストール・
+   データ消去で消える。メールが唯一の復旧手段だが、キャリアメールは受信設定で
+   そもそも届かないことがあり（Gmailのように迷惑メールに入るのではなく拒否される）、
+   支払ったのに報告書にもTXID入力フォームにもたどり着けない状態になりうる。
+
+   サーバーは発行時に appUserId と transactionIds を保存しているので、
+   ストアのレシートから復元できる。ログインは不要。
+
+   照合はクライアントが送ったIDではなくRevenueCatから取得したIDで行う。
+   他人の申込を引き出せないようにするため。 */
+app.post('/api/bitto/orders/restore', express.json(), async (req, res) => {
+  try {
+    const { appUserId } = req.body || {};
+    if (!appUserId) return res.status(400).json({ error: '購入情報が不足しています' });
+    if (!REVENUECAT_SECRET_KEY)
+      return res.status(503).json({ error: '購入の復元は準備中です' });
+
+    const rcRes = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, {
+      headers: { Authorization: `Bearer ${REVENUECAT_SECRET_KEY}`, 'Content-Type': 'application/json' },
+    });
+    if (!rcRes.ok) return res.status(502).json({ error: '購入の確認に失敗しました' });
+    const rcData = await rcRes.json();
+    const nonSubs = (rcData.subscriber && rcData.subscriber.non_subscriptions) || {};
+
+    // このユーザーが実際に持っているBitTo商品のトランザクションIDを集める
+    const owned = new Set();
+    for (const pid of Object.keys(nonSubs)) {
+      if (!(bittoUnitsOf(pid) > 0)) continue;
+      for (const t of (nonSubs[pid] || [])) {
+        const tid = t.store_transaction_id || t.id;
+        if (tid) owned.add(tid);
+      }
+    }
+    if (!owned.size) return res.json({ ok: true, orders: [] });
+
+    // そのトランザクションで発行した申込を探す
+    const orders = [];
+    for (const [token, v] of txidFormTokens.entries()) {
+      if (v.brand !== 'bitto' || !v.iap) continue;
+      const ids = v.iap.transactionIds || [];
+      if (!ids.some(id => owned.has(id))) continue;
+      orders.push({
+        url: `${BASE_URL}/txid-form/${token}`,
+        count: v.count || 1,
+        name: v.customerName || '',
+        email: v.email || '',
+        status: v.status || (v.used ? 'investigating' : 'paid_waiting_txid'),
+        reportUrl: (v.report && v.report.reportUrl) || null,
+        at: v.createdAt || 0,
+      });
+    }
+    orders.sort((a, b) => b.at - a.at);
+    console.log(`[Restore] appUserId=${String(appUserId).slice(0, 12)}… 復元${orders.length}件`);
+    res.json({ ok: true, orders });
+  } catch (e) {
+    console.error('[Restore] 失敗:', e.message);
+    res.status(500).json({ error: '購入の復元に失敗しました' });
+  }
+});
+
 app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
   try {
     const { appUserId, transactionIds, productId, platform, name, email, phone, count } = req.body || {};
