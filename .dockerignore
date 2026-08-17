@@ -1,0 +1,9 @@
+# イメージに入れる必要がないもの。ビルドを速く、イメージを小さく保つ。
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+.env.*
+*.md
+.claude
