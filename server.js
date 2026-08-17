@@ -200,77 +200,6 @@ async function saveReport(reportId, html) {
   try {
     await fsp.writeFile(path.join(REPORTS_DIR, `${reportId}.html`), html, 'utf8');
   } catch (e) { console.error('[Report] ファイル保存失敗:', e.message); }
-  // HTMLを置いた直後にPDFも作る。ここで失敗しても報告書の納品は止めない。
-  generateReportPdf(reportId).catch(e => console.error('[PDF] 生成失敗:', e.message));
-}
-
-/* ── 報告書のPDF化 ────────────────────────────────────────────
-   ブラウザの印刷機能に頼ると、Chrome(iOS) では window.print() から
-   システムの印刷画面を開けず、PDF保存ができない（Appleの制約で回避不能）。
-   Androidでもアプリ内ブラウザからは印刷メニューに届かない。
-   利用者に「ブラウザで開き直してから印刷」を強いることになるため、
-   サーバー側でPDFを作って1タップでダウンロードできるようにする。
-
-   報告書は警察や取引所に出す書類なので、端末によって体裁が変わらない
-   利点もある。価格グラフ（Chart.js + CoinGecko）は描画を待ってから出力する。 */
-const PDF_TIMEOUT_MS = 60000;
-let pdfBrowser = null;
-
-/* Chromiumの場所を決める。
-   本番はOS側（apt）のchromiumを使う（同梱版はunzipが無く展開できないため）。
-   開発機ではpuppeteer同梱版が入っているのでそちらに任せる。 */
-function findChromium() {
-  const cands = [
-    process.env.PUPPETEER_EXECUTABLE_PATH,
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/google-chrome',
-  ].filter(Boolean);
-  for (const p of cands) {
-    try { if (fs.existsSync(p)) return p; } catch { /* 次の候補へ */ }
-  }
-  return undefined;   // undefined なら puppeteer 同梱版が使われる
-}
-
-async function getPdfBrowser() {
-  if (pdfBrowser && pdfBrowser.connected) return pdfBrowser;
-  const puppeteer = require('puppeteer');
-  const executablePath = findChromium();
-  console.log('[PDF] Chromium:', executablePath || '同梱版');
-  // コンテナ内ではsandboxが使えない。共有メモリも小さいので /tmp を使わせる。
-  pdfBrowser = await puppeteer.launch({
-    headless: 'new',
-    executablePath,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--font-render-hinting=none'],
-  });
-  return pdfBrowser;
-}
-
-async function generateReportPdf(reportId) {
-  const out = path.join(REPORTS_DIR, `${reportId}.pdf`);
-  const browser = await getPdfBrowser();
-  const page = await browser.newPage();
-  try {
-    // 自分自身のHTTPで開く。相対パスやfetchが本番と同じ条件で動く。
-    await page.goto(`http://127.0.0.1:${PORT}/report/${reportId}`,
-      { waitUntil: 'networkidle0', timeout: PDF_TIMEOUT_MS });
-    // 価格グラフはCoinGecko取得後に描画される。canvasが描かれるまで待つ。
-    await page.waitForFunction(() => {
-      const c = document.querySelector('canvas[data-coin]');
-      if (!c) return true;                       // グラフが無い報告書もある
-      if (document.querySelector('.chart-error')) return true;  // 取得失敗も確定状態
-      return typeof Chart !== 'undefined' && !!Chart.getChart(c);
-    }, { timeout: 20000 }).catch(() => { /* 待てなければグラフ無しで出す */ });
-    await page.pdf({
-      path: out,
-      format: 'A4',
-      printBackground: true,
-      margin: { top: '12mm', right: '10mm', bottom: '12mm', left: '10mm' },
-    });
-    console.log(`[PDF] 生成: ${reportId}.pdf`);
-  } finally {
-    await page.close().catch(() => {});
-  }
 }
 
 async function loadReport(reportId) {
@@ -1912,16 +1841,8 @@ ${r.txid}
 <body>
 <div class="container">
   <div class="print-bar">
-    <!-- PDFはサーバー側で作ってあるので、端末やブラウザを問わず1タップで保存できる。
-         印刷経由（下）は、Chrome(iOS)では機能せずAndroidのアプリ内ブラウザからも
-         届かないため、こちらを主導線にする。 -->
-    <a class="print-btn" id="pdfDlBtn" href="__REPORT_URL__.pdf"
-       style="display:block;text-decoration:none;text-align:center">📄 PDFをダウンロード</a>
-    <p style="margin:10px 0 0;font-size:0.78rem;color:var(--r-ink2)">
-      うまく保存できない場合は、下の「印刷」からもPDF化できます</p>
-    <details style="margin-top:14px">
-      <summary style="cursor:pointer;font-size:0.82rem;color:var(--r-ink2)">🖨 印刷して保存する場合はこちら</summary>
-    <button class="print-btn" onclick="doPrint()" id="pdfBtn" style="margin-top:10px">🖨 PDF保存 / 印刷</button>
+    <p>📄 このページを印刷 → 「PDFとして保存」でPDF化できます</p>
+    <button class="print-btn" onclick="doPrint()" id="pdfBtn">🖨 PDF保存 / 印刷</button>
     <div id="chromeGuide" style="display:none;margin-top:12px;background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:14px;font-size:0.82rem;color:#334155;line-height:1.9">
       <p style="font-weight:700;margin:0 0 6px;color:#c2410c">📌 Chrome(iOS)でのPDF保存手順</p>
       <ol style="margin:0;padding-left:18px">
@@ -1952,7 +1873,6 @@ ${r.txid}
       </div>
       <p class="copy-hint">コピー後、ブラウザのURLバーに貼り付けてください</p>
     </div>
-    </details>
   </div>
   <script>
     var _url = '__REPORT_URL__';
@@ -3018,25 +2938,6 @@ app.get('/report/preview', async (req, res) => {
 });
 
 // 有料レポートページ（ファイル優先 → メモリキャッシュのフォールバック）
-/* 報告書のPDF。/report/:id より先に置くこと（後だと :id が "xxx.pdf" に食われる）。
-   まだ生成できていない場合はその場で作る（既存の報告書にも後から効かせるため）。 */
-app.get('/report/:id.pdf', async (req, res) => {
-  const id = req.params.id;
-  const file = path.join(REPORTS_DIR, `${id}.pdf`);
-  if (!fs.existsSync(file)) {
-    if (!(await loadReport(id))) return res.status(404).send('レポートが見つかりません');
-    try {
-      await generateReportPdf(id);
-    } catch (e) {
-      console.error('[PDF] 要求時の生成に失敗:', e.message);
-      return res.status(500).send('PDFを作成できませんでした。ページ上部の「PDF保存 / 印刷」をお試しください。');
-    }
-  }
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="BitTo-report-${id}.pdf"`);
-  fs.createReadStream(file).pipe(res);
-});
-
 app.get('/report/:id', async (req, res) => {
   const html = await loadReport(req.params.id);
   if (!html) {
