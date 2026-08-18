@@ -323,11 +323,9 @@
     <button class="chip" data-v="bank">銀行口座</button><button class="chip" data-v="cex">暗号資産取引所</button><button class="chip" data-v="emoney">電子マネー</button><button class="chip" data-v="unknown">不明</button></div></div>
   <div class="q" data-q="time"><div class="ql">Q2. 送金からどのくらい経ちましたか？</div><div class="chips">
     <button class="chip" data-v="w1">1週間以内</button><button class="chip" data-v="m3">3ヵ月以内</button><button class="chip" data-v="m6">半年以内</button><button class="chip" data-v="over">それ以上</button></div></div>
-  <div class="q" data-q="kind"><div class="ql">Q3. きっかけは何ですか？</div><div class="chips">
-    <button class="chip" data-v="sns">SNS・マッチングアプリの投資</button><button class="chip" data-v="fake">偽の取引所・投資サイト</button><button class="chip" data-v="imp">サポート／公的機関を装った連絡</button><button class="chip" data-v="other">その他</button></div></div>
-  <div class="q" data-q="more"><div class="ql">Q4. いま追加の送金や費用（税金・保証金・解除料など）を要求されていますか？</div><div class="chips">
+  <div class="q" data-q="more"><div class="ql">Q3. いま追加の送金や費用（税金・保証金・解除料など）を要求されていますか？</div><div class="chips">
     <button class="chip" data-v="yes">はい</button><button class="chip" data-v="no">いいえ</button></div></div>
-  <div class="q" data-q="dest"><div class="ql">Q5. 送金・振込の相手先はどちらでしたか？</div><div class="chips">
+  <div class="q" data-q="dest"><div class="ql">Q4. 送金・振込の相手先はどちらでしたか？</div><div class="chips">
     <button class="chip" data-v="personal">個人口座（相手個人の銀行口座）</button><button class="chip" data-v="exchange">取引所（例：bitFlyer・コインチェック・GMOコイン・bitbank 等）</button></div></div>
   <button class="go" id="naviGo" disabled>これからの動きを表示</button>
   <div id="naviOut"></div>
@@ -1010,7 +1008,7 @@ function openInitialPack(){
   });
   const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
   root.querySelector('#naviGo').addEventListener('click', () => {
-    const {from, time, kind, more, dest} = nvAns;
+    const {from, time, more, dest} = nvAns;
     /* 緊急度は「いま追加請求されているか」と「経過時間」で決める。
        時間が経っていても打てる手は残るので、低でも突き放さない書き方にする。 */
     let urg='low', ul='低', ud='時間は経っていますが、できることは残っています。記録を整理して、相談・届出を進めましょう。';
