@@ -1526,7 +1526,7 @@ function buildMermaidDiagram(path, chain) {
     const short = node.address.slice(0, 8) + '…' + node.address.slice(-4);
     const lbl   = node.label   ? `<br/>${node.label}` : '';
     const bal   = (node.balance != null && !isNaN(node.balance))
-      ? `<br/>残高: ${node.balance < 0.0001 ? node.balance.toFixed(6) : node.balance.toFixed(4)} ${chain}` : '';
+      ? `<br/>${node.isExchange ? '取引所内残高' : '残高'}: ${node.balance < 0.0001 ? node.balance.toFixed(6) : node.balance.toFixed(4)} ${chain}` : '';
     const txc   = node.txCount != null ? `<br/>TX: ${node.txCount.toLocaleString()}件` : '';
 
     if (i === 0) {
@@ -1634,8 +1634,12 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
         ? `<div class="node-meta">💸 送金額: ${p.amount.toFixed(8)} ${p.token || r.chain}</div>` : '';
       const usdStr   = (p.balanceUSD != null && !isNaN(p.balanceUSD))
         ? ` <span class="usd-val">≈ $${p.balanceUSD < 1 ? p.balanceUSD.toFixed(4) : p.balanceUSD.toLocaleString('en-US',{maximumFractionDigits:2})}</span>` : '';
+      /* 残高＝そのアドレスに現在入っている総額。最終到達先が取引所の場合は
+         取引所ウォレット全体の合算額（他の利用者の資産を含む）なので、
+         被害額と読み違えられないよう見出しで区別する。 */
+      const balLabel = p.isExchange ? '取引所ウォレット残高' : '残高';
       const balTd    = (p.balance != null && !isNaN(p.balance))
-        ? `<div class="node-meta">💰 残高: ${p.balance < 0.0001 ? p.balance.toFixed(8) : p.balance.toFixed(4)} ${r.chain}${usdStr}</div>` : '';
+        ? `<div class="node-meta">💰 ${balLabel}: ${p.balance < 0.0001 ? p.balance.toFixed(8) : p.balance.toFixed(4)} ${r.chain}${usdStr}</div>` : '';
       const txCntTd  = (p.txCount != null)
         ? `<div class="node-meta">📊 TX件数: ${p.txCount.toLocaleString()}件</div>` : '';
 
@@ -1778,6 +1782,7 @@ ${r.txid}
 
         <h3>📍 送金経路詳細</h3>
         <div class="flow-map">${flowNodes}</div>
+        <p class="flow-note">※「残高」は各アドレスに<strong>現在入っている総額</strong>（照会時点）です。最終到達先が取引所の場合、その残高は取引所ウォレット全体の合算額で、他の利用者の資産も含みます。<strong>お客様の被害額そのものではありません。</strong></p>
 
         <h3>🏦 取引所判定</h3>
         ${exHTML}
@@ -1833,6 +1838,7 @@ ${r.txid}
     .badge{background:var(--r-badgebg);color:var(--r-badgeink);font-size:0.72rem;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:400}
     .flow-arrow{font-size:1.4rem;color:var(--r-ink2);margin:4px 0;line-height:1}
     .no-ex{color:var(--r-ink2);font-size:0.85rem;padding:10px}
+    .flow-note{color:var(--r-ink2);font-size:0.78rem;line-height:1.7;margin-top:10px}
     /* 要請テンプレート */
     .template-box{background:var(--r-tmplbg);border:1px solid var(--r-border);border-radius:8px;padding:16px;font-size:0.82rem;white-space:pre-wrap;line-height:1.8;word-break:break-all;margin-top:10px;color:var(--r-ink)}
     /* 印刷ボタン */
@@ -2182,7 +2188,9 @@ ${txData}
 
 ${requestBlocks}
 
-分析ポイント：TX件数10件以下→専用ウォレット疑い、残高ほぼゼロ→使い捨て、短時間転送→計画的犯行、取引所ごとの窓口（法執行機関ポータル/メール/チケット）を明記`;
+分析ポイント：TX件数10件以下→専用ウォレット疑い、残高ほぼゼロ→使い捨て、短時間転送→計画的犯行、取引所ごとの窓口（法執行機関ポータル/メール/チケット）を明記
+
+残高の扱い：上記の「残高」は各アドレスに現在入っている総額です。最終到達先が取引所の場合、その残高は取引所ウォレット全体の合算額で他の利用者の資産も含みます。被害者の資金が残っている額ではないため、残高を根拠に回収可能性や返金額を示唆しないでください。`;
 
     // 一時的なレート超過（RPM）は待てば通るので3回まで再試行する
     let lastErr = '不明';
