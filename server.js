@@ -1378,47 +1378,78 @@ function getSheets() {
 const HEARING_SHEET_ID  = process.env.HEARING_SHEET_ID || GOOGLE_SHEET_ID;
 const HEARING_SHEET_TAB = process.env.HEARING_SHEET_TAB || 'ヒアリング';
 const HEARING_FIELDS = [
-  ['submittedAt',  '送信日時'],
-  ['customerName', 'お名前'],
-  ['email',        'メールアドレス'],
-  ['reportUrl',    '報告書URL'],
-  ['firstTime',    '最初の送金日時'],
-  ['firstAmount',  '最初の送金数量'],
-  ['firstChain',   'チェーン'],
-  ['firstExchange','到達取引所（推定）'],
-  ['a1',  'A1 名目'],
-  ['a2',  'A2 送金先のサイト・アプリ'],
-  ['a3',  'A3 アドレスの渡され方'],
-  ['a4',  'A4 送金直前に言われたこと'],
-  ['b1',  'B1 相手の名乗り'],
-  ['b2',  'B2 最初の接触経路'],
-  ['b3',  'B3 連絡手段'],
-  ['b4',  'B4 相手のアカウント・電話'],
-  ['b5',  'B5 やり取りの期間'],
-  ['c1',  'C1 送金回数'],
-  ['c2',  'C2 総額（円）'],
-  ['c3',  'C3 送金の手段'],
-  ['c4',  'C4 他のTXID'],
-  ['c5',  'C5 銀行振込先'],
-  ['d1',  'D1 追加請求'],
-  ['d2',  'D2 出金を試みたか'],
-  ['d3',  'D3 相手と連絡が取れるか'],
-  ['d4',  'D4 サイト・アプリの状況'],
-  ['e1',  'E1 警察への相談'],
-  ['e2',  'E2 取引所への申告'],
-  ['e3',  'E3 回収業者への連絡'],
-  ['f1',  'F 保全している証拠'],
-  ['note','自由記入'],
-  ['token','申込トークン'],
+  ['submittedAt',  '送信日時',              150],
+  ['customerName', 'お名前',                120],
+  ['email',        'メールアドレス',        210],
+  ['reportUrl',    '報告書URL',             230],
+  ['firstTime',    '最初の送金日時',        150],
+  ['firstAmount',  '最初の送金数量',        140],
+  ['firstChain',   'チェーン',               80],
+  ['firstExchange','到達取引所（推定）',    160],
+  ['a1',  'A1 名目',                        190],
+  ['a2',  'A2 送金先のサイト・アプリ',      230],
+  ['a3',  'A3 アドレスの渡され方',          160],
+  ['a4',  'A4 送金直前に言われたこと',      280],
+  ['b1',  'B1 相手の名乗り',                190],
+  ['b2',  'B2 最初の接触経路',              150],
+  ['b3',  'B3 連絡手段',                    170],
+  ['b4',  'B4 相手のアカウント・電話',      190],
+  ['b5',  'B5 やり取りの期間',              180],
+  ['c1',  'C1 送金回数',                     95],
+  ['c2',  'C2 総額（円）',                  120],
+  ['c3',  'C3 送金の手段',                  190],
+  ['c4',  'C4 他のTXID',                    230],
+  ['c5',  'C5 銀行振込先',                  230],
+  ['d1',  'D1 追加請求',                    110],
+  ['d2',  'D2 出金を試みたか',              150],
+  ['d3',  'D3 相手と連絡が取れるか',        160],
+  ['d4',  'D4 サイト・アプリの状況',        170],
+  ['e1',  'E1 警察への相談',                130],
+  ['e2',  'E2 取引所への申告',              130],
+  ['e3',  'E3 回収業者への連絡',            140],
+  ['f1',  'F 保全している証拠',             250],
+  ['note','自由記入',                       300],
+  ['token','申込トークン',                  260],
 ];
+
+/* シートは運用者が毎日見る場所なので、届いた時点で読める形にしておく。
+   見出し固定・折り返し・列幅・フィルタまで入れる。何度呼んでも同じ状態になる。 */
+async function formatHearingTab(sheets, sheetId) {
+  const cols = HEARING_FIELDS.length;
+  const reqs = [
+    { updateSheetProperties: {
+        properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
+        fields: 'gridProperties.frozenRowCount' } },
+    // 見出し行
+    { repeatCell: {
+        range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: cols },
+        cell: { userEnteredFormat: {
+          backgroundColor: { red: 0.05, green: 0.16, blue: 0.25 },
+          horizontalAlignment: 'LEFT', verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP',
+          textFormat: { bold: true, fontSize: 10, foregroundColor: { red: 1, green: 1, blue: 1 } } } },
+        fields: 'userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)' } },
+    // 本文：自由記入が長いので折り返して上揃え
+    { repeatCell: {
+        range: { sheetId, startRowIndex: 1, startColumnIndex: 0, endColumnIndex: cols },
+        cell: { userEnteredFormat: { wrapStrategy: 'WRAP', verticalAlignment: 'TOP', textFormat: { fontSize: 10 } } },
+        fields: 'userEnteredFormat(wrapStrategy,verticalAlignment,textFormat)' } },
+  ];
+  HEARING_FIELDS.forEach((f, i) => {
+    reqs.push({ updateDimensionProperties: {
+      range: { sheetId, dimension: 'COLUMNS', startIndex: i, endIndex: i + 1 },
+      properties: { pixelSize: f[2] || 150 }, fields: 'pixelSize' } });
+  });
+  reqs.push({ setBasicFilter: { filter: { range: { sheetId, startRowIndex: 0, startColumnIndex: 0, endColumnIndex: cols } } } });
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId: HEARING_SHEET_ID, requestBody: { requests: reqs } });
+}
 
 /* タブが無ければ作る。運用者が手で用意しなくても書き込めるようにするため。
    既にあれば Google 側がエラーを返すので、その時は何もしない。 */
 async function ensureHearingTab(sheets) {
   try {
     const meta = await sheets.spreadsheets.get({ spreadsheetId: HEARING_SHEET_ID });
-    const exists = (meta.data.sheets || []).some(sh => sh.properties && sh.properties.title === HEARING_SHEET_TAB);
-    if (exists) return true;
+    const found = (meta.data.sheets || []).find(sh => sh.properties && sh.properties.title === HEARING_SHEET_TAB);
+    if (found) return true;
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: HEARING_SHEET_ID,
       requestBody: { requests: [{ addSheet: { properties: { title: HEARING_SHEET_TAB } } }] },
@@ -1429,6 +1460,9 @@ async function ensureHearingTab(sheets) {
       valueInputOption: 'RAW',
       requestBody: { values: [HEARING_FIELDS.map(f => f[1])] },
     });
+    const meta2 = await sheets.spreadsheets.get({ spreadsheetId: HEARING_SHEET_ID });
+    const made  = (meta2.data.sheets || []).find(sh => sh.properties && sh.properties.title === HEARING_SHEET_TAB);
+    if (made) await formatHearingTab(sheets, made.properties.sheetId).catch(e => console.error('[Sheets] 整形に失敗:', e.message));
     console.log('[Sheets] ヒアリング用タブを作成しました');
     return true;
   } catch (e) {
@@ -3296,6 +3330,32 @@ app.post('/api/hearing/submit', express.json(), async (req, res) => {
   h.sheetLogged = r.ok;
   h.sheetError  = r.ok ? null : r.reason;
   saveHearings();
+});
+
+/* すでにあるタブを整形し直す。見出しを変えたときや、手で触って崩れたときに戻す。 */
+app.get('/api/admin/hearing-format', async (_req, res) => {
+  const sheets = getSheets();
+  if (!sheets || !HEARING_SHEET_ID) return res.json({ ok: false, reason: 'Sheets未設定' });
+  try {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: HEARING_SHEET_ID });
+    const tab  = (meta.data.sheets || []).find(sh => sh.properties && sh.properties.title === HEARING_SHEET_TAB);
+    if (!tab) return res.json({ ok: false, reason: 'タブ「' + HEARING_SHEET_TAB + '」が見つかりません' });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: HEARING_SHEET_ID,
+      range: HEARING_SHEET_TAB + '!A1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [HEARING_FIELDS.map(f => f[1])] },
+    });
+    await formatHearingTab(sheets, tab.properties.sheetId);
+    res.json({
+      ok: true,
+      spreadsheet: meta.data.properties && meta.data.properties.title,
+      tab: HEARING_SHEET_TAB, columns: HEARING_FIELDS.length,
+      url: 'https://docs.google.com/spreadsheets/d/' + HEARING_SHEET_ID + '/edit#gid=' + tab.properties.sheetId,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, reason: e.message });
+  }
 });
 
 /* シートへの書き込みが失敗した回答をまとめて送り直す。
