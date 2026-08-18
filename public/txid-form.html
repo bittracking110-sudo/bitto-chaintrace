@@ -310,6 +310,8 @@
       document.getElementById('resultArea').innerHTML =
         `<a href="${report.reportUrl}" target="_blank" style="display:block;background:#c9a96e;color:#0a0c12;text-decoration:none;padding:14px;border-radius:8px;font-weight:700;letter-spacing:1px;margin-bottom:12px">📄 調査報告書を開く</a>` +
         (report.chatUrl ? `<a href="${report.chatUrl}" target="_blank" style="display:block;background:#2a2b2e;color:#c9a96e;text-decoration:none;padding:14px;border-radius:8px;font-weight:600;border:1px solid #c9a96e">💬 専任サポートチャット</a>` : '') +
+        // 経緯をうかがって時系列の資料にする。報告書ができた直後が一番思い出しやすい。
+        `<a href="/hearing/${token}" style="display:block;background:#2a2b2e;color:#c9a96e;text-decoration:none;padding:14px;border-radius:8px;font-weight:600;border:1px solid #c9a96e;margin-top:12px">📑 被害時系列パックを作る（経緯をうかがいます）</a>` +
         `<p style="font-size:0.78rem;color:#8b91a0;margin-top:14px">このページのリンクは大切に保管してください。</p>`;
     }
 

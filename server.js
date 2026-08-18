@@ -292,6 +292,24 @@ async function generateReportPdf(reportId) {
   }
 }
 
+/* 被害時系列パックのPDF。報告書と同じChromiumを使い回す。
+   パックは表組みが主で待つ要素が無いので、描画完了だけ待てばよい。 */
+async function generatePackPdf(hearingId, outPath) {
+  const browser = await getPdfBrowser();
+  const page = await browser.newPage();
+  try {
+    await page.goto(`http://127.0.0.1:${PORT}/api/hearing/${hearingId}/pack`,
+      { waitUntil: 'networkidle0', timeout: PDF_TIMEOUT_MS });
+    await page.pdf({
+      path: outPath, format: 'A4', printBackground: true,
+      margin: { top: '12mm', right: '10mm', bottom: '12mm', left: '10mm' },
+    });
+    console.log(`[Pack] PDF生成: ${hearingId}`);
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
 async function loadReport(reportId) {
   if (reportCache.has(reportId)) return reportCache.get(reportId).html;
   try {
@@ -3070,6 +3088,136 @@ app.get('/api/test-txid-form', (req, res) => {
   res.json({ ok: true, url, formToken });
 });
 
+/* ══ 被害時系列パック（ヒアリング＋解析結果の資料）══════════
+   警察・取引所へ相談する場に持っていく紙。読む人は暗号資産に
+   詳しくない前提で、専門用語には短い説明を添える。
+   推定は推定と書き、断定しない。 */
+/* パックは利用者の自由記入を紙に載せる。そのまま埋め込むと崩れるのでここで無害化する。 */
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+}
+
+function packRow(label, value) {
+  if (value == null || value === '' || (Array.isArray(value) && !value.length)) return '';
+  const v = Array.isArray(value) ? value.join(' / ') : String(value);
+  return `<tr><th>${escHtml(label)}</th><td>${escHtml(v).split(String.fromCharCode(10)).join('<br>')}</td></tr>`;
+}
+
+function buildTimelinePackHTML(h, form) {
+  const a    = h.answers || {};
+  const txs  = form.txSummary || [];
+  const now  = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  const name = h.customerName || '';
+
+  // 時系列：チェーンに記録が残っている送金と、ご回答から分かる出来事を混ぜて古い順に並べる。
+  const events = txs.map(t => ({
+    time: t.blockTime || '',
+    what: `${t.tokenSymbol ? `${t.tokenAmount} ${t.tokenSymbol}` : `${t.amount} ${t.chain}`} を送金`
+        + (t.exchange ? `（到達先の推定：${t.exchange}）` : ''),
+    src: 'ブロックチェーンの記録',
+  }));
+  if (a.b5) events.unshift({ time: String(a.b5).split('〜')[0].trim(), what: '相手と接触（' + (a.b2 || '経路不明') + '）', src: 'ご回答' });
+  if (a.d1 === 'はい') events.push({ time: '（現在）', what: '追加の送金・費用を要求されている', src: 'ご回答' });
+  if (a.d2 && a.d2 !== '試していない') events.push({ time: '（時期不明）', what: '出金を試みた：' + a.d2, src: 'ご回答' });
+
+  const txRows = txs.map((t, i) => `<tr>
+      <td>${i + 1}</td><td>${escHtml(t.blockTime || '不明')}</td>
+      <td>${escHtml(t.tokenSymbol ? `${t.tokenAmount} ${t.tokenSymbol}` : `${t.amount} ${t.chain}`)}</td>
+      <td class="mono">${escHtml(t.txid)}</td>
+      <td>${escHtml(t.exchange || '未判明')}</td></tr>`).join('');
+
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BitTo 被害時系列パック</title><style>
+body{font-family:-apple-system,'Hiragino Kaku Gothic ProN','Noto Sans JP',Meiryo,sans-serif;color:#111;
+  line-height:1.8;max-width:820px;margin:0 auto;padding:28px 22px;font-size:14px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:26px 0 8px;padding-bottom:5px;border-bottom:2px solid #111}
+.meta{color:#666;font-size:12px;margin-bottom:6px}
+.note{background:#f5f5f5;border-left:3px solid #999;padding:10px 12px;font-size:12px;color:#444;margin:10px 0}
+table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12.5px}
+th,td{border:1px solid #ccc;padding:7px 8px;text-align:left;vertical-align:top}
+th{background:#f0f0f0;width:30%}
+table.tl th{width:auto}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;word-break:break-all}
+.warn{background:#fff3f3;border:1px solid #e0a0a0;padding:12px 14px;border-radius:6px}
+.warn b{color:#b32}
+.btns{margin:18px 0}
+button{font:inherit;padding:9px 16px;border:1px solid #333;background:#111;color:#fff;border-radius:6px;cursor:pointer}
+@media print{.btns{display:none}body{padding:0}}
+</style></head><body>
+<h1>BitTo 被害時系列パック</h1>
+<div class="meta">作成日時：${escHtml(now)}${name ? '　／　ご依頼者：' + escHtml(name) + ' 様' : ''}</div>
+<div class="note">本資料は、公開ブロックチェーンの解析結果と、ご本人からうかがった内容をまとめたものです。
+到達取引所等は<b>推定を含みます</b>。資産の回収・返還を保証するものではありません。</div>
+<div class="btns"><button onclick="window.print()">印刷 / PDFで保存</button></div>
+
+<h2>1. 概要</h2>
+<table>
+${packRow('最初の送金（チェーン記録）', txs[0] ? `${txs[0].blockTime}　${txs[0].tokenSymbol ? `${txs[0].tokenAmount} ${txs[0].tokenSymbol}` : `${txs[0].amount} ${txs[0].chain}`}` : '')}
+${packRow('送金元アドレス', txs[0] ? txs[0].sender : '')}
+${packRow('送金の回数（ご申告）', a.c1)}
+${packRow('総額（ご申告・概算）', a.c2)}
+${packRow('送金の手段', a.c3)}
+${packRow('報告書', form.report ? form.report.reportUrl : '')}
+</table>
+
+<h2>2. 時系列</h2>
+<table class="tl"><tr><th style="width:22%">日時</th><th>出来事</th><th style="width:24%">根拠</th></tr>
+${events.map(e => `<tr><td>${escHtml(e.time || '不明')}</td><td>${escHtml(e.what)}</td><td>${escHtml(e.src)}</td></tr>`).join('')}
+</table>
+<div class="note">「ブロックチェーンの記録」はチェーン上に残っている事実です。「ご回答」はご本人の記憶にもとづく内容です。</div>
+
+<h2>3. 送金の記録（解析結果）</h2>
+${txs.length ? `<table class="tl"><tr><th style="width:6%">#</th><th style="width:20%">日時</th><th style="width:18%">数量</th><th>TXID</th><th style="width:20%">到達取引所（推定）</th></tr>${txRows}</table>`
+             : '<div class="note">解析済みの送金がまだありません。</div>'}
+
+<h2>4. 最初の送金の経緯</h2>
+<table>
+${packRow('名目', a.a1)}
+${packRow('送金先として指示されたサイト・アプリ', a.a2)}
+${packRow('アドレスの渡され方', a.a3)}
+${packRow('送金直前に言われたこと', a.a4)}
+</table>
+
+<h2>5. 相手方の情報</h2>
+<table>
+${packRow('名乗り', a.b1)}
+${packRow('最初の接触経路', a.b2)}
+${packRow('連絡手段', a.b3)}
+${packRow('アカウント名・ID・電話番号', a.b4)}
+${packRow('やり取りの期間', a.b5)}
+</table>
+
+<h2>6. いまの状況</h2>
+<table>
+${packRow('追加の送金・費用の要求', a.d1)}
+${packRow('出金を試みたか', a.d2)}
+${packRow('相手との連絡', a.d3)}
+${packRow('相手のサイト・アプリ', a.d4)}
+${packRow('銀行振込先（判明分）', a.c5)}
+${packRow('他のTXID（ご申告）', a.c4)}
+</table>
+
+<h2>7. すでに行った対応・保全している証拠</h2>
+<table>
+${packRow('警察への相談', a.e1)}
+${packRow('取引所への申告', a.e2)}
+${packRow('回収業者への連絡', a.e3)}
+${packRow('保全している証拠', a.f1)}
+${packRow('その他', a.note)}
+</table>
+${a.e3 === '連絡した' ? '<div class="warn"><b>回収業者にご連絡済みとのことです。</b>「必ず取り戻せる」「回収の前に前払い金が必要」と言われている場合は、二次被害の典型的なサインです。支払い前に、警察・消費者ホットライン188へご相談ください。</div>' : ''}
+
+<h2>8. BitToができること／できないこと</h2>
+<table><tr><th style="width:50%">できること</th><th>できないこと</th></tr>
+<tr><td>公開チェーンの資金経路の解析<br>着金先取引所・サービスの推定<br>警察・取引所への提出資料の整理<br>不正利用申告文の作成<br>相談先・必要書類の案内</td>
+<td>取引所へ凍結を命令する<br>KYC情報を強制的に取得する<br>資金の残存を保証する<br>被害資金の返還を保証する<br>秘密鍵で資金を取り戻す</td></tr></table>
+<div class="note">緊急・進行中の犯罪は110。緊急でない警察相談は#9110、被害届は最寄りの警察署、消費者トラブルは188、
+詐欺的投資・無登録業者は金融庁の相談窓口が候補です。</div>
+</body></html>`;
+}
+
 /* ══ ヒアリングAPI ═══════════════════════════════════════════
    購入者限定。開始には決済後に発行される申込トークンが要る。
    1つの申込に1つのヒアリング（作り直さず再開させる）。 */
@@ -3146,6 +3294,33 @@ app.post('/api/hearing/submit', express.json(), async (req, res) => {
   h.sheetLogged = ok;
   saveHearings();
 });
+
+// 資料本体。PDF化でもこのURLを開くので、認証は報告書と同じ「URLを知っている人だけ」の方式。
+app.get('/api/hearing/:id/pack', (req, res) => {
+  const h = hearings.get(req.params.id);
+  if (!h) return res.status(404).send('見つかりません');
+  const form = txidFormTokens.get(h.token) || {};
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(buildTimelinePackHTML(h, form));
+});
+
+app.get('/api/hearing/:id/pack.pdf', async (req, res) => {
+  const h = hearings.get(req.params.id);
+  if (!h) return res.status(404).send('見つかりません');
+  try {
+    const file = path.join(REPORTS_DIR, `pack-${h.id}.pdf`);
+    await generatePackPdf(h.id, file);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="BitTo-timeline-${h.id}.pdf"`);
+    fs.createReadStream(file).pipe(res);
+  } catch (e) {
+    console.error('[Pack] PDF生成に失敗:', e.message);
+    res.status(500).send('PDFを作成できませんでした。ページ上部の「印刷 / PDFで保存」をお試しください。');
+  }
+});
+
+// ヒアリング画面。購入者に配るリンクは /hearing/<申込トークン>。
+app.get('/hearing/:token', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'hearing.html')));
 
 // TXID入力フォーム（ワンタイムリンク）
 app.get('/txid-form/:token', (req, res) => {

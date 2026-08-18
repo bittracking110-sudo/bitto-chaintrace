@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>被害時系列パック｜BitTo</title>
+<style>
+:root{
+  --bg:#0C1728; --panel:#152741; --panel2:#1B3050; --line:#2C4468;
+  --ink:#C7D6EC; --sub:#8FA3C4; --sub2:#B9CBE4; --teal:#34E1C8; --amber:#FBBF24;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,'Hiragino Sans','Noto Sans JP',Meiryo,sans-serif;
+  font-size:15px;line-height:1.75;padding:0 0 120px}
+header{position:sticky;top:0;z-index:20;background:rgba(12,23,40,.94);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line);padding:14px 16px}
+header .t{font-size:15px;font-weight:800;color:#EAF6F3}
+header .s{font-size:11.5px;color:var(--sub);margin-top:2px}
+.wrap{max-width:680px;margin:0 auto;padding:18px 16px}
+.lead{font-size:12.5px;color:var(--sub);line-height:1.8;margin-bottom:18px}
+.anchor{background:var(--panel);border:1px solid var(--teal);border-radius:12px;padding:14px 16px;margin-bottom:20px}
+.anchor .h{font-size:12px;color:var(--teal);font-weight:800;margin-bottom:8px}
+.anchor .row{display:flex;gap:10px;font-size:13px;padding:3px 0}
+.anchor .row .k{color:var(--sub);flex:none;width:6.5em}
+.anchor .row .v{color:#EAF6F3;font-weight:600;word-break:break-all}
+.anchor .note{font-size:11px;color:var(--sub);margin-top:8px;line-height:1.7}
+.sec{margin-bottom:26px}
+.sec > h2{font-size:13px;font-weight:800;color:var(--teal);letter-spacing:.4px;margin:0 0 4px}
+.sec > .sd{font-size:11.5px;color:var(--sub);margin-bottom:12px;line-height:1.7}
+.q{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 15px;margin-bottom:10px}
+.q .ql{font-size:13.5px;font-weight:700;color:var(--sub2);margin-bottom:10px;line-height:1.6}
+.q .qh{font-size:11.5px;color:var(--sub);margin:-6px 0 10px;line-height:1.6}
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chip{border:1px solid var(--line);background:var(--panel2);color:var(--sub2);border-radius:999px;
+  padding:9px 13px;font-size:12.5px;cursor:pointer;font-family:inherit;line-height:1.4}
+.chip.on{background:rgba(52,225,200,.15);border-color:var(--teal);color:#c8f5ea;font-weight:700}
+input[type=text],textarea{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+  color:#EAF6F3;font-family:inherit;font-size:16px;padding:11px 12px;line-height:1.6}
+input[type=text]:focus,textarea:focus{outline:none;border-color:var(--teal)}
+textarea{resize:vertical;min-height:82px}
+.save{position:fixed;left:0;right:0;bottom:0;background:rgba(12,23,40,.96);border-top:1px solid var(--line);
+  padding:12px 16px calc(12px + env(safe-area-inset-bottom));z-index:30}
+.save .inner{max-width:680px;margin:0 auto;display:flex;align-items:center;gap:12px}
+.save .st{font-size:11.5px;color:var(--sub);flex:1}
+.go{background:linear-gradient(180deg,#3DEAD1,#34E1C8 55%,#22b7a3);color:#062A25;border:none;border-radius:11px;
+  font-weight:800;font-size:15px;padding:14px 22px;cursor:pointer;font-family:inherit}
+.go:disabled{opacity:.5}
+.note{background:rgba(148,168,196,.08);border:1px solid var(--line);border-radius:10px;padding:12px 13px;
+  font-size:11.5px;color:var(--sub);line-height:1.75;margin-bottom:20px}
+.note a{color:var(--teal)}
+.done{text-align:center;padding:40px 20px}
+.done .ic{font-size:40px}
+.done h2{font-size:17px;margin:12px 0 8px;color:#EAF6F3}
+.done p{font-size:13px;color:var(--sub);line-height:1.8;margin-bottom:22px}
+.done a.btn{display:block;background:var(--panel2);border:1px solid var(--teal);color:#c8f5ea;text-decoration:none;
+  border-radius:11px;padding:14px;font-weight:700;font-size:14px;margin-bottom:10px}
+.err{background:rgba(248,113,113,.12);border:1px solid rgba(248,113,113,.5);border-radius:12px;
+  padding:16px;font-size:13px;line-height:1.8;margin:20px 0}
+</style>
+</head>
+<body>
+<header>
+  <div class="t">被害時系列パック（ご購入者向け）</div>
+  <div class="s">調査結果をもとに、経緯をうかがって資料にまとめます</div>
+</header>
+
+<div class="wrap" id="wrap">
+  <div class="lead">読み込んでいます…</div>
+</div>
+
+<div class="save" id="savebar" style="display:none">
+  <div class="inner">
+    <div class="st" id="savest">自動保存されます</div>
+    <button class="go" id="submitBtn">資料を作成する</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  var token = location.pathname.split('/').filter(Boolean).pop();
+  var hearingId = null, answers = {}, first = null, saveTimer = null;
+
+  /* 設問。key はサーバーの HEARING_FIELDS と揃える。
+     type: choice=1つ選ぶ / multi=複数選ぶ / text / textarea */
+  var SECTIONS = [
+    { h:'A. 最初の送金について', d:'上の記録の送金について、覚えている範囲でお答えください。', qs:[
+      { key:'a1', type:'choice', q:'どんな名目で送るよう言われましたか', opts:[
+        '投資の入金','出金するための税金・手数料','保証金・証拠金','アカウント凍結の解除費用',
+        'システムエラーの復旧費用','サポートの指示','その他'] },
+      { key:'a2', type:'text', q:'どこへ送るよう指示されましたか', hint:'サイト名・アプリ名・URL（覚えている範囲で構いません）' },
+      { key:'a3', type:'choice', q:'送金先のアドレスは、どのように渡されましたか', opts:[
+        'チャットに貼られた','QRコード','サイトの入金画面','電話口で読み上げられた','その他'] },
+      { key:'a4', type:'textarea', q:'送金の直前、相手は何と言っていましたか', hint:'言われたことをそのまま書いていただいて構いません' },
+    ]},
+    { h:'B. 相手について', d:'分かる範囲で構いません。空欄でも先に進めます。', qs:[
+      { key:'b1', type:'text', q:'相手の名乗り（氏名・会社名・肩書き）' },
+      { key:'b2', type:'choice', q:'最初の接触経路', opts:[
+        'SNS','マッチングアプリ','ネット広告','メール・SMS','電話','知人の紹介','その他'] },
+      { key:'b3', type:'multi', q:'やり取りに使った連絡手段', opts:[
+        'LINE','Telegram','WhatsApp','Instagram DM','X（Twitter）DM','Facebook','メール','電話','その他'] },
+      { key:'b4', type:'text', q:'相手のアカウント名・ID・電話番号', hint:'分かるものだけで構いません' },
+      { key:'b5', type:'text', q:'やり取りの期間', hint:'例：2026年3月上旬 〜 2026年5月2日' },
+    ]},
+    { h:'C. 送金の全体像', d:'', qs:[
+      { key:'c1', type:'text', q:'送金は全部で何回ですか' },
+      { key:'c2', type:'text', q:'総額はおおよそいくらですか', hint:'日本円の概算で構いません' },
+      { key:'c3', type:'multi', q:'送金の手段', opts:[
+        '暗号資産取引所から','自分のウォレットから','銀行振込','電子マネー','その他'] },
+      { key:'c4', type:'textarea', q:'他にTXIDがあれば入力してください', hint:'改行で複数入力できます。追加の解析が必要な場合はご連絡します' },
+      { key:'c5', type:'textarea', q:'銀行振込が含まれる場合、振込先', hint:'銀行名・支店・口座番号・名義（分かる範囲で）' },
+    ]},
+    { h:'D. いまの状況', d:'', qs:[
+      { key:'d1', type:'choice', q:'いま追加の送金や費用を要求されていますか', opts:['はい','いいえ'] },
+      { key:'d2', type:'choice', q:'出金を試みましたか', opts:[
+        '試していない','できた','できなかった','手数料を要求された','アカウントが凍結された'] },
+      { key:'d3', type:'choice', q:'相手と今も連絡が取れますか', opts:['取れる','取れない','こちらから連絡していない'] },
+      { key:'d4', type:'choice', q:'相手のサイト・アプリは今も表示できますか', opts:[
+        '表示できる','消えた・つながらない','ログインできない','分からない'] },
+    ]},
+    { h:'E. すでに行った対応', d:'', qs:[
+      { key:'e1', type:'choice', q:'警察に相談しましたか', opts:['相談した','まだ'] },
+      { key:'e2', type:'choice', q:'取引所へ申告しましたか', opts:['申告した','まだ'] },
+      { key:'e3', type:'choice', q:'回収業者に連絡しましたか', opts:['連絡した','まだ'] },
+    ]},
+    { h:'F. 保全している証拠', d:'手元にあるものを選んでください。', qs:[
+      { key:'f1', type:'multi', q:'保存してあるもの', opts:[
+        '相手とのやり取りのスクショ','メール','通帳・振込明細','サイトのURL','通話の録音','契約書・規約','送金画面のスクショ'] },
+      { key:'note', type:'textarea', q:'その他、伝えておきたいこと', hint:'上の設問に当てはまらないことがあれば' },
+    ]},
+  ];
+
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  function fmtFirst(f){
+    if (!f) return null;
+    var amt = f.tokenSymbol ? (f.tokenAmount + ' ' + f.tokenSymbol)
+            : (f.amount != null ? (f.amount + ' ' + (f.chain || '')) : '不明');
+    return { time: f.blockTime || '不明', amount: amt, sender: f.sender || '不明',
+             exchange: f.exchange || '（既知の取引所には一致せず）' };
+  }
+
+  function render(){
+    var w = document.getElementById('wrap');
+    var f = fmtFirst(first);
+    var html = '';
+    html += '<p class="lead">調査で分かった<b style="color:var(--sub2)">最初の送金</b>を起点に、経緯をうかがいます。'
+          + 'お答えいただいた内容は、チェーンの解析結果と合わせて<b style="color:var(--sub2)">時系列の資料</b>にまとめます。'
+          + '入力は自動で保存されるので、途中で閉じても同じリンクから続きを書けます。</p>';
+    if (f) {
+      html += '<div class="anchor"><div class="h">◆ 調査で判明している最初の送金</div>'
+            + '<div class="row"><div class="k">日時</div><div class="v">' + esc(f.time) + '</div></div>'
+            + '<div class="row"><div class="k">数量</div><div class="v">' + esc(f.amount) + '</div></div>'
+            + '<div class="row"><div class="k">送金元</div><div class="v">' + esc(f.sender) + '</div></div>'
+            + '<div class="row"><div class="k">到達先</div><div class="v">' + esc(f.exchange) + '</div></div>'
+            + '<div class="note">※ これより前の送金があれば、下のCで教えてください。</div></div>';
+    } else {
+      // 調査より先にこの画面を開いた場合。空欄のまま出すと壊れて見えるので理由を書く。
+      html += '<div class="anchor" style="border-color:var(--line)"><div class="h" style="color:var(--sub2)">◆ 最初の送金</div>'
+            + '<div class="note" style="margin-top:0">TXIDの調査が終わると、ここに日時・数量・送金元が表示されます。'
+            + '先にお答えいただいても構いません。</div></div>';
+    }
+    html += '<div class="note">入力いただいた内容は報告書と同じ場所に保管し、資料の作成と当社からのご連絡にのみ使用します。'
+          + '削除をご希望の場合は<a href="/bitto/data-deletion">データ削除のご請求</a>から手続きできます。'
+          + '<b style="color:var(--sub2)">パスワード・秘密鍵・シードフレーズ・2段階認証コードは絶対に入力しないでください。</b></div>';
+
+    SECTIONS.forEach(function(sec){
+      html += '<div class="sec"><h2>' + esc(sec.h) + '</h2>';
+      if (sec.d) html += '<div class="sd">' + esc(sec.d) + '</div>';
+      sec.qs.forEach(function(q){
+        html += '<div class="q" data-key="' + q.key + '" data-type="' + q.type + '">';
+        html += '<div class="ql">' + esc(q.q) + '</div>';
+        if (q.hint) html += '<div class="qh">' + esc(q.hint) + '</div>';
+        if (q.type === 'choice' || q.type === 'multi') {
+          html += '<div class="chips">';
+          q.opts.forEach(function(o){ html += '<button type="button" class="chip" data-v="' + esc(o) + '">' + esc(o) + '</button>'; });
+          html += '</div>';
+        } else if (q.type === 'text') {
+          html += '<input type="text" data-in="1">';
+        } else {
+          html += '<textarea data-in="1"></textarea>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+    });
+    w.innerHTML = html;
+    restore();
+    bind();
+    document.getElementById('savebar').style.display = 'block';
+  }
+
+  function restore(){
+    document.querySelectorAll('.q').forEach(function(qEl){
+      var key = qEl.dataset.key, type = qEl.dataset.type, val = answers[key];
+      if (val == null || val === '') return;
+      if (type === 'choice') {
+        qEl.querySelectorAll('.chip').forEach(function(c){ if (c.dataset.v === val) c.classList.add('on'); });
+      } else if (type === 'multi') {
+        var arr = Array.isArray(val) ? val : String(val).split(' / ');
+        qEl.querySelectorAll('.chip').forEach(function(c){ if (arr.indexOf(c.dataset.v) >= 0) c.classList.add('on'); });
+      } else {
+        qEl.querySelector('[data-in]').value = val;
+      }
+    });
+  }
+
+  function bind(){
+    document.querySelectorAll('.q').forEach(function(qEl){
+      var key = qEl.dataset.key, type = qEl.dataset.type;
+      if (type === 'choice' || type === 'multi') {
+        qEl.querySelectorAll('.chip').forEach(function(c){
+          c.addEventListener('click', function(){
+            if (type === 'choice') {
+              var was = c.classList.contains('on');
+              qEl.querySelectorAll('.chip').forEach(function(x){ x.classList.remove('on'); });
+              if (!was) c.classList.add('on');
+              answers[key] = was ? '' : c.dataset.v;
+            } else {
+              c.classList.toggle('on');
+              answers[key] = [].slice.call(qEl.querySelectorAll('.chip.on')).map(function(x){ return x.dataset.v; });
+            }
+            queueSave();
+          });
+        });
+      } else {
+        qEl.querySelector('[data-in]').addEventListener('input', function(e){
+          answers[key] = e.target.value; queueSave();
+        });
+      }
+    });
+    document.getElementById('submitBtn').addEventListener('click', submit);
+  }
+
+  function setStatus(t){ document.getElementById('savest').textContent = t; }
+
+  /* 入力のたびに投げると回数が増える。手が止まってから送る。 */
+  function queueSave(){
+    setStatus('入力中…');
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, 900);
+  }
+
+  function save(cb){
+    if (!hearingId) return;
+    fetch('/api/hearing/save', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ id: hearingId, answers: answers }),
+    }).then(function(r){ return r.json(); }).then(function(){
+      setStatus('保存しました');
+      if (cb) cb();
+    }).catch(function(){ setStatus('保存できませんでした（通信をご確認ください）'); });
+  }
+
+  function submit(){
+    var btn = document.getElementById('submitBtn');
+    btn.disabled = true; setStatus('送信しています…');
+    fetch('/api/hearing/submit', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ id: hearingId, answers: answers }),
+    }).then(function(r){ return r.json(); }).then(function(j){
+      if (!j.ok) throw new Error(j.error || '送信に失敗しました');
+      document.getElementById('savebar').style.display = 'none';
+      document.getElementById('wrap').innerHTML =
+        '<div class="done"><div class="ic">📑</div><h2>資料ができました</h2>'
+        + '<p>お答えいただいた内容と調査結果を、時系列の資料にまとめました。<br>印刷・PDF保存して、警察や取引所への相談にお使いください。</p>'
+        + '<a class="btn" href="/api/hearing/' + hearingId + '/pack" target="_blank" rel="noopener">📄 被害時系列パックを開く</a>'
+        + '<a class="btn" href="/api/hearing/' + hearingId + '/pack.pdf">⬇️ PDFで保存する</a></div>';
+      window.scrollTo(0, 0);
+    }).catch(function(e){
+      btn.disabled = false; setStatus(e.message);
+    });
+  }
+
+  fetch('/api/hearing/start', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ token: token }),
+  }).then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); })
+    .then(function(res){
+      if (!res.ok) throw new Error(res.j.error || '開けませんでした');
+      hearingId = res.j.id; first = res.j.first;
+      return fetch('/api/hearing/' + hearingId).then(function(r){ return r.json(); });
+    })
+    .then(function(g){
+      answers = g.answers || {};
+      if (g.status === 'submitted') {
+        document.getElementById('wrap').innerHTML =
+          '<div class="done"><div class="ic">📑</div><h2>送信済みです</h2>'
+          + '<p>すでにご回答をいただいています。資料はいつでも開けます。</p>'
+          + '<a class="btn" href="/api/hearing/' + hearingId + '/pack" target="_blank" rel="noopener">📄 被害時系列パックを開く</a>'
+          + '<a class="btn" href="/api/hearing/' + hearingId + '/pack.pdf">⬇️ PDFで保存する</a></div>';
+        return;
+      }
+      render();
+    })
+    .catch(function(e){
+      document.getElementById('wrap').innerHTML =
+        '<div class="err">' + esc(e.message) + '<br><br>報告書をご購入いただいた方にお送りしているリンクからお開きください。'
+        + 'お心当たりがある場合はサポートまでご連絡ください。</div>';
+    });
+})();
+</script>
+</body>
+</html>
