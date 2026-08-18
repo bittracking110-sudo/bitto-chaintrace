@@ -1433,15 +1433,16 @@ async function ensureHearingTab(sheets) {
     return true;
   } catch (e) {
     console.error('[Sheets] ヒアリングタブの準備に失敗:', e.message);
-    return false;
+    return e.message;
   }
 }
 
 async function appendHearingToSheet(record) {
   try {
     const sheets = getSheets();
-    if (!sheets || !HEARING_SHEET_ID) { console.log('[Sheets] ヒアリング未設定（スキップ）'); return false; }
-    if (!(await ensureHearingTab(sheets))) return false;
+    if (!sheets || !HEARING_SHEET_ID) { console.log('[Sheets] ヒアリング未設定（スキップ）'); return { ok: false, reason: '未設定' }; }
+    const tab = await ensureHearingTab(sheets);
+    if (tab !== true) return { ok: false, reason: tab };
     const row = HEARING_FIELDS.map(([key]) => {
       const v = record[key];
       if (v == null) return '';
@@ -1455,10 +1456,10 @@ async function appendHearingToSheet(record) {
       requestBody: { values: [row] },
     });
     console.log('[Sheets] ヒアリングを追記しました');
-    return true;
+    return { ok: true };
   } catch (e) {
     console.error('[Sheets] appendHearingToSheet エラー:', e.message);
-    return false;
+    return { ok: false, reason: e.message };
   }
 }
 
@@ -3250,6 +3251,7 @@ app.get('/api/hearing/:id', (req, res) => {
     ok: true, id: h.id, status: h.status, answers: h.answers,
     customerName: h.customerName, reportUrl: h.reportUrl,
     first: (form.txSummary || [])[0] || null, txSummary: form.txSummary || [],
+    sheetLogged: h.sheetLogged ?? null, sheetError: h.sheetError || null,
   });
 });
 
@@ -3290,8 +3292,9 @@ app.post('/api/hearing/submit', express.json(), async (req, res) => {
     firstExchange: first.exchange || '',
     token:        h.token,
   };
-  const ok = await appendHearingToSheet(record);
-  h.sheetLogged = ok;
+  const r = await appendHearingToSheet(record);
+  h.sheetLogged = r.ok;
+  h.sheetError  = r.ok ? null : r.reason;
   saveHearings();
 });
 
