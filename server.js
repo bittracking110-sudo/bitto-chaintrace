@@ -1589,6 +1589,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       vbg:'#FBF5F2', vborder:'#E4B9A9', vink:'#B0553C', rbg:'#F7F3EB', rborder:'#DED0B2', rink:'#8A7A52',
       ebg:'#FBF6E9', eborder:'#D8C39A', eink:'#9A7333', usd:'#8A7A52', printbtnbg:'#243349', printbtnink:'#ffffff',
       openbtnbg:'#B88A3E', font:"Georgia,'Times New Roman','Yu Mincho',serif", mono:"'Courier New',monospace",
+      tmplfont:"Georgia,'Times New Roman','Yu Mincho',serif",
     },
     bitto: {
       page:'#0C1728', ink:'#C7D6EC', ink2:'#8FA3C4', card:'#152741', border:'#2C4468', line:'#23385C',
@@ -1597,7 +1598,10 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       monoink:'#9FD9CD', aibg:'#0F2033', aititle:'#34E1C8', aibody:'#B9C9DE', ailabelbg:'#0F6E56', tmplbg:'#122038',
       vbg:'#241826', vborder:'#7A3B3B', vink:'#E8897F', rbg:'#132038', rborder:'#3A557F', rink:'#8FB0E0',
       ebg:'#0F2B28', eborder:'#34E1C8', eink:'#34E1C8', usd:'#5DCAA5', printbtnbg:'#34E1C8', printbtnink:'#062018',
-      openbtnbg:'#2F6FE8', font:"ui-monospace,'SF Mono',Menlo,Consolas,monospace", mono:"ui-monospace,'SF Mono',Menlo,monospace",
+      openbtnbg:'#2F6FE8',
+      font:"'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP','Noto Sans CJK JP','Yu Gothic UI','Yu Gothic',Meiryo,'Helvetica Neue',Arial,sans-serif",
+      mono:"ui-monospace,'SF Mono',Menlo,Consolas,monospace",
+      tmplfont:"ui-monospace,'SF Mono',Menlo,Consolas,monospace",
     },
   };
   const TH = THEME[brand] || THEME.bitto;
@@ -1840,7 +1844,7 @@ ${r.txid}
     .no-ex{color:var(--r-ink2);font-size:0.85rem;padding:10px}
     .flow-note{color:var(--r-ink2);font-size:0.78rem;line-height:1.7;margin-top:10px}
     /* 要請テンプレート */
-    .template-box{background:var(--r-tmplbg);border:1px solid var(--r-border);border-radius:8px;padding:16px;font-size:0.82rem;white-space:pre-wrap;line-height:1.8;word-break:break-all;margin-top:10px;color:var(--r-ink)}
+    .template-box{font-family:var(--r-tmplfont);background:var(--r-tmplbg);border:1px solid var(--r-border);border-radius:8px;padding:16px;font-size:0.82rem;white-space:pre-wrap;line-height:1.8;word-break:break-all;margin-top:10px;color:var(--r-ink)}
     /* 印刷ボタン */
     .print-bar{background:var(--r-card);border:1px solid var(--r-border);border-radius:10px;padding:16px 20px;margin-bottom:20px}
     .print-bar p{font-size:0.83rem;color:var(--r-ink2);margin:0 0 10px}
