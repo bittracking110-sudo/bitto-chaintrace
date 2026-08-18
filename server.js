@@ -570,6 +570,81 @@ function getLabel(addr) {
   return { label: '', type: 'unknown' };
 }
 
+// ══ 取引所ラベルの外部API照会（APIキーがある時だけ動く） ══════
+/* 自前DB（LABEL_DB＋JSON）に無いアドレスの取引所名を外部APIで引く。
+   MISTTRACK_API_KEY 未設定なら何もしない＝これまで通り自前DBだけで動く。
+   有料APIなので、名前が要るノード（到達先と、振る舞いで取引所候補と
+   出たノード）に絞り、1調査あたり MISTTRACK_MAX_LOOKUPS 件までにする。
+   照会結果は永続ボリュームに残す。再デプロイでコンテナが入れ替わっても
+   同じアドレスを二度引かないため。名前が無かった場合も空で残す。 */
+const MISTTRACK_KEY  = process.env.MISTTRACK_API_KEY || '';
+const MISTTRACK_BASE = process.env.MISTTRACK_BASE_URL || 'https://openapi.misttrack.io/v1';
+const MISTTRACK_MAX_LOOKUPS = 3;
+const MISTTRACK_COIN = { btc: 'BTC', eth: 'ETH', xrp: 'XRP' };
+const LABEL_CACHE_FILE = path.join(DATA_DIR, 'label-cache.json');
+const labelCache = new Map();   // 小文字アドレス → 名前（''＝引いたが名前なし）
+
+try {
+  const cached = JSON.parse(fs.readFileSync(LABEL_CACHE_FILE, 'utf8'));
+  for (const [addr, name] of Object.entries(cached)) labelCache.set(addr, name);
+  console.log(`[LabelAPI] キャッシュ ${labelCache.size}件を読み込み`);
+} catch (e) {
+  if (e.code !== 'ENOENT') console.error('[LabelAPI] キャッシュ読み込み失敗:', e.message);
+}
+
+function saveLabelCache() {
+  fsp.writeFile(LABEL_CACHE_FILE, JSON.stringify(Object.fromEntries(labelCache), null, 2), 'utf8')
+    .catch(e => console.error('[LabelAPI] キャッシュ保存失敗:', e.message));
+}
+
+/* 応答の入れ物はプロバイダの仕様変更で変わりうる。
+   ありがちな場所を順に見て、最初に見つかった名前を使う。 */
+function pickLabelFromResponse(j) {
+  const cands = [
+    j && j.data && j.data.label, j && j.data && j.data.labels,
+    j && j.data && j.data.entity, j && j.data && j.data.name,
+    j && j.label, j && j.labels, j && j.entity, j && j.name,
+  ];
+  for (const c of cands) {
+    if (typeof c === 'string' && c.trim()) return c.trim();
+    if (Array.isArray(c) && c.length) {
+      const first = c.find(v => typeof v === 'string' && v.trim());
+      if (first) return first.trim();
+    }
+  }
+  return '';
+}
+
+function scrubKey(msg) {
+  const m = String(msg || '');
+  return MISTTRACK_KEY ? m.split(MISTTRACK_KEY).join('***') : m;
+}
+
+function labelApiUrl(addr, chain) {
+  const coin = MISTTRACK_COIN[chain] || String(chain).toUpperCase();
+  return `${MISTTRACK_BASE}/address_labels?coin=${coin}&address=${encodeURIComponent(addr)}&api_key=${MISTTRACK_KEY}`;
+}
+
+async function lookupLabelAPI(addr, chain) {
+  if (!MISTTRACK_KEY) return '';
+  const lo = addr.toLowerCase();
+  if (labelCache.has(lo)) return labelCache.get(lo);
+  try {
+    const res = await fetchT(labelApiUrl(addr, chain));
+    const j   = await res.json();
+    const name = pickLabelFromResponse(j);
+    labelCache.set(lo, name);
+    saveLabelCache();
+    if (name) console.log(`[LabelAPI] ${addr.slice(0, 10)}... → "${name}"`);
+    else console.log('[LabelAPI] 名前なし:', addr.slice(0, 12), JSON.stringify(j).slice(0, 200));
+    return name;
+  } catch (e) {
+    // 失敗はキャッシュしない（通信断・レート制限なら次の調査で拾える）
+    console.error('[LabelAPI] 照会失敗:', addr.slice(0, 12), scrubKey(e.message));
+    return '';
+  }
+}
+
 function isExchange(label) {
   if (!label) return false;
   return EX_KEYWORDS.some(k => label.toLowerCase().includes(k));
@@ -668,6 +743,7 @@ async function getAddressInfo(addr, chain) {
 
 async function enrichPathWithAddressInfo(path, chain) {
   let exchangeCount = 0;                 // 判明＋推定を合わせた取引所ノード数
+  let apiLookups    = 0;                 // 外部ラベルAPIを引いた回数（1調査あたりの上限あり）
   const deadline = Date.now() + ENRICH_BUDGET_MS;  // 巨大コントラクト混在でも全体を止めない
   for (let idx = 0; idx < path.length; idx++) {
     const node = path[idx];
@@ -686,6 +762,20 @@ async function enrichPathWithAddressInfo(path, chain) {
         const isEx      = isExchange(info.bcLabel);
         if (isEx) node.isExchange = true;
         console.log(`[Label] ${node.address.slice(0,10)}... → "${info.bcLabel}" (isExchange:${isEx})`);
+      }
+    }
+
+    // ①' 自前DBにもBlockchairにも無ければ外部API（キー未設定なら何もしない）
+    if (!node.label && MISTTRACK_KEY
+        && (idx === path.length - 1 || inferExchangeByBehavior(node))) {
+      const known = labelCache.has(node.address.toLowerCase());
+      if (known || apiLookups < MISTTRACK_MAX_LOOKUPS) {
+        if (!known) apiLookups++;
+        const apiName = await lookupLabelAPI(node.address, chain);
+        if (apiName) {
+          node.label = apiName;
+          if (isExchange(apiName)) node.isExchange = true;
+        }
       }
     }
 
@@ -2824,6 +2914,22 @@ app.post('/api/admin/generate-report', express.json(), async (req, res) => {
   } catch (e) {
     console.error('[Admin] エラー:', e);
     res.status(500).json({ error: e.message });
+  }
+});
+
+/* ラベルAPIの疎通確認。キー投入後に応答の形をそのまま見るために置く。
+   例: /api/admin/label-lookup?address=34xp4vRocGJym3xR7yCVpFHoCNxv4twsEo&chain=btc */
+app.get('/api/admin/label-lookup', async (req, res) => {
+  const addr  = (req.query.address || '').trim();
+  const chain = (req.query.chain || 'btc').toLowerCase();
+  if (!addr) return res.status(400).json({ error: 'address が必要です' });
+  if (!MISTTRACK_KEY) return res.json({ ok: false, reason: 'MISTTRACK_API_KEY が未設定です' });
+  try {
+    const r = await fetchT(labelApiUrl(addr, chain));
+    const j = await r.json();
+    res.json({ ok: r.ok, status: r.status, picked: pickLabelFromResponse(j), raw: j });
+  } catch (e) {
+    res.status(500).json({ error: scrubKey(e.message) });
   }
 });
 
