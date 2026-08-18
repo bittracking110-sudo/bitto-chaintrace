@@ -3298,6 +3298,35 @@ app.post('/api/hearing/submit', express.json(), async (req, res) => {
   saveHearings();
 });
 
+/* シートへの書き込みが失敗した回答をまとめて送り直す。
+   失敗の主因は共有設定の付け忘れで、直したあとに手で入れ直すのは現実的でない。
+   回答自体はサーバーに残っているので、権限がついた時点で流し込める。 */
+app.get('/api/admin/hearing-resend', async (_req, res) => {
+  const pending = [...hearings.values()].filter(h => h.status === 'submitted' && h.sheetLogged !== true);
+  const results = [];
+  for (const h of pending) {
+    const form  = txidFormTokens.get(h.token) || {};
+    const first = (form.txSummary || [])[0] || {};
+    const r = await appendHearingToSheet({
+      ...h.answers,
+      submittedAt:  new Date(h.submittedAt || h.updatedAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
+      customerName: h.customerName,
+      email:        h.email,
+      reportUrl:    form.report?.reportUrl || h.reportUrl || '',
+      firstTime:    first.blockTime || '',
+      firstAmount:  first.tokenSymbol ? `${first.tokenAmount} ${first.tokenSymbol}` : (first.amount != null ? `${first.amount} ${first.chain || ''}` : ''),
+      firstChain:   first.chain || '',
+      firstExchange: first.exchange || '',
+      token:        h.token,
+    });
+    h.sheetLogged = r.ok;
+    h.sheetError  = r.ok ? null : r.reason;
+    results.push({ id: h.id, ok: r.ok, reason: r.reason || null });
+  }
+  saveHearings();
+  res.json({ ok: true, tried: results.length, sent: results.filter(r => r.ok).length, results });
+});
+
 // 資料本体。PDF化でもこのURLを開くので、認証は報告書と同じ「URLを知っている人だけ」の方式。
 app.get('/api/hearing/:id/pack', (req, res) => {
   const h = hearings.get(req.params.id);
