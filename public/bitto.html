@@ -216,7 +216,7 @@
   #view-navi .nvnote b{color:var(--sub2)}
 
   /* ── 二次被害防止シールド ── */
-  #shield{margin-top:30px;padding-top:22px;border-top:1px solid var(--line)}
+  #shield{margin-top:30px;padding-top:22px;border-top:1px solid var(--line);display:none}
   #shield .sh-h{font-size:15px;font-weight:800;margin:0 0 6px}
   #shield .sh-lead{font-size:12px;color:var(--sub);margin:0 0 14px;line-height:1.7}
   #shield .sh-list{display:grid;gap:8px;margin-bottom:14px}
@@ -1032,8 +1032,7 @@ function openInitialPack(){
     const routes=[];
     if (dest==='personal'){
       routes.push(['振込明細を保管・整理する','日時・金額・振込先（銀行名／支店／口座番号／名義）を一覧にします']);
-      routes.push(['振込先の金融機関へ連絡する','振り込め詐欺救済法にもとづく口座凍結の申し出。凍結されると以後の引き出しを止められます']);
-      routes.push(['警察に相談・被害届／法テラス','被害届は最寄りの警察署／サイバー事案は警察庁オンライン受付／費用面の相談は法テラス']);
+      routes.push(['警察・弁護士に相談し、口座凍結を申し出る','振り込め詐欺救済法にもとづく手続きです。被害届は最寄りの警察署／サイバー事案は警察庁オンライン受付／費用面の相談は法テラス。振込先の金融機関へは、警察・弁護士と相談しながら連絡します']);
       routes.push(['金融庁 金融サービス利用者相談室','詐欺的投資・無登録業者に関する情報提供']);
       routes.push(['弁護士','返還請求など法的手続きが必要な場合']);
     } else {
@@ -1060,6 +1059,7 @@ function openInitialPack(){
       ${bn}
       <div class="nvnote"><b>BitToができること：</b>資金経路の解析／着金先取引所の推定／提出資料の整理／不正利用申告文の作成／継続監視／相談先の案内。<br><b>できないこと：</b>取引所への凍結命令／資金の残存・返還の保証／秘密鍵での取戻し。結果は<b>推定</b>を含みます。</div>`;
     out.style.display = 'block';
+    document.getElementById('shield').style.display = 'block';
     out.querySelector('#naviTrack').addEventListener('click', goChatTab);
     out.querySelector('#naviPack').addEventListener('click', openInitialPack);
     out.querySelector('#naviShield').addEventListener('click', openShield);
@@ -1070,6 +1070,7 @@ function openInitialPack(){
 /* ── 二次被害防止シールド（回収業者チェック） ── */
 function openShield(){
   showTab('navi');
+  document.getElementById('shield').style.display = 'block';   // メニューから直接来た場合も開く
   setTimeout(() => document.getElementById('shield').scrollIntoView({behavior:'smooth', block:'start'}), 60);
 }
 (function(){

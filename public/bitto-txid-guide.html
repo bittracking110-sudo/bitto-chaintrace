@@ -56,7 +56,17 @@ header.hero{
 .step-txt p{font-size:14px;color:var(--text);margin:0}
 .phone{flex:none;width:150px;border-radius:16px;overflow:hidden;border:1px solid var(--border);background:#000;
   box-shadow:0 8px 24px rgba(0,0,0,.35)}
-.phone img{display:block;width:100%;height:auto}
+.phone img{display:block;width:100%;height:auto;cursor:zoom-in}
+.fullshot img{cursor:zoom-in}
+.zoomhint{display:flex;align-items:center;justify-content:center;gap:6px;color:var(--muted);font-size:12.5px;margin:10px 0 0}
+.zoomhint b{color:var(--accent)}
+/* 全画面ビューア。ピンチで拡大できるよう touch-action は制限しない */
+#zoomview{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;z-index:99;
+  align-items:center;justify-content:center;padding:14px;overflow:auto}
+#zoomview.on{display:flex}
+#zoomview img{max-width:100%;max-height:100%;width:auto;height:auto;border-radius:10px}
+#zoomclose{position:fixed;top:12px;right:14px;background:var(--accent);color:var(--accentText);border:none;
+  border-radius:999px;width:40px;height:40px;font-size:20px;font-weight:800;cursor:pointer;line-height:1}
 .fullshot{margin:14px 0;border-radius:14px;overflow:hidden;border:1px solid var(--border);background:#000;
   box-shadow:0 8px 24px rgba(0,0,0,.35)}
 .fullshot img{display:block;width:100%;max-width:360px;margin:0 auto;height:auto}
@@ -82,7 +92,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:40px;borde
 @media(max-width:480px){
   .step{flex-direction:column;align-items:center;text-align:left}
   .step-txt{width:100%}
-  .phone{width:210px;margin-top:4px}
+  .phone{width:min(84vw,330px);margin-top:4px}
   .hero h1{font-size:22px}
 }
 </style>
@@ -109,6 +119,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:40px;borde
 
   <div class="section-title"><span class="n">01</span>取引所を選んで手順を確認</div>
   <p class="sub">下のタブから、送金した取引所を選んでください。</p>
+  <p class="zoomhint">🔍 <b>画面写真はタップで拡大</b>できます（指で広げてさらに拡大できます）</p>
   <div class="tabs"><button class="pill active" data-target="bitflyer">bitFlyer</button><button class="pill" data-target="coincheck">Coincheck</button><button class="pill" data-target="bitbank">bitbank</button><button class="pill" data-target="gmo">GMOコイン</button><button class="pill" data-target="generic">その他の取引所</button></div>
   <section class="ex-section" data-ex="bitflyer" style="display:block">
 <div class="step">
@@ -290,7 +301,8 @@ TXID：
     <p class="muted" style="margin-top:12px">それでも分からない場合は、<b>通貨名・送金日時・数量・履歴画面のスクショ</b>をアプリのチャットに送ってください。こちらで確認箇所をご案内します。</p>
   </div>
 
-  <div class="cta">
+  <div id="zoomview"><button id="zoomclose" aria-label="閉じる">×</button><img alt=""></div>
+<div class="cta">
     <a href="/bitto">アプリに戻ってTXIDを送る</a>
     <p>見つけたTXIDを、アプリのチャットに貼り付けて送信してください。</p>
   </div>
@@ -327,6 +339,19 @@ TXID：
       setTimeout(function(){btn.textContent='テンプレートをコピー';},1800);}catch(e){}
       s.removeAllRanges();
     });
+  });
+
+  /* 画面写真をタップで全画面に開く。枠が小さく文字が読めないという指摘への対応。
+     枠内で少し大きくするだけでは足りないので、写真そのものを全画面で見せる。 */
+  var zv = document.getElementById('zoomview');
+  var zimg = zv.querySelector('img');
+  document.addEventListener('click', function(e){
+    var img = e.target.closest('.phone img, .fullshot img');
+    if (img) { zimg.src = img.src; zimg.alt = img.alt || ''; zv.classList.add('on'); document.body.style.overflow = 'hidden'; return; }
+    if (e.target.closest('#zoomview')) { zv.classList.remove('on'); document.body.style.overflow = ''; }
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') { zv.classList.remove('on'); document.body.style.overflow = ''; }
   });
 })();
 </script>
