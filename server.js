@@ -2038,29 +2038,55 @@ ${r.txid}
     if (!txTime) { canvas.parentElement.innerHTML = '<p class="chart-error">送金日時データなし</p>'; continue; }
     const from = Math.floor(txTime / 1000) - 30 * 86400;
     const to   = Math.min(Math.floor(txTime / 1000) + 30 * 86400, Math.floor(Date.now() / 1000));
-    try {
-      const res = await fetch(
-        'https://api.coingecko.com/api/v3/coins/' + coinId +
-        '/market_chart/range?vs_currency=usd&from=' + from + '&to=' + to
-      );
-      const d = await res.json();
-      if (!d.prices || !d.prices.length) throw new Error('データなし');
 
-      const labels = d.prices.map(([ts]) => {
+    /* CoinGeckoの無料APIは直近365日しか返さない（error_code 10012）。
+       1年より前の送金でもグラフを出せるよう、Bitstampの日足に切り替える。
+       どちらもブラウザから直接呼べる（CORS許可・APIキー不要）ので、
+       サーバー側のPDF生成でも同じ経路で描画される。 */
+    const PAIRS = { bitcoin: 'btcusd', ethereum: 'ethusd', ripple: 'xrpusd' };
+    const loadPrices = async () => {
+      try {
+        const res = await fetch(
+          'https://api.coingecko.com/api/v3/coins/' + coinId +
+          '/market_chart/range?vs_currency=usd&from=' + from + '&to=' + to
+        );
+        const d = await res.json();
+        if (d.prices && d.prices.length) return { points: d.prices, source: 'CoinGecko' };
+      } catch (e) { /* Bitstampを試す */ }
+      const pair = PAIRS[coinId];
+      if (!pair) return null;
+      const res2 = await fetch(
+        'https://www.bitstamp.net/api/v2/ohlc/' + pair + '/?step=86400&limit=61&start=' + from
+      );
+      const d2 = await res2.json();
+      const ohlc = (d2 && d2.data && d2.data.ohlc) || [];
+      const points = ohlc
+        .filter(o => Number(o.timestamp) <= to)
+        .map(o => [Number(o.timestamp) * 1000, Number(o.close)]);
+      return points.length ? { points, source: 'Bitstamp' } : null;
+    };
+
+    try {
+      const loaded = await loadPrices();
+      if (!loaded) throw new Error('データなし');
+      const prices = loaded.points;
+
+      const labels = prices.map(([ts]) => {
         const dt = new Date(ts);
         return (dt.getMonth() + 1) + '/' + dt.getDate();
       });
-      const values = d.prices.map(([, p]) => p);
+      const values = prices.map(([, p]) => p);
 
       // 送金時に最も近いインデックス
-      let txIdx = d.prices.findIndex(([ts]) => ts >= txTime);
+      let txIdx = prices.findIndex(([ts]) => ts >= txTime);
       if (txIdx < 0) txIdx = values.length - 1;
       const txPrice = values[txIdx];
 
       // 送金時価格をラベル表示
       const lbl = canvas.parentElement.querySelector('.tx-price-label');
       if (lbl && txPrice) {
-        lbl.textContent = '● 送金時価格: $' + txPrice.toLocaleString('en-US', { maximumFractionDigits: 2 });
+        lbl.textContent = '● 送金時価格: $' + txPrice.toLocaleString('en-US', { maximumFractionDigits: 2 })
+          + '（価格データ：' + loaded.source + '）';
       }
 
       new Chart(canvas, {
@@ -2116,7 +2142,7 @@ ${r.txid}
         }
       });
     } catch (e) {
-      canvas.parentElement.innerHTML = '<p class="chart-error">価格データ取得失敗（CoinGecko APIレート制限の可能性）</p>';
+      canvas.parentElement.innerHTML = '<p class="chart-error">価格データを取得できませんでした。時間をおいて再読み込みしてください。</p>';
     }
   }
 })();
