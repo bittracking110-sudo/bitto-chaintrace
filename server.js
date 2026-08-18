@@ -2024,7 +2024,7 @@ ${r.txid}
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
   mermaid.initialize({
     startOnLoad: true, theme: 'base',
-    themeVariables: { fontSize: '13px', fontFamily: "'Courier New', monospace" }
+    themeVariables: { fontSize: '13px', fontFamily: "${TH.font}" }
   });
 </script>
 
