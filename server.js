@@ -189,6 +189,25 @@ try {
     if (orphaned) console.warn(`[Forms] ⚠️ 再起動で中断された調査 ${orphaned}件をエラーに変更しました（要フォロー）`);
   }
 } catch (e) { console.error('[Forms] 復元失敗:', e.message); }
+/* ══ ヒアリング（被害時系列パック）の回答 ══════════════════════
+   購入者が答えた内容。氏名・口座・連絡先を含むため、報告書と同じ
+   永続ボリュームに置き、外から読めるルートは作らない。
+   下書きも保存する。設問数が多く、一度で書き切れないため。 */
+const HEARINGS_FILE = path.join(REPORTS_DIR, 'hearings.json');
+const hearings = new Map();   // hearingId → { token, answers, status, ... }
+try {
+  if (fs.existsSync(HEARINGS_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(HEARINGS_FILE, 'utf8'));
+    for (const [k, v] of Object.entries(saved)) hearings.set(k, v);
+    console.log(`[Hearing] ${hearings.size}件を復元`);
+  }
+} catch (e) { console.error('[Hearing] 復元失敗:', e.message); }
+
+function saveHearings() {
+  fsp.writeFile(HEARINGS_FILE, JSON.stringify(Object.fromEntries(hearings)), 'utf8')
+    .catch(e => console.error('[Hearing] 保存失敗:', e.message));
+}
+
 function saveTxidForms() {
   fsp.writeFile(TXID_FORMS_FILE, JSON.stringify(Object.fromEntries(txidFormTokens)), 'utf8').catch(() => {});
 }
@@ -1330,6 +1349,98 @@ function getSheets() {
   } catch (e) {
     console.error('[Sheets] 認証エラー:', e.message);
     return null;
+  }
+}
+
+/* ══ ヒアリング（被害時系列パック）の保存先 ══════════════════
+   申込用シートとは別のスプレッドシートに貯める。個人情報の密度が高く、
+   運用で見る人も違うため、注文台帳と混ぜない。
+   HEARING_SHEET_ID が未設定なら申込と同じブックの別タブに書く。
+   列は HEARING_FIELDS が唯一の定義。見出し行も同じ配列から作る。 */
+const HEARING_SHEET_ID  = process.env.HEARING_SHEET_ID || GOOGLE_SHEET_ID;
+const HEARING_SHEET_TAB = process.env.HEARING_SHEET_TAB || 'ヒアリング';
+const HEARING_FIELDS = [
+  ['submittedAt',  '送信日時'],
+  ['customerName', 'お名前'],
+  ['email',        'メールアドレス'],
+  ['reportUrl',    '報告書URL'],
+  ['firstTime',    '最初の送金日時'],
+  ['firstAmount',  '最初の送金数量'],
+  ['firstChain',   'チェーン'],
+  ['firstExchange','到達取引所（推定）'],
+  ['a1',  'A1 名目'],
+  ['a2',  'A2 送金先のサイト・アプリ'],
+  ['a3',  'A3 アドレスの渡され方'],
+  ['a4',  'A4 送金直前に言われたこと'],
+  ['b1',  'B1 相手の名乗り'],
+  ['b2',  'B2 最初の接触経路'],
+  ['b3',  'B3 連絡手段'],
+  ['b4',  'B4 相手のアカウント・電話'],
+  ['b5',  'B5 やり取りの期間'],
+  ['c1',  'C1 送金回数'],
+  ['c2',  'C2 総額（円）'],
+  ['c3',  'C3 送金の手段'],
+  ['c4',  'C4 他のTXID'],
+  ['c5',  'C5 銀行振込先'],
+  ['d1',  'D1 追加請求'],
+  ['d2',  'D2 出金を試みたか'],
+  ['d3',  'D3 相手と連絡が取れるか'],
+  ['d4',  'D4 サイト・アプリの状況'],
+  ['e1',  'E1 警察への相談'],
+  ['e2',  'E2 取引所への申告'],
+  ['e3',  'E3 回収業者への連絡'],
+  ['f1',  'F 保全している証拠'],
+  ['note','自由記入'],
+  ['token','申込トークン'],
+];
+
+/* タブが無ければ作る。運用者が手で用意しなくても書き込めるようにするため。
+   既にあれば Google 側がエラーを返すので、その時は何もしない。 */
+async function ensureHearingTab(sheets) {
+  try {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: HEARING_SHEET_ID });
+    const exists = (meta.data.sheets || []).some(sh => sh.properties && sh.properties.title === HEARING_SHEET_TAB);
+    if (exists) return true;
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: HEARING_SHEET_ID,
+      requestBody: { requests: [{ addSheet: { properties: { title: HEARING_SHEET_TAB } } }] },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: HEARING_SHEET_ID,
+      range: `${HEARING_SHEET_TAB}!A1`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [HEARING_FIELDS.map(f => f[1])] },
+    });
+    console.log('[Sheets] ヒアリング用タブを作成しました');
+    return true;
+  } catch (e) {
+    console.error('[Sheets] ヒアリングタブの準備に失敗:', e.message);
+    return false;
+  }
+}
+
+async function appendHearingToSheet(record) {
+  try {
+    const sheets = getSheets();
+    if (!sheets || !HEARING_SHEET_ID) { console.log('[Sheets] ヒアリング未設定（スキップ）'); return false; }
+    if (!(await ensureHearingTab(sheets))) return false;
+    const row = HEARING_FIELDS.map(([key]) => {
+      const v = record[key];
+      if (v == null) return '';
+      return Array.isArray(v) ? v.join(' / ') : String(v);
+    });
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: HEARING_SHEET_ID,
+      range: `${HEARING_SHEET_TAB}!A:AZ`,
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: { values: [row] },
+    });
+    console.log('[Sheets] ヒアリングを追記しました');
+    return true;
+  } catch (e) {
+    console.error('[Sheets] appendHearingToSheet エラー:', e.message);
+    return false;
   }
 }
 
@@ -2959,6 +3070,83 @@ app.get('/api/test-txid-form', (req, res) => {
   res.json({ ok: true, url, formToken });
 });
 
+/* ══ ヒアリングAPI ═══════════════════════════════════════════
+   購入者限定。開始には決済後に発行される申込トークンが要る。
+   1つの申込に1つのヒアリング（作り直さず再開させる）。 */
+app.post('/api/hearing/start', express.json(), (req, res) => {
+  const token = (req.body && req.body.token || '').trim();
+  const form  = txidFormTokens.get(token);
+  if (!form) return res.status(403).json({ error: 'この機能は報告書をご購入いただいた方専用です' });
+
+  let id = [...hearings.entries()].find(([, h]) => h.token === token)?.[0];
+  if (!id) {
+    id = crypto.randomUUID();
+    hearings.set(id, {
+      id, token,
+      customerName: form.customerName || '',
+      email: form.email || '',
+      reportUrl: form.report?.reportUrl || '',
+      answers: {}, status: 'draft',
+      createdAt: Date.now(), updatedAt: Date.now(),
+    });
+    saveHearings();
+  }
+  res.json({ ok: true, id, first: (form.txSummary || [])[0] || null, txCount: (form.txSummary || []).length });
+});
+
+app.get('/api/hearing/:id', (req, res) => {
+  const h = hearings.get(req.params.id);
+  if (!h) return res.status(404).json({ error: '見つかりません' });
+  const form = txidFormTokens.get(h.token) || {};
+  res.json({
+    ok: true, id: h.id, status: h.status, answers: h.answers,
+    customerName: h.customerName, reportUrl: h.reportUrl,
+    first: (form.txSummary || [])[0] || null, txSummary: form.txSummary || [],
+  });
+});
+
+// 下書き保存（自動保存用）。答えの上書きだけを行い、状態は変えない。
+app.post('/api/hearing/save', express.json(), (req, res) => {
+  const { id, answers } = req.body || {};
+  const h = hearings.get(id);
+  if (!h) return res.status(404).json({ error: '見つかりません' });
+  if (h.status === 'submitted') return res.status(409).json({ error: '送信済みです' });
+  h.answers = { ...h.answers, ...(answers || {}) };
+  h.updatedAt = Date.now();
+  saveHearings();
+  res.json({ ok: true, savedAt: h.updatedAt });
+});
+
+app.post('/api/hearing/submit', express.json(), async (req, res) => {
+  const { id, answers } = req.body || {};
+  const h = hearings.get(id);
+  if (!h) return res.status(404).json({ error: '見つかりません' });
+  h.answers = { ...h.answers, ...(answers || {}) };
+  h.status = 'submitted';
+  h.submittedAt = Date.now();
+  h.updatedAt = Date.now();
+  saveHearings();
+  res.json({ ok: true });   // 先に返す。シート書き込みは待たせない
+
+  const form  = txidFormTokens.get(h.token) || {};
+  const first = (form.txSummary || [])[0] || {};
+  const record = {
+    ...h.answers,
+    submittedAt:  new Date(h.submittedAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
+    customerName: h.customerName,
+    email:        h.email,
+    reportUrl:    form.report?.reportUrl || h.reportUrl || '',
+    firstTime:    first.blockTime || '',
+    firstAmount:  first.tokenSymbol ? `${first.tokenAmount} ${first.tokenSymbol}` : (first.amount != null ? `${first.amount} ${first.chain || ''}` : ''),
+    firstChain:   first.chain || '',
+    firstExchange: first.exchange || '',
+    token:        h.token,
+  };
+  const ok = await appendHearingToSheet(record);
+  h.sheetLogged = ok;
+  saveHearings();
+});
+
 // TXID入力フォーム（ワンタイムリンク）
 app.get('/txid-form/:token', (req, res) => {
   const data = txidFormTokens.get(req.params.token);
@@ -3063,6 +3251,20 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
       // レポートタブやフォーム再訪から報告書にたどり着けなかった（メールが唯一の導線だった）。
       formData.status = 'done';
       formData.report = { reportUrl, issuedAt };
+      /* 被害時系列パックのヒアリングは「最初の送金」を起点に聞く。
+         報告書HTMLからは取り出せないので、必要な項目だけ申込に残す。
+         古い順に並べておき、先頭を最初の送金として扱う。 */
+      formData.txSummary = list.map(i => ({
+        txid: i.txid,
+        chain: i.result.chain,
+        blockTime: i.result.blockTime,
+        amount: i.result.amount,
+        tokenSymbol: i.result.tokenSymbol || null,
+        tokenAmount: i.result.tokenAmount || null,
+        sender: i.result.sender || (i.result.path && i.result.path[0] && i.result.path[0].address) || null,
+        exchange: (i.result.exchanges && i.result.exchanges[0] && i.result.exchanges[0].name) || null,
+      })).sort((a, b) => new Date(a.blockTime || 0) - new Date(b.blockTime || 0));
+      saveTxidForms();
 
       // ブランド別の納品処理
       if (formData.brand === 'connection') {
