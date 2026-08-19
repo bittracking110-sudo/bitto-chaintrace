@@ -349,14 +349,14 @@
     <h2 class="sh-h">🛡 回収業者・二次被害チェック</h2>
     <p class="sh-lead">「取り戻せます」と持ちかける業者による<b>二次被害</b>が多発しています。検討中の業者について、<b>当てはまるものを選んでください</b>。</p>
     <div class="sh-list">
-      <label class="sh-item"><input type="checkbox"><span>「必ず取り戻せる」と保証している</span></label>
-      <label class="sh-item"><input type="checkbox"><span>回収の前に高額な前払い金を求められた</span></label>
+      <label class="sh-item"><input type="checkbox"><span>「返金の可能性が高い」と言われている</span></label>
+      <label class="sh-item"><input type="checkbox"><span>調査に高額な費用を提示された</span></label>
       <label class="sh-item"><input type="checkbox"><span>税金・保証金・解除費用などの名目で追加の支払いを求められた</span></label>
       <label class="sh-item"><input type="checkbox"><span>遠隔操作アプリの導入を求められた</span></label>
       <label class="sh-item"><input type="checkbox"><span>シードフレーズ・秘密鍵・2段階認証コードを聞かれた</span></label>
       <label class="sh-item"><input type="checkbox"><span>警察・政府機関との「特別な関係」を主張している</span></label>
       <label class="sh-item"><input type="checkbox"><span>「凍結済みだが、解除に費用が必要」と言われた</span></label>
-      <label class="sh-item"><input type="checkbox"><span>追加の暗号資産の送金を求められた</span></label>
+      <label class="sh-item"><input type="checkbox"><span>追加の費用を請求された</span></label>
     </div>
     <button class="go" id="shGo">チェック結果を見る</button>
     <div id="shOut"></div>
@@ -498,6 +498,7 @@ const setBubble = (row, html) => {
 
 /* ── 結果カードの組み立て ── */
 function nodeBadge(n){
+  if (n.isToken)                      return `<span class="badge b-via">🔁 スワップ／トークン${n.swapTo ? "（→" + esc(n.swapTo) + "）" : ""}</span>`;
   if (isBridgeLike(n))                return `<span class="badge b-via">経由（DEX/ブリッジ）</span>`;
   if (n.isExchange && n.label)        return `<span class="badge b-known">判明</span>`;
   if (n.isExchange)                   return `<span class="badge b-guess">推定</span>`;
@@ -505,12 +506,13 @@ function nodeBadge(n){
 }
 /* 取引所ノードの強調クラス／アイコン（到達先を目立たせる） */
 function nodeCls(n){
+  if (n.isToken)               return '';
   if (isBridgeLike(n))         return '';
   if (n.isExchange && n.label) return 'ex-known';
   if (n.isExchange)            return 'ex-guess';
   return '';
 }
-function exIcon(n){ return (n.isExchange && !isBridgeLike(n)) ? '🏦 ' : ''; }
+function exIcon(n){ if (n.isToken) return '🔁 '; return (n.isExchange && !isBridgeLike(n)) ? '🏦 ' : ''; }
 function hopName(i, total){
   if (i === 0) return '送金元';
   if (i === total - 1) return `${i}次先`;
@@ -1004,14 +1006,14 @@ button{font:inherit;padding:9px 16px;border:1px solid #333;background:#111;color
 <h2>5. ⚠️ 二次被害（回収詐欺）への注意</h2>
 <div class="warn">被害後に接触してくる「回収業者」による<b>二次被害</b>が多発しています。以下は詐欺の典型的なサインです。
 <ul>
-<li><b>「必ず取り戻せる」と保証する</b></li>
-<li><b>回収の前に高額な前払い金を要求する</b></li>
+<li><b>「返金の可能性が高い」と期待を持たせる</b></li>
+<li><b>調査に高額な費用を提示する</b></li>
 <li>税金・保証金・解除費用などの名目で追加の支払いを求める</li>
 <li>遠隔操作アプリの導入を求める</li>
 <li>シードフレーズ・秘密鍵・2段階認証コードを聞いてくる</li>
 <li>警察・政府機関との「特別な関係」を主張する</li>
 <li>「凍結済みだが解除費用が必要」と言う</li>
-<li>追加の暗号資産送金を求める</li>
+<li>追加の費用を請求する</li>
 </ul>
 FBI・CFTCも、前払いを求める暗号資産回収サービスについて注意を呼びかけています。</div>
 <h2>6. BitToができること／できないこと</h2>

@@ -599,11 +599,42 @@ const EX_KEYWORDS = [
   'celer','multichain','anyswap','synapse','connext',
 ];
 
+/* ラベルDBには取引所のウォレットだけでなく、USDTなどの
+   トークンコントラクトも入っている（Etherscan由来の一括登録）。
+   これを取引所として扱うと「Tether USD に到達しました」で追跡が止まり、
+   本当の着金先（取引所）にたどり着けない。名前で切り分ける。 */
+const TOKEN_KEYWORDS = [
+  'tether','usdt','usdc','usd coin','busd','dai','trueusd','tusd','pax','frax',
+  'wrapped','weth','wbtc','token','peg','stablecoin','erc-20','erc20','coin)',
+];
+const VIA_KEYWORDS = [
+  'bridgers','transit finance','transitswap','transitfinance',
+  'changenow','fixedfloat','simpleswap','sideshift','stealthex','exolix',
+  'lifi','socket','squid','rango','thorchain','rubic','xy finance','paraswap',
+  '1inch','0x protocol','uniswap','sushiswap','pancakeswap','router','swap router',
+  'dex','aggregator','cross-chain','crosschain','bridge','near intents',
+  'rainbow bridge','stargate','layerzero','hop protocol','across','celer',
+  'multichain','anyswap','synapse','connext',
+];
+/* 「経由」＝DEX・ブリッジ・両替。取引所と同じ扱いにすると
+   凍結要請の宛先を誤って案内してしまう。 */
+function isViaService(label) {
+  if (!label) return false;
+  const lo = String(label).toLowerCase();
+  return VIA_KEYWORDS.some(k => lo.includes(k));
+}
+
+function isTokenContract(label) {
+  if (!label) return false;
+  const lo = String(label).toLowerCase();
+  return TOKEN_KEYWORDS.some(k => lo.includes(k));
+}
+
 function getLabel(addr) {
   if (!addr) return { label: '', type: 'unknown' };
   const lo = addr.toLowerCase();
   const found = LABEL_DB[lo] || LABEL_DB[addr];
-  if (found) return { label: found, type: 'exchange' };
+  if (found) return { label: found, type: isTokenContract(found) ? 'token' : 'exchange' };
   return { label: '', type: 'unknown' };
 }
 
@@ -684,6 +715,9 @@ async function lookupLabelAPI(addr, chain) {
 
 function isExchange(label) {
   if (!label) return false;
+  // トークンコントラクトは取引所ではない（「Binance: BNB Token」のように
+  // 取引所名を含む名前もあるため、先に弾く）
+  if (isTokenContract(label)) return false;
   return EX_KEYWORDS.some(k => label.toLowerCase().includes(k));
 }
 
@@ -971,7 +1005,9 @@ async function getNextTxETH(addr, afterTime) {
       if (!tx.to) continue;
       const db = getLabel(tx.to);
       const lbl = db.label || '';
-      const isEx = db.type === 'exchange' || isExchange(lbl);
+      const isTok = db.type === 'token' || isTokenContract(lbl);
+      const isVia = isViaService(lbl);
+      const isEx = !isTok && !isVia && (db.type === 'exchange' || isExchange(lbl));
       candidates.push({ addr: tx.to, amount: parseFloat(tx.value)/1e18, time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, txMs });
     }
     if (candidates.length > 0) {
@@ -1005,7 +1041,9 @@ async function getNextTxETH(addr, afterTime) {
       if (amt < 0.001) continue;
       const db  = getLabel(tx.to); // ローカルDBのみ（高速）
       const lbl = db.label || '';
-      const isEx = db.type === 'exchange' || isExchange(lbl);
+      const isTok = db.type === 'token' || isTokenContract(lbl);
+      const isVia = isViaService(lbl);
+      const isEx = !isTok && !isVia && (db.type === 'exchange' || isExchange(lbl));
       intCandidates.push({ addr: tx.to, amount: amt, time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, txMs });
     }
     if (intCandidates.length > 0) {
@@ -1030,7 +1068,9 @@ async function getNextTxETH(addr, afterTime) {
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       const db  = getLabel(tx.to);
       const lbl = db.label || '';
-      const isEx = db.type === 'exchange' || isExchange(lbl);
+      const isTok = db.type === 'token' || isTokenContract(lbl);
+      const isVia = isViaService(lbl);
+      const isEx = !isTok && !isVia && (db.type === 'exchange' || isExchange(lbl));
       const dec  = parseInt(tx.tokenDecimal) || 18;
       tokenCandidates.push({ addr: tx.to, amount: parseFloat(tx.value)/Math.pow(10,dec), time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, token: tx.tokenSymbol, txMs });
     }
@@ -1100,13 +1140,15 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
     const db  = getLabel(next.addr);
     const fetchedLabel = await fetchAddressLabel(next.addr, chain);
     const lbl = fetchedLabel || db.label || next.label || '';
-    const isEx = db.type === 'exchange' || isExchange(lbl);
+    const isTok = db.type === 'token' || isTokenContract(lbl);
+    const isVia = isViaService(lbl);
+    const isEx = !isTok && !isVia && (db.type === 'exchange' || isExchange(lbl));
     // 同時送金先（siblings）を保存
     const siblings = (next._siblings || []).map(s => ({
       address: s.addr, label: s.label || '', amount: s.amount, token: s.token,
     }));
     console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... label="${lbl}" exchange=${isEx} siblings=${siblings.length}`);
-    hops.push({ address: next.addr, label: lbl, amount: next.amount, token: next.token, isExchange: isEx, time: next.time, txHash: next.txHash, siblings });
+    hops.push({ address: next.addr, label: lbl, amount: next.amount, token: next.token, isExchange: isEx, isToken: isTok, isVia, time: next.time, txHash: next.txHash, siblings });
     if (isEx) {
       exCount++;
       console.log(`[traceHops] 取引所到達(${exCount}件目): ${lbl}`);
@@ -1138,7 +1180,9 @@ async function investigateBTC(txid) {
     const db = getLabel(out.recipient);
     const fetchedLabel = await fetchAddressLabel(out.recipient, 'btc');
     const lbl = fetchedLabel || db.label || out.recipient_label || '';
-    const isEx = db.type === 'exchange' || isExchange(lbl);
+    const isTok = db.type === 'token' || isTokenContract(lbl);
+    const isVia = isViaService(lbl);
+    const isEx = !isTok && !isVia && (db.type === 'exchange' || isExchange(lbl));
     path.push({ address: out.recipient, label: lbl, amount: out.value/1e8, isExchange: isEx });
     if (isEx) exchanges.push({ name: lbl, address: out.recipient, amount: out.value/1e8 });
   }
@@ -1174,10 +1218,13 @@ async function investigateETH(hash) {
   const recipDb  = getLabel(tx.recipient);
   const recipFetchedLabel = await fetchAddressLabel(tx.recipient, 'eth');
   const recipLbl = recipFetchedLabel || recipDb.label || tx.recipient_label || '';
-  const isRecipEx = recipDb.type === 'exchange' || isExchange(recipLbl);
+  /* 宛先がトークンのコントラクトなら、そこは通過点。
+     実際に資金を受け取るのは ERC-20 転送の受取先なので、追跡を続ける。 */
+  const isRecipToken = recipDb.type === 'token' || isTokenContract(recipLbl);
+  const isRecipEx = !isRecipToken && (recipDb.type === 'exchange' || isExchange(recipLbl));
   const path = [
     { address: tx.sender,    label: senderDb.label || tx.sender_label || '', role: 'sender' },
-    { address: tx.recipient, label: recipLbl, role: 'recipient', isExchange: isRecipEx },
+    { address: tx.recipient, label: recipLbl, role: 'recipient', isExchange: isRecipEx, isToken: isRecipToken },
   ];
   const exchanges = [];
   if (isRecipEx) exchanges.push({ name: recipLbl, address: tx.recipient, amount: parseFloat(tx.value)/1e18 });
@@ -1193,10 +1240,12 @@ async function investigateETH(hash) {
     const db = getLabel(call.recipient);
     const fetchedLabel = await fetchAddressLabel(call.recipient, 'eth');
     const lbl = fetchedLabel || db.label || call.recipient_label || '';
-    const isEx = db.type === 'exchange' || isExchange(lbl);
+    const isTok = db.type === 'token' || isTokenContract(lbl);
+    const isVia = isViaService(lbl);
+    const isEx = !isTok && !isVia && (db.type === 'exchange' || isExchange(lbl));
     const callAmt = parseFloat(call.value || '0') / 1e18;
     if (callAmt > 0.000001 || isEx) { // 実質送金額ありまたは既知取引所
-      path.push({ address: call.recipient, label: lbl, role: 'internal', isExchange: isEx, amount: callAmt });
+      path.push({ address: call.recipient, label: lbl, role: 'internal', isExchange: isEx, isToken: isTok, amount: callAmt });
       if (isEx) exchanges.push({ name: lbl, address: call.recipient, amount: callAmt });
     }
   }
@@ -1224,6 +1273,8 @@ async function investigateETH(hash) {
           const trLbl = await fetchAddressLabel(tokenRecipient, 'eth').catch(() => '') || trDb.label || '';
           const trIsEx = trDb.type === 'exchange' || isExchange(trLbl);
           path.push({ address: tokenRecipient, label: trLbl, role: 'token_recipient', isExchange: trIsEx, amount: tokenAmount, token: tokenSymbol });
+          // トークンに変わった時点を「スワップ」として示す（ETHで送ったのにUSDTが出てくる等）
+          if (isRecipToken) { const tn = path.find(p => p.address?.toLowerCase() === tx.recipient?.toLowerCase()); if (tn) tn.swapTo = tokenSymbol; }
           if (trIsEx) exchanges.push({ name: trLbl, address: tokenRecipient, amount: tokenAmount });
         }
       }
@@ -1906,6 +1957,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
     const flowNodes = (r.path || []).map((p, i) => {
       let cls, icon, roleLabel;
       if (i === 0)           { cls = 'victim';   icon = '●'; roleLabel = '被害者ウォレット（起点）'; }
+      else if (p.isToken) { cls = 'relay'; icon = '🔁'; roleLabel = `スワップ／トークンの通過点（${i}次先）${p.swapTo ? `：→ ${p.swapTo}` : ''}`; }
       else if (p.isExchange && p.inferred) { cls = 'exchange'; icon = '★'; roleLabel = `🏦 取引所候補（${i}次先・推定）`; }
       else if (p.isExchange) { cls = 'exchange'; icon = '★'; roleLabel = `🏦 取引所到達（${i}次先）`; }
       else if (p.role === 'internal') { cls = 'relay'; icon = '◆'; roleLabel = `内部コール（${i}次先）`; }
@@ -3278,7 +3330,7 @@ ${packRow('回収業者への連絡', a.e3)}
 ${packRow('保全している証拠', a.f1)}
 ${packRow('その他', a.note)}
 </table>
-${a.e3 === '連絡した' ? '<div class="warn"><b>回収業者にご連絡済みとのことです。</b>「必ず取り戻せる」「回収の前に前払い金が必要」と言われている場合は、二次被害の典型的なサインです。支払い前に、警察・消費者ホットライン188へご相談ください。</div>' : ''}
+${a.e3 === '連絡した' ? '<div class="warn"><b>回収業者にご連絡済みとのことです。</b>「返金の可能性が高い」「調査に高額な費用が必要」と言われている場合は、二次被害の典型的なサインです。支払い前に、警察・消費者ホットライン188へご相談ください。</div>' : ''}
 
 <h2>8. 経緯（ご本人の記述）</h2>
 ${a.story ? `<ul class="story">${String(a.story).split(String.fromCharCode(10))
