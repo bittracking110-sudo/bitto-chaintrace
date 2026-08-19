@@ -296,6 +296,14 @@
   .bm-x{background:none;border:none;color:var(--sub);font-size:13px;width:100%;margin-top:10px;padding:8px;cursor:pointer;font-family:inherit}
   .bm-err{display:none;background:rgba(220,90,90,.12);border:1px solid #7a4d4d;color:#e6cfcf;border-radius:8px;padding:11px 12px;margin-top:12px;font-size:12.5px;line-height:1.7}
   .bm-tos{font-size:10.5px;color:var(--sub);margin-top:12px;line-height:1.75}
+  /* 同意欄。押す前に読ませるためボタンの上に置く */
+  .bm-agree{display:flex;gap:10px;align-items:flex-start;margin-top:16px;
+    background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 13px;cursor:pointer}
+  /* モーダル内の input は幅100%指定が効いているので、IDを含めて上書きする */
+  #buyModal .bm-agree input[type=checkbox]{margin:2px 0 0;width:18px;height:18px;min-width:18px;flex:none;padding:0;accent-color:var(--teal)}
+  .bm-agree .t{flex:1;min-width:0;font-size:11.5px;color:var(--sub2);line-height:1.75;word-break:break-word}
+  .bm-agree .t b{color:#EAF6F3}
+  .bm-agree a{color:var(--teal)}
   .bm-tos a{color:var(--teal)}
 </style>
 </head>
@@ -387,9 +395,13 @@
     <input type="email" id="bmEmail" placeholder="you@example.com" autocomplete="email" inputmode="email">
     <label class="bm-l" for="bmPhone">電話番号（任意）</label>
     <input type="tel" id="bmPhone" placeholder="09012345678" autocomplete="tel" inputmode="tel">
-    <button class="bm-go" id="bmGo">決済に進む（¥6,600）</button>
+    <label class="bm-agree" for="bmAgree">
+      <input type="checkbox" id="bmAgree">
+      <span class="t"><b><a href="#" id="bmTos">利用規約・プライバシーポリシー</a>に同意します</b><br>
+デジタルコンテンツのため、決済後の返金はお受けできません。被害の回復・犯人の特定を保証するものではありません。</span>
+    </label>
+    <button class="bm-go" id="bmGo" disabled>決済に進む（¥6,600）</button>
     <div class="bm-err" id="bmErr"></div>
-    <div class="bm-tos">決済により<a href="#" id="bmTos">利用規約・プライバシーポリシー</a>に同意したものとします。デジタルコンテンツのため決済後の返金はお受けできません。被害の回復・犯人特定を保証するものではありません。</div>
     <button class="bm-x" id="bmClose">閉じる</button>
   </div>
 </div>
@@ -638,7 +650,19 @@ function buyCTA(){
 }
 /* ── 正式調査報告書の購入（Web決済＝Stripe Checkout） ── */
 const buyModal = document.getElementById('buyModal');
-function openBuy(){ document.getElementById('bmErr').style.display='none'; buyModal.classList.add('on'); }
+/* 同意チェックと購入ボタンの連動。チェックするまで押せない */
+function syncAgree(){
+  const a = document.getElementById("bmAgree");
+  const g = document.getElementById("bmGo");
+  if (a && g) g.disabled = !a.checked;
+}
+document.getElementById("bmAgree").addEventListener("change", syncAgree);
+
+function openBuy(){
+  document.getElementById('bmErr').style.display='none';
+  document.getElementById('bmAgree').checked = false; syncAgree();
+  buyModal.classList.add('on');
+}
 function closeBuy(){ buyModal.classList.remove('on'); }
 /* 件数ステッパー。上限はサーバーの /api/create-checkout が受け付ける10件に合わせる */
 const BITTO_UNIT_PRICE = 6600;
