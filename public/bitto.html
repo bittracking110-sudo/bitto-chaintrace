@@ -178,6 +178,10 @@
 
   /* ── 初動ナビ ── */
   #view-navi{flex:1;overflow-y:auto;padding:18px 16px 24px;display:none}
+  /* ナビ単体で開いたとき（アプリのカードから）は、戻り先のチャットが無いので隠す */
+  html.navi-only nav{display:none}
+  html.navi-only #view-navi .navback{display:none}
+  html.navi-only #view-navi{padding-bottom:40px}
   #view-navi .navback{background:none;border:none;color:var(--teal);font-size:12.5px;font-family:inherit;
     padding:0 0 12px;cursor:pointer;display:block}
   #view-navi h1{font-size:18px;font-weight:800;margin:2px 0 4px}
@@ -815,6 +819,14 @@ function showTab(tab){
 }
 function goChatTab(){ showTab('chat'); }
 function goNaviTab(){ showTab('navi'); }
+
+// ?only=navi＝ナビ単体で開く（アプリのカードからの遷移先）。
+// 戻る先のチャットが無いので、下タブと「AI調査チャットに戻る」は隠す。
+const NAVI_ONLY = new URLSearchParams(location.search).get('only') === 'navi';
+if (NAVI_ONLY) {
+  document.documentElement.classList.add('navi-only');
+  showTab('navi');
+}
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
 /* ── 解析履歴（この端末のブラウザにのみ保存） ── */
@@ -1148,8 +1160,9 @@ addAi(`こんにちは。<b>BitTo</b> の調査AIです。\n\n調べたい送金
   chat.appendChild(nc);
 })();
 
-/* 起動時はAI調査チャットを表示（初動ナビは挨拶下のカードから入る） */
-showTab('chat');
+/* 起動時はAI調査チャットを表示（初動ナビは挨拶下のカードから入る）。
+   ?only=navi のときだけナビを開いたままにする（アプリのカードからの遷移先）。 */
+showTab(NAVI_ONLY ? 'navi' : 'chat');
 </script>
 </body>
 </html>
