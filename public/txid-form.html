@@ -27,13 +27,15 @@
     .field label { display: block; font-size: 0.83rem; color: #9aa0a6; margin-bottom: 5px; }
     .txid-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
     .txid-row input {
-      flex: 1; background: #2a2b2e; border: 1px solid #4a4b50;
-      border-radius: 8px; padding: 11px 13px; color: #e8eaed;
-      font-size: 0.83rem; outline: none; font-family: 'Courier New', monospace;
-      transition: border-color 0.2s;
+      flex: 1; min-width: 0; background: #F1FBF9; border: 2px solid #34E1C8;
+      border-radius: 10px; padding: 15px 14px; color: #0C1728;
+      font-size: 16px; line-height: 1.55; outline: none;
+      font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      letter-spacing: .2px; transition: border-color .2s, box-shadow .2s;
+      box-shadow: 0 0 0 3px rgba(52,225,200,.10);
     }
-    .txid-row input:focus { border-color: #8ab4f8; }
-    .txid-row input::placeholder { color: #5f6368; font-family: sans-serif; font-size: 0.82rem; }
+    .txid-row input:focus { border-color: #14C7AC; box-shadow: 0 0 0 4px rgba(52,225,200,.22); }
+    .txid-row input::placeholder { color: #6E8AA0; font-family: sans-serif; font-size: 13px; letter-spacing: 0; }
     .chain-tag {
       background: #174ea6; color: #8ab4f8; font-size: 0.75rem; font-weight: 700;
       padding: 3px 9px; border-radius: 6px; white-space: nowrap; min-width: 38px;
@@ -127,12 +129,8 @@
     }
 
     function createTxidRow(index) {
-      const row = document.createElement('div');
-      row.className = 'txid-row';
-      row.id = `row-${index}`;
-
       const label = document.createElement('div');
-      label.style.cssText = 'font-size:0.8rem;color:#9aa0a6;margin-bottom:4px';
+      label.style.cssText = 'font-size:0.86rem;color:#c8f5ea;font-weight:700;margin-bottom:6px;letter-spacing:.5px';
       label.textContent = `TXID ${index + 1}`;
 
       const input = document.createElement('input');
@@ -155,7 +153,9 @@
       wrap.style.marginBottom = '12px';
       wrap.appendChild(label);
       const inputRow = document.createElement('div');
-      inputRow.style.cssText = 'display:flex;gap:8px;align-items:center';
+      inputRow.className = 'txid-row';
+      inputRow.id = `row-${index}`;
+      inputRow.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0';
       inputRow.appendChild(input);
       inputRow.appendChild(tag);
       wrap.appendChild(inputRow);

@@ -1408,6 +1408,7 @@ const HEARING_FIELDS = [
   ['e2',  'E2 取引所への申告',              130],
   ['e3',  'E3 回収業者への連絡',            140],
   ['f1',  'F 保全している証拠',             250],
+  ['story','経緯（ご本人の記述）',          420],
   ['note','自由記入',                       300],
   ['token','申込トークン',                  260],
 ];
@@ -3176,6 +3177,8 @@ th{background:#f0f0f0;width:30%}
 table.tl th{width:auto}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;word-break:break-all}
 .warn{background:#fff3f3;border:1px solid #e0a0a0;padding:12px 14px;border-radius:6px}
+ul.story{margin:8px 0 0 20px;padding:0}
+ul.story li{margin:6px 0;font-size:13px;line-height:1.8}
 .warn b{color:#b32}
 .btns{margin:18px 0}
 button{font:inherit;padding:9px 16px;border:1px solid #333;background:#111;color:#fff;border-radius:6px;cursor:pointer}
@@ -3244,7 +3247,14 @@ ${packRow('その他', a.note)}
 </table>
 ${a.e3 === '連絡した' ? '<div class="warn"><b>回収業者にご連絡済みとのことです。</b>「必ず取り戻せる」「回収の前に前払い金が必要」と言われている場合は、二次被害の典型的なサインです。支払い前に、警察・消費者ホットライン188へご相談ください。</div>' : ''}
 
-<h2>8. BitToができること／できないこと</h2>
+<h2>8. 経緯（ご本人の記述）</h2>
+${a.story ? `<ul class="story">${String(a.story).split(String.fromCharCode(10))
+    .map(l => { let t = l.trim(); while (t && '・-–—*●○•>＞'.includes(t[0])) t = t.slice(1).trim(); return t; })
+    .filter(Boolean)
+    .map(l => `<li>${escHtml(l)}</li>`).join('')}</ul>`
+  : '<div class="note">ご記入がありません。</div>'}
+
+<h2>9. BitToができること／できないこと</h2>
 <table><tr><th style="width:50%">できること</th><th>できないこと</th></tr>
 <tr><td>公開チェーンの資金経路の解析<br>着金先取引所・サービスの推定<br>警察・取引所への提出資料の整理<br>不正利用申告文の作成<br>相談先・必要書類の案内</td>
 <td>取引所へ凍結を命令する<br>KYC情報を強制的に取得する<br>資金の残存を保証する<br>被害資金の返還を保証する<br>秘密鍵で資金を取り戻す</td></tr></table>

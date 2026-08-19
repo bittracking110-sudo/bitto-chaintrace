@@ -38,6 +38,9 @@ input[type=text],textarea{width:100%;background:var(--panel2);border:1px solid v
   color:#EAF6F3;font-family:inherit;font-size:16px;padding:11px 12px;line-height:1.6}
 input[type=text]:focus,textarea:focus{outline:none;border-color:var(--teal)}
 textarea{resize:vertical;min-height:82px}
+textarea.story{min-height:220px;line-height:1.9;background:#0F2033}
+textarea.story::placeholder{color:#5E7599;line-height:1.9}
+.cnt{text-align:right;font-size:11px;color:var(--sub);margin-top:6px}
 .save{position:fixed;left:0;right:0;bottom:0;background:rgba(12,23,40,.96);border-top:1px solid var(--line);
   padding:12px 16px calc(12px + env(safe-area-inset-bottom));z-index:30}
 .save .inner{max-width:680px;margin:0 auto;display:flex;align-items:center;gap:12px}
@@ -125,6 +128,11 @@ textarea{resize:vertical;min-height:82px}
     { h:'F. 保全している証拠', d:'手元にあるものを選んでください。', qs:[
       { key:'f1', type:'multi', q:'保存してあるもの', opts:[
         '相手とのやり取りのスクショ','メール','通帳・振込明細','サイトのURL','通話の録音','契約書・規約','送金画面のスクショ'] },
+    ]},
+    { h:'G. 経緯', d:'最初から今までの流れを、思い出せる順に書いてください。1行に1つずつ、箇条書きで構いません。ここがそのまま資料の本文になります。', qs:[
+      { key:'story', type:'story', q:'何があったか（箇条書き）',
+        hint:'日付が分かるものは日付から書くと、警察や取引所に伝わりやすくなります。',
+        ph:'3/1 マッチングアプリで知り合った\n3/10 投資の話をされ、専用アプリを入れるよう言われた\n3/15 最初に10万円を入金した\n4/2 画面上は利益が出ていたので追加で50万円送った\n5/2 出金しようとしたら「税金が必要」と言われた\n5/3 税金として30万円を送ったが出金できていない' },
       { key:'note', type:'textarea', q:'その他、伝えておきたいこと', hint:'上の設問に当てはまらないことがあれば' },
     ]},
   ];
@@ -177,6 +185,10 @@ textarea{resize:vertical;min-height:82px}
           html += '</div>';
         } else if (q.type === 'text') {
           html += '<input type="text" data-in="1">';
+        } else if (q.type === 'story') {
+          // 経緯は行数が多くなる。改行のたびに自分で伸び、書いた行数が見えるようにする。
+          html += '<textarea class="story" data-in="1" rows="10" placeholder="' + esc(q.ph || '') + '"></textarea>'
+                + '<div class="cnt" data-cnt="1">0行</div>';
         } else {
           html += '<textarea data-in="1"></textarea>';
         }
@@ -224,15 +236,29 @@ textarea{resize:vertical;min-height:82px}
           });
         });
       } else {
-        qEl.querySelector('[data-in]').addEventListener('input', function(e){
-          answers[key] = e.target.value; queueSave();
+        var el = qEl.querySelector('[data-in]');
+        el.addEventListener('input', function(e){
+          answers[key] = e.target.value;
+          if (type === 'story') grow(e.target, qEl);
+          queueSave();
         });
+        if (type === 'story') grow(el, qEl);
       }
     });
     document.getElementById('submitBtn').addEventListener('click', submit);
   }
 
   function setStatus(t){ document.getElementById('savest').textContent = t; }
+
+  /* 経緯欄は書くほど長くなる。スクロールで見返せないと書き足しづらいので、
+     内容に合わせて伸ばし、何行書けたかを出す。 */
+  function grow(el, qEl){
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight + 2, 900) + 'px';
+    var n = el.value.split('\n').filter(function(l){ return l.trim(); }).length;
+    var c = qEl.querySelector('[data-cnt]');
+    if (c) c.textContent = n + '行';
+  }
 
   /* 入力のたびに投げると回数が増える。手が止まってから送る。 */
   function queueSave(){
