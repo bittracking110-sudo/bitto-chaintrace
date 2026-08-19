@@ -763,6 +763,24 @@ const FETCH_TIMEOUT_MS = 6000;
 async function fetchT(url, opts = {}, ms = FETCH_TIMEOUT_MS) {
   return fetch(url, { ...opts, signal: AbortSignal.timeout(ms) });
 }
+
+/* 追跡で使う外部API（Etherscan・Blockchair）の取得。
+   ホップが増えて呼び出し回数が増えた分、失敗も増える。一度だけ取り直す。 */
+async function apiJson(url) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const j = await (await fetchT(url)).json();
+      const limited = j && typeof j.result === 'string' && /rate limit/i.test(j.result);
+      if (!limited) return j;
+      console.warn('[Etherscan] 回数制限。待って取り直します');
+    } catch (e) {
+      if (attempt === 2) throw e;
+      console.warn('[Etherscan] 取得失敗、取り直します:', e.message);
+    }
+    await new Promise(r => setTimeout(r, 1200));
+  }
+  return { result: [] };
+}
 // 以下3つの時間予算は加算される（追跡→付帯情報→内部送金の順に直列実行）。
 // 合計が長いと利用者が結果を待ちきれず「調査が出ない」と受け取られるため、
 // 初回照会と合わせて約40秒で必ず返るよう配分する。超過分は部分結果で打ち切る。
@@ -779,8 +797,7 @@ async function getAddressInfo(addr, chain) {
   try {
     if (chain === 'eth') {
       const url = `https://api.blockchair.com/ethereum/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-      const r = await fetchT(url);
-      const j = await r.json();
+      const j = await apiJson(url);
       const d = j.data?.[addr.toLowerCase()]?.address;
       if (!d) return null;
       const balNative = parseFloat(d.balance || 0) / 1e18;
@@ -791,8 +808,7 @@ async function getAddressInfo(addr, chain) {
     }
     if (chain === 'btc') {
       const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-      const r = await fetchT(url);
-      const j = await r.json();
+      const j = await apiJson(url);
       const d = j.data?.[addr]?.address;
       if (!d) return null;
       const balNative = parseFloat(d.balance || 0) / 1e8;
@@ -904,8 +920,7 @@ async function fetchAddressLabel(addr, chain) {
   if (chain === 'eth' && ETHERSCAN_KEY) {
     try {
       const url = `https://api.etherscan.io/v2/api?chainid=1&module=contract&action=getsourcecode&address=${addr}&apikey=${ETHERSCAN_KEY}`;
-      const r = await fetchT(url);
-      const j = await r.json();
+      const j = await apiJson(url);
       const name = j.result?.[0]?.ContractName || '';
       // 意味のあるコントラクト名のみ採用（"Vyper_contract"などは除外）
       if (name && name.length > 2 && !['Vyper_contract','0x','_'].some(s => name.startsWith(s))) {
@@ -921,8 +936,7 @@ async function fetchAddressLabel(addr, chain) {
       const chain2 = chain === 'btc' ? 'bitcoin' : 'ethereum';
       const addrKey = chain === 'eth' ? addr.toLowerCase() : addr;
       const url = `https://api.blockchair.com/${chain2}/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-      const r = await fetchT(url);
-      const j = await r.json();
+      const j = await apiJson(url);
       const d = j.data?.[addrKey]?.address;
       const bcLbl = d?.label || d?.contract_name || '';
       if (bcLbl) {
@@ -960,8 +974,7 @@ function normalizeTimeStr(t) {
 async function getNextTxBTC(addr, afterTime) {
   try {
     const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-    const r = await fetchT(url);
-    const j = await r.json();
+    const j = await apiJson(url);
     const txHashes = j.data?.[addr]?.transactions || [];
     const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
     for (const txHash of txHashes.slice(0, 8)) {
@@ -993,8 +1006,7 @@ async function getNextTxETH(addr, afterTime) {
   // ① 通常TX（EOAからの送金）
   try {
     const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
-    const r = await fetchT(url);
-    const j = await r.json();
+    const j = await apiJson(url);
     const txs = Array.isArray(j.result) ? j.result : [];
     console.log(`[HOP] Etherscan TX: ${txs.length}件`);
     const candidates = [];
@@ -1026,8 +1038,7 @@ async function getNextTxETH(addr, afterTime) {
   // ※ sort=desc で最新TX から取得（古いコントラクトはascだと過去TXしか取れない問題を修正）
   try {
     const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlistinternal&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=desc&apikey=${ETHERSCAN_KEY}`;
-    const r = await fetchT(url);
-    const j = await r.json();
+    const j = await apiJson(url);
     const txs = Array.isArray(j.result) ? j.result : [];
     console.log(`[HOP] Internal TX: ${txs.length}件`);
     const intCandidates = [];
@@ -1059,8 +1070,7 @@ async function getNextTxETH(addr, afterTime) {
 
   try {
     const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=desc&apikey=${ETHERSCAN_KEY}`;
-    const r = await fetchT(url);
-    const j = await r.json();
+    const j = await apiJson(url);
     const txs = Array.isArray(j.result) ? j.result : [];
     const tokenCandidates = [];
     for (const tx of txs) {
@@ -1077,7 +1087,9 @@ async function getNextTxETH(addr, afterTime) {
     }
     if (tokenCandidates.length > 0) {
       const exCand = tokenCandidates.find(c => c.isExchange);
-      const chosen = exCand || tokenCandidates[0];
+      // 入金時刻に最も近い送金＝追っている資金である可能性が高い
+      const nearest = [...tokenCandidates].sort((a, b) => (a.txMs - refMs) - (b.txMs - refMs));
+      const chosen = exCand || nearest[0];
       console.log(`[HOP] ERC-20送金先: ${chosen.addr} token=${chosen.token} exchange=${chosen.isExchange}`);
       return chosen;
     }
@@ -1085,8 +1097,7 @@ async function getNextTxETH(addr, afterTime) {
 
   try {
     const url = `https://api.blockchair.com/ethereum/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}&limit=10`;
-    const r = await fetchT(url);
-    const j = await r.json();
+    const j = await apiJson(url);
     const txHashes = j.data?.[addr.toLowerCase()]?.transactions || [];
     for (const txHash of txHashes.slice(0, 4)) {
       await new Promise(res => setTimeout(res, 300));
