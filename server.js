@@ -1349,6 +1349,27 @@ function buildReport(result) {
   return `📊 BitTo 調査レポート\n━━━━━━━━━━━━━━━━━\n${em} チェーン：${result.chain}\n🔗 TXID：${txShort}\n📅 送金日時：${fmtDate(result.blockTime)}\n💰 送金額：${amountDisplay}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}\n\n📍 送金経路\n━━━━━━━━━━━━━━━━━\n${pathLines.join('\n　↓\n')}\n${exSection}${tplSection}\n\n🔒 BitTo が自動生成したレポートです`;
 }
 
+/* ══ 管理用エンドポイントの関門 ═══════════════════════════════
+   管理系は誰でも叩ける状態だった。実害は情報の流出ではなく
+   「ただ乗り」と「なりすまし送信」で、とくにメール送信の口が開いていると
+   第三者に踏み台にされてドメインの評判が落ちる（迷惑メール判定と戦っている最中で
+   これは致命的）。ADMIN_TOKEN を1つ置き、合致しなければ触れないようにする。
+   未設定なら従来どおり通す（設定漏れで自分が締め出されないため。ログで警告する）。 */
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+if (!ADMIN_TOKEN) {
+  console.warn('[Admin] ⚠️ ADMIN_TOKEN が未設定です。管理用エンドポイントが誰でも叩ける状態です');
+}
+function adminOk(req) {
+  if (!ADMIN_TOKEN) return true;
+  const t = (req.query && req.query.t) || req.headers['x-admin-token'] || '';
+  return String(t) === ADMIN_TOKEN;
+}
+function requireAdmin(req, res, next) {
+  if (adminOk(req)) return next();
+  // 存在自体を伏せる。総当たりの的にしない
+  res.status(404).send('Not found');
+}
+
 // ══ Google Sheets 連携 ════════════════════════════════════════
 // スプレッドシートの列構成（A〜J）:
 // A:申込日時 B:お名前 C:電話番号 D:メールアドレス E:ご住所
@@ -2955,6 +2976,14 @@ app.post('/webhook', line.middleware(lineConfig), async (req, res) => {
 
 app.use(cors());
 app.use(express.json());
+/* 本文が大きすぎるとExpressがHTMLのエラーページを返し、画面側が「保存できません」
+   としか出せない。JSONで理由を返し、利用者に短くしてもらう。 */
+app.use((err, req, res, next) => {
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ error: '入力が長すぎます。お手数ですが、経緯を短くしてから保存してください。' });
+  }
+  next(err);
+});
 
 // ── APIレスポンスをキャッシュさせない ──────────────────────────
 // 調査の進捗確認（/api/connection/job/:id）は同じURLを数秒ごとに叩くため、
@@ -3009,17 +3038,12 @@ app.get('/api/xrp/tx/:txid', async (req, res) => {
     const t = await r.text(); if (t === 'Not found') return res.status(404).json({ error: 'Not found' }); res.json(JSON.parse(t)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/ai/analyze', express.json(), async (req, res) => {
-  try { const { prompt } = req.body;
-    if (!prompt) return res.status(400).json({ error: 'promptが必要です' });
-    const text = await geminiGenerate(prompt, { temperature: 0.2, maxOutputTokens: 1000 });
-    if (text === null) return res.status(502).json({ error: 'AIが応答しませんでした（詳細は [Gemini] ログを参照）' });
-    res.json({ text });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+/* /api/ai/analyze（任意のプロンプトをGeminiへ中継）は削除した。
+   アプリもWebも使っておらず、誰でも叩ける状態のまま残すと、こちらの費用で
+   好きな文章を生成させられる。相談は /api/connection/consult（レート制限つき）に一本化する。 */
 
 // メール送信テスト（ブラウザで /api/test-email?to=xxx を開くと確認できる）
-app.get('/api/test-email', async (req, res) => {
+app.get('/api/test-email', requireAdmin, async (req, res) => {
   const to = req.query.to || SMTP_USER;
   if (!to) return res.status(400).json({ error: 'to パラメータが必要です' });
   const html = '<p>このメールが届いていればメール設定は正常です。</p>';
@@ -3044,7 +3068,7 @@ app.get('/api/test-email', async (req, res) => {
 });
 
 // 管理用レポート生成API（LINE・決済不要）
-app.post('/api/admin/generate-report', express.json(), async (req, res) => {
+app.post('/api/admin/generate-report', requireAdmin, express.json(), async (req, res) => {
   try {
     const { customerName, txids } = req.body;
     if (!customerName) return res.status(400).json({ error: 'customerNameが必要です' });
@@ -3093,7 +3117,7 @@ app.post('/api/admin/generate-report', express.json(), async (req, res) => {
 
 /* ラベルAPIの疎通確認。キー投入後に応答の形をそのまま見るために置く。
    例: /api/admin/label-lookup?address=34xp4vRocGJym3xR7yCVpFHoCNxv4twsEo&chain=btc */
-app.get('/api/admin/label-lookup', async (req, res) => {
+app.get('/api/admin/label-lookup', requireAdmin, async (req, res) => {
   const addr  = (req.query.address || '').trim();
   const chain = (req.query.chain || 'btc').toLowerCase();
   if (!addr) return res.status(400).json({ error: 'address が必要です' });
@@ -3111,11 +3135,11 @@ app.get('/api/admin/label-lookup', async (req, res) => {
 app.get('/apply', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'apply.html')));
 
 // 管理ページ
-app.get('/admin', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+app.get('/admin', requireAdmin, (_req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
 // テスト用：決済スキップでTXID入力フォームを生成
 // 使い方: /api/test-txid-form?name=山田太郎&count=2&email=test@gmail.com
-app.get('/api/test-txid-form', (req, res) => {
+app.get('/api/test-txid-form', requireAdmin, (req, res) => {
   const customerName = req.query.name  || 'テストユーザー';
   const count        = parseInt(req.query.count) || 1;
   const email        = req.query.email || '';
@@ -3309,12 +3333,27 @@ app.get('/api/hearing/:id', (req, res) => {
 });
 
 // 下書き保存（自動保存用）。答えの上書きだけを行い、状態は変えない。
+/* 自由記入をそのまま受けると、保存先（永続ボリューム・スプレッドシート）を
+   いくらでも膨らませられる。項目ごとに上限を置いて切り詰める。
+   経緯は長くなるので他より広く取る。 */
+const HEARING_MAX = { story: 8000, note: 4000, _default: 1000 };
+function trimAnswers(input) {
+  const out = {};
+  for (const [k, v] of Object.entries(input || {})) {
+    const max = HEARING_MAX[k] || HEARING_MAX._default;
+    if (Array.isArray(v)) out[k] = v.slice(0, 30).map(x => String(x).slice(0, 200));
+    else if (v == null) out[k] = '';
+    else out[k] = String(v).slice(0, max);
+  }
+  return out;
+}
+
 app.post('/api/hearing/save', express.json(), (req, res) => {
   const { id, answers } = req.body || {};
   const h = hearings.get(id);
   if (!h) return res.status(404).json({ error: '見つかりません' });
   if (h.status === 'submitted') return res.status(409).json({ error: '送信済みです' });
-  h.answers = { ...h.answers, ...(answers || {}) };
+  h.answers = { ...h.answers, ...trimAnswers(answers) };
   h.updatedAt = Date.now();
   saveHearings();
   res.json({ ok: true, savedAt: h.updatedAt });
@@ -3324,7 +3363,7 @@ app.post('/api/hearing/submit', express.json(), async (req, res) => {
   const { id, answers } = req.body || {};
   const h = hearings.get(id);
   if (!h) return res.status(404).json({ error: '見つかりません' });
-  h.answers = { ...h.answers, ...(answers || {}) };
+  h.answers = { ...h.answers, ...trimAnswers(answers) };
   h.status = 'submitted';
   h.submittedAt = Date.now();
   h.updatedAt = Date.now();
@@ -3352,7 +3391,7 @@ app.post('/api/hearing/submit', express.json(), async (req, res) => {
 });
 
 /* すでにあるタブを整形し直す。見出しを変えたときや、手で触って崩れたときに戻す。 */
-app.get('/api/admin/hearing-format', async (_req, res) => {
+app.get('/api/admin/hearing-format', requireAdmin, async (_req, res) => {
   const sheets = getSheets();
   if (!sheets || !HEARING_SHEET_ID) return res.json({ ok: false, reason: 'Sheets未設定' });
   try {
@@ -3380,7 +3419,7 @@ app.get('/api/admin/hearing-format', async (_req, res) => {
 /* シートへの書き込みが失敗した回答をまとめて送り直す。
    失敗の主因は共有設定の付け忘れで、直したあとに手で入れ直すのは現実的でない。
    回答自体はサーバーに残っているので、権限がついた時点で流し込める。 */
-app.get('/api/admin/hearing-resend', async (_req, res) => {
+app.get('/api/admin/hearing-resend', requireAdmin, async (_req, res) => {
   const pending = [...hearings.values()].filter(h => h.status === 'submitted' && h.sheetLogged !== true);
   const results = [];
   for (const h of pending) {
@@ -3704,15 +3743,29 @@ setInterval(() => {
 // ── 簡易レート制限（IPごと 調査30回/時） ──────────────────────
 // 8回/時では通常利用や動作確認の途中で遮断され、利用者からは「調査が出ない」と
 // 見分けがつかないため引き上げた。携帯回線はCGNATで多数の利用者が同一IPになる点にも配慮。
+/* 1時間の上限だけだと、30回×24時間＝720回まで回せてしまう。
+   外部APIとGeminiの費用がそのまま出ていくので、1日の上限も置く。
+   携帯回線はCGNATで多数の利用者が同一IPになるため、日次は緩めにする。 */
 const connRateMap = new Map();
+const CONN_LIMIT_HOUR = 30;
+const CONN_LIMIT_DAY  = 80;
 function connRateOk(ip) {
   const now = Date.now();
-  const arr = (connRateMap.get(ip) || []).filter(t => now - t < 3600000);
-  if (arr.length >= 30) { connRateMap.set(ip, arr); return false; }
-  arr.push(now);
+  const arr = (connRateMap.get(ip) || []).filter(t => now - t < 86400000);
   connRateMap.set(ip, arr);
+  if (arr.filter(t => now - t < 3600000).length >= CONN_LIMIT_HOUR) return false;
+  if (arr.length >= CONN_LIMIT_DAY) return false;
+  arr.push(now);
   return true;
 }
+// 溜まりっぱなしにしない（1日経った記録は捨てる）
+setInterval(() => {
+  const cutoff = Date.now() - 86400000;
+  for (const [ip, arr] of connRateMap) {
+    const keep = arr.filter(t => t > cutoff);
+    if (keep.length) connRateMap.set(ip, keep); else connRateMap.delete(ip);
+  }
+}, 3600000);
 
 // ── サポートチャット（購入者専用・ファイル永続化） ─────────────
 const connectionChats = new Map(); // token → { txid, chain, customerName, email, reportUrl, reportSummary, messages, createdAt }
