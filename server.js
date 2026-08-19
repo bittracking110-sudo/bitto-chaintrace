@@ -1687,7 +1687,7 @@ td{padding:8px 10px;border:1px solid #e2e8f0;font-size:0.85rem}
 </html>`;
 }
 
-function buildReportEmailHTML(name, reportUrl, issuedAt) {
+function buildReportEmailHTML(name, reportUrl, issuedAt, hearingUrl) {
   return `<!DOCTYPE html>
 <html lang="ja">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1721,6 +1721,10 @@ h2{font-size:0.95rem;color:#1a1a2e;margin:0 0 14px;padding-bottom:8px;border-bot
     <a class="btn" href="${reportUrl}">📄 レポートを開く</a>
     <p class="note" style="font-size:0.82rem;color:#64748b">またはブラウザで以下のURLを開いてください：</p>
     <div class="url-box">${reportUrl}</div>
+    ${hearingUrl ? `<p class="note" style="margin-top:20px">📑 <strong>被害時系列パック（任意・追加費用なし）</strong><br>
+被害の経緯をうかがい、調査結果と合わせて時系列の資料にまとめます。警察・取引所へご相談の際にお使いいただけます。</p>
+    <a class="btn" style="background:#0f766e" href="${hearingUrl}">📑 経緯を入力して資料を作る</a>
+    <div class="url-box">${hearingUrl}</div>` : ''}
     <p class="note" style="margin-top:14px;font-size:0.82rem;color:#64748b">
 💡 <strong>PDFとして保存するには</strong><br>
 ブラウザの印刷メニュー（Ctrl+P / ⌘P）を開き、「PDFとして保存」を選択してください。</p>
@@ -1812,7 +1816,7 @@ function buildMermaidDiagram(path, chain) {
 
 // ══ 有料HTMLレポート生成 ══════════════════════════════════════
 
-function generateReportHTML(results, customerName, issuedAt, aiData = {}, reportUrl = '', brand = 'bitto') {
+function generateReportHTML(results, customerName, issuedAt, aiData = {}, reportUrl = '', brand = 'bitto', hearingUrl = '') {
   const chainFull = { BTC: 'Bitcoin', ETH: 'Ethereum', XRP: 'XRP Ledger' };
 
   // ── ブランド出し分け（未指定はBitTo＝従来どおり） ──
@@ -2176,6 +2180,11 @@ ${r.txid}
 </head>
 <body>
 <div class="container">
+  ${hearingUrl ? `<div class="print-bar" style="border-color:var(--r-accent)">
+    <p style="margin:0 0 10px"><strong style="color:var(--r-accent)">📑 被害時系列パック（任意・追加費用はかかりません）</strong><br>
+    被害の経緯をうかがい、この調査結果と合わせて時系列の資料にまとめます。警察・取引所へご相談の際にお使いいただけます。</p>
+    <a class="print-btn" href="${hearingUrl}" style="display:block;text-decoration:none;text-align:center">経緯を入力して資料を作る</a>
+  </div>` : ''}
   <div class="print-bar">
     <!-- PDFはサーバー側で作ってあるので、端末やブラウザを問わず1タップで保存できる。
          印刷経由（下）は、Chrome(iOS)では機能せずAndroidのアプリ内ブラウザからも
@@ -3508,7 +3517,10 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
       ]).catch(() => ({ analysis: null, requests: [] }));
       const reportId   = crypto.randomUUID();
       const reportUrl  = `${BASE_URL}/report/${reportId}`;
-      const reportHtml = generateReportHTML(list, formData.customerName, issuedAt, aiData, reportUrl, formData.brand || 'bitto');
+      const reportHtml = generateReportHTML(list, formData.customerName, issuedAt, aiData, reportUrl,
+        formData.brand || 'bitto',
+        // 経緯をうかがう資料への入口。報告書はあとから見返されるので、ここにも置く
+        (formData.brand !== 'connection') ? `${BASE_URL}/hearing/${token}` : '');
       await saveReport(reportId, reportHtml);
 
       // SheetsにレポートURLを記録
@@ -3569,7 +3581,8 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
         sendEmail(
           formData.email,
           '【BitTo】詳細調査レポートが完成しました',
-          buildReportEmailHTML(formData.customerName, reportUrl, issuedAt),
+          buildReportEmailHTML(formData.customerName, reportUrl, issuedAt,
+            (formData.brand !== 'connection') ? `${BASE_URL}/hearing/${token}` : ''),
           'bitto'   // 渡さないと送信元が Connection 名義になる（迷惑メール判定の一因）
         ).catch(console.error);
       }
