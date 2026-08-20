@@ -1494,7 +1494,9 @@ async function investigate(txid, chain, opts = {}) {
      画面の見出しや報告書の凍結要請先が出てこない。
      DEX・ブリッジ・トークン契約は着金先ではないので入れない。 */
   result.exchanges = result.exchanges || [];
-  for (const n of result.path || []) {
+  for (const [i, n] of (result.path || []).entries()) {
+    // 先頭は送金元。被害者が出金した取引所であって、凍結を要請する相手ではない
+    if (i === 0 || n.role === 'sender') continue;
     if (!n.isExchange || n.isVia || n.isToken || !n.address) continue;
     if (result.exchanges.some(e => (e.address || '').toLowerCase() === n.address.toLowerCase())) continue;
     result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address, amount: n.amount });
@@ -2192,7 +2194,19 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
           <tr><th>サポートURL</th><td><a href="${contact.support}">${contact.support}</a></td></tr>
           ${contact.leo ? `<tr><th>法執行機関窓口</th><td><a href="${contact.leo}">${contact.leo}</a></td></tr>` : ''}
           ${contact.note ? `<tr><th>対応メモ</th><td>${contact.note}</td></tr>` : ''}
-        </table>` : ''}`;
+        </table>` : `
+        <h4 style="margin:18px 0 10px">📞 連絡先の調べ方</h4>
+        <div class="note-box">
+          <p style="margin:0 0 8px">この事業者の窓口情報は当社に登録がありません。以下の順で確認できます。</p>
+          <ol style="margin:0 0 8px 18px;padding:0">
+            <li>公式サイトを検索し、<strong>Support / Help</strong> から不正利用の申告フォームを探す</li>
+            <li>フッターの <strong>Law Enforcement / Compliance</strong>（法執行機関向け窓口）を探す。
+                こちらがあれば、警察経由の照会が最も通りやすい</li>
+            <li>見つからない場合は <strong>support@ / compliance@ +ドメイン</strong> 宛に、下記のテンプレートを送る</li>
+          </ol>
+          <p style="margin:0;font-size:0.85em">※ 海外の事業者は日本の警察の照会に応じる義務がありません。
+          対応するかどうかは事業者の判断になります。</p>
+        </div>`}`;
 
       tplHTML = `
         <h3>📝 取引所への要請テンプレート</h3>
@@ -2344,6 +2358,8 @@ ${r.txid}
     .badge{background:var(--r-badgebg);color:var(--r-badgeink);font-size:0.72rem;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:400}
     .flow-arrow{font-size:1.4rem;color:var(--r-ink2);margin:4px 0;line-height:1}
     .no-ex{color:var(--r-ink2);font-size:0.85rem;padding:10px}
+    .note-box{background:var(--r-softbg);border:1px solid var(--r-border);border-radius:8px;padding:12px 14px;font-size:0.85rem;line-height:1.8;color:var(--r-ink2)}
+    .note-box strong{color:var(--r-ink)}
     .flow-note{color:var(--r-ink2);font-size:0.78rem;line-height:1.7;margin-top:10px}
     /* 要請テンプレート */
     .template-box{font-family:var(--r-tmplfont);background:var(--r-tmplbg);border:1px solid var(--r-border);border-radius:8px;padding:16px;font-size:0.82rem;white-space:pre-wrap;line-height:1.8;word-break:break-all;margin-top:10px;color:var(--r-ink)}
