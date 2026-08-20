@@ -54,18 +54,17 @@ tr:hover td{background:rgba(52,225,200,.05)}
 </div>
 
 <script>
-// トークンはURLから読み、履歴に残らないようアドレスバーから消す
-const T = new URLSearchParams(location.search).get('t') || '';
-history.replaceState(null, '', location.pathname);
+/* 合言葉はサーバーがCookieに移すので、この画面では持たない。
+   同一オリジンへの通信にはCookieが自動で付く。 */
 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 async function load(){
   const q = document.getElementById('q').value.trim();
   const device = document.getElementById('device').value.trim();
-  const u = `/api/admin/chatlogs?t=${encodeURIComponent(T)}&q=${encodeURIComponent(q)}&device=${encodeURIComponent(device)}`;
+  const u = `/api/admin/chatlogs?q=${encodeURIComponent(q)}&device=${encodeURIComponent(device)}`;
   const r = await fetch(u);
-  if (!r.ok) { document.getElementById('count').textContent = '読み込めませんでした（トークンをご確認ください）'; return; }
+  if (!r.ok) { document.getElementById('count').textContent = '読み込めませんでした。/admin/chats?t=… から開き直してください（12時間で切れます）'; return; }
   const j = await r.json();
   document.getElementById('count').textContent = `${j.件数}件`;
   document.getElementById('rows').innerHTML = (j.記録 || []).map(c => `
@@ -79,7 +78,7 @@ async function load(){
 
 document.getElementById('rows').addEventListener('click', async e => {
   const tr = e.target.closest('tr[data-id]'); if (!tr) return;
-  const r = await fetch(`/api/admin/chatlogs/${tr.dataset.id}?t=${encodeURIComponent(T)}`);
+  const r = await fetch(`/api/admin/chatlogs/${tr.dataset.id}`);
   if (!r.ok) return;
   const c = await r.json();
   const d = document.getElementById('detail');
@@ -99,7 +98,7 @@ document.getElementById('del').addEventListener('click', async () => {
   const device = document.getElementById('device').value.trim();
   if (!device) { alert('削除する端末IDを入力してください'); return; }
   if (!confirm(`端末ID ${device} の記録をすべて削除します。元に戻せません。`)) return;
-  const r = await fetch(`/api/admin/chatlogs-delete?t=${encodeURIComponent(T)}&device=${encodeURIComponent(device)}`);
+  const r = await fetch(`/api/admin/chatlogs-delete?device=${encodeURIComponent(device)}`);
   const j = await r.json();
   alert(j.ok ? `${j.削除件数}件を削除しました` : (j.error || '削除できませんでした'));
   load();

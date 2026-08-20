@@ -2066,15 +2066,59 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 if (!ADMIN_TOKEN) {
   console.warn('[Admin] ⚠️ ADMIN_TOKEN が未設定です。管理用エンドポイントが誰でも叩ける状態です');
 }
+/* 合言葉をURLに載せると、ブラウザの履歴・サーバーのログ・共有したURLに残る。
+   実際に検索欄へ貼られて外部に出たことがあるため、一度使ったら Cookie に移し、
+   URLからは消す。以後はURLに合言葉が現れない。 */
+const ADMIN_COOKIE = 'bitto_admin';
+const ADMIN_COOKIE_MAX_AGE = 12 * 60 * 60 * 1000;   // 12時間で切れる
+function readCookie(req, name) {
+  const raw = req.headers.cookie || '';
+  for (const part of raw.split(';')) {
+    const i = part.indexOf('=');
+    if (i < 0) continue;
+    if (part.slice(0, i).trim() === name) {
+      try { return decodeURIComponent(part.slice(i + 1).trim()); } catch { return ''; }
+    }
+  }
+  return '';
+}
+/* 長さや先頭の一致具合で応答時間が変わらないようにして比べる。 */
+function adminTokenMatches(given) {
+  const a = Buffer.from(String(given || ''), 'utf8');
+  const b = Buffer.from(ADMIN_TOKEN, 'utf8');
+  if (a.length !== b.length) return false;
+  try { return crypto.timingSafeEqual(a, b); } catch { return false; }
+}
 function adminOk(req) {
   if (!ADMIN_TOKEN) return true;
-  const t = (req.query && req.query.t) || req.headers['x-admin-token'] || '';
-  return String(t) === ADMIN_TOKEN;
+  const t = (req.query && req.query.t)
+    || req.headers['x-admin-token']
+    || readCookie(req, ADMIN_COOKIE) || '';
+  return adminTokenMatches(t);
 }
 function requireAdmin(req, res, next) {
-  if (adminOk(req)) return next();
-  // 存在自体を伏せる。総当たりの的にしない
-  res.status(404).send('Not found');
+  if (!adminOk(req)) {
+    // 存在自体を伏せる。総当たりの的にしない
+    return res.status(404).send('Not found');
+  }
+  /* URLで渡ってきたときは Cookie に移し、合言葉を消したURLへ送り直す。
+     画面を開いた場合だけ。curl などのAPI利用は、そのまま応答する。 */
+  if (ADMIN_TOKEN && req.query && req.query.t) {
+    res.cookie(ADMIN_COOKIE, ADMIN_TOKEN, {
+      httpOnly: true,                       // JavaScriptから読めない
+      secure: BASE_URL.startsWith('https'),
+      sameSite: 'strict',                   // 他サイトからの遷移では送られない
+      maxAge: ADMIN_COOKIE_MAX_AGE,
+      path: '/',
+    });
+    if (String(req.headers.accept || '').includes('text/html')) {
+      const q = new URLSearchParams(req.query);
+      q.delete('t');
+      const rest = q.toString();
+      return res.redirect(req.path + (rest ? '?' + rest : ''));
+    }
+  }
+  next();
 }
 
 // ══ Google Sheets 連携 ════════════════════════════════════════
