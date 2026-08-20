@@ -893,10 +893,14 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
     }
 
     // ①' 自前DBにもBlockchairにも無ければ外部API（キー未設定なら何もしない）
+    /* 着金先の名前が最優先。回数を手前のノードで使い切ると、肝心の
+       到達先が名無しのまま終わる（実際にそうなった）。最後の1回は着金先に残す。 */
+    const isLastNode = idx === path.length - 1;
     if (!node.label && MISTTRACK_KEY
-        && (idx === path.length - 1 || inferExchangeByBehavior(node))) {
+        && (isLastNode || inferExchangeByBehavior(node))) {
       const known = labelCache.has(node.address.toLowerCase());
-      if (known || (apiLookups < lookupBudget && labelQuotaOk())) {
+      const budgetOk = isLastNode ? apiLookups < lookupBudget : apiLookups < lookupBudget - 1;
+      if (known || (budgetOk && labelQuotaOk())) {
         if (!known) { apiLookups++; labelQuotaUse(); }
         const api = await lookupLabelAPI(node.address, chain);
         if (api.name) {
