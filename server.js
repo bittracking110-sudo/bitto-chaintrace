@@ -547,6 +547,46 @@ const EXCHANGE_CONTACTS = {
     email: 'support@bitbank.cc',
     note: '日本語サポート対応。金融庁登録済み取引所',
   },
+  'gmoコイン': {
+    url: 'https://coin.z.com/jp/',
+    support: 'https://support.coin.z.com',
+    note: '運営：GMOコイン株式会社（日本の暗号資産交換業者）。日本語で照会でき、警察からの照会にも国内法に基づき対応する体制があります。',
+  },
+  'gmo coin': {
+    url: 'https://coin.z.com/jp/',
+    support: 'https://support.coin.z.com',
+    note: '運営：GMOコイン株式会社（日本の暗号資産交換業者）。',
+  },
+  'sbi vc': {
+    url: 'https://www.sbivc.co.jp/',
+    support: 'https://www.sbivc.co.jp/faqs',
+    note: '運営：SBI VCトレード株式会社（日本の暗号資産交換業者）。DMM Bitcoin の口座・預かり資産の移管先でもあります（2025年3月）。',
+  },
+  'sbivc': {
+    url: 'https://www.sbivc.co.jp/',
+    support: 'https://www.sbivc.co.jp/faqs',
+    note: '運営：SBI VCトレード株式会社（日本の暗号資産交換業者）。',
+  },
+  bitpoint: {
+    url: 'https://www.bitpoint.co.jp/',
+    support: 'https://faq.bitpoint.co.jp/',
+    note: '運営：SBI VCトレード株式会社（日本の暗号資産交換業者）。',
+  },
+  '楽天ウォレット': {
+    url: 'https://www.rakuten-wallet.co.jp/',
+    support: 'https://faqsystem.jp/rakuten_wallet/',
+    note: '運営：楽天ウォレット株式会社（日本の暗号資産交換業者）。',
+  },
+  'rakuten wallet': {
+    url: 'https://www.rakuten-wallet.co.jp/',
+    support: 'https://faqsystem.jp/rakuten_wallet/',
+    note: '運営：楽天ウォレット株式会社（日本の暗号資産交換業者）。',
+  },
+  'dmm bitcoin': {
+    url: 'https://www.sbivc.co.jp/',
+    support: 'https://www.sbivc.co.jp/faqs',
+    note: 'DMM Bitcoin はサービスを終了し、口座・預かり資産は SBI VCトレード株式会社へ移管されました（同社の公表・2025年3月）。照会は移管先の SBI VCトレードへ行ってください。',
+  },
   // ─── その他グローバル ───
   mexc: {
     name: 'MEXC', url: 'https://www.mexc.com',
