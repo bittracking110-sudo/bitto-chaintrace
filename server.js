@@ -750,6 +750,35 @@ function xrpAccountName(j) {
   return name;
 }
 
+/* 経路上のアドレスの「取引回数」と「名前が付いたか」を貯める。
+   MistTrackを引くかどうかのしきい値を、見当ではなく分布で決めるため。
+   すでに取得済みの値を書くだけなので、外部APIは一切使わない。 */
+const HOPSTATS_FILE = path.join(DATA_DIR, 'hop-stats.json');
+const HOPSTATS_MAX  = 3000;   // 貯めすぎない。分布を見るには十分
+let hopStats = [];
+try { hopStats = JSON.parse(fs.readFileSync(HOPSTATS_FILE, 'utf8')) || []; } catch { /* 初回は無い */ }
+let hopStatsDirty = false;
+function recordHopStat(node, chain, idx, total) {
+  if (!node || node.txCount == null || !Number.isFinite(node.txCount)) return;
+  hopStats.push({
+    at: Date.now(), chain, idx, total,
+    tx: node.txCount,
+    // 名前が付いたか。推定でついた名前は「付いた」に数えない
+    named: !!(node.label && !node.inferred),
+    inferred: !!node.inferred,
+    ex: !!node.isExchange, via: !!node.isVia, token: !!node.isToken,
+  });
+  if (hopStats.length > HOPSTATS_MAX) hopStats = hopStats.slice(-HOPSTATS_MAX);
+  hopStatsDirty = true;
+}
+/* 書き込みは調査ごとに1回だけ。ノードごとに書くとディスクを叩きすぎる。 */
+function saveHopStats() {
+  if (!hopStatsDirty) return;
+  hopStatsDirty = false;
+  fsp.writeFile(HOPSTATS_FILE, JSON.stringify(hopStats), 'utf8')
+    .catch(e => console.error('[HopStats] 保存失敗:', e.message));
+}
+
 /* 取引先分析（相手方分析）。ラベルが引けなかったときの代替。
    取引所は利用者ごとに使い捨ての入金アドレスを発行するため、そのアドレス自体には
    名前が付かない。しかし「送り先の大半がBinance」なら、Binanceの入金用と分かる。
@@ -1222,6 +1251,10 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   /* 着金先の名前が取れなかった／推定どまりのときだけ、取引先分析を引く。
      取引所の入金用アドレスはラベルが付かないが、送り先の大半が特定の取引所なら
      そこの入金用と判断できる。DEX・ブリッジ・トークン契約は通り道なので対象外。 */
+  // しきい値を決め直すための材料を残す（外部APIは使わない）
+  (path || []).forEach((n, i) => recordHopStat(n, chain, i, path.length));
+  saveHopStats();
+
   const cpBudget = opts.paid ? MISTTRACK_CP_PAID : MISTTRACK_CP_FREE;
   const named = last && last.isExchange && last.label && !last.inferred;
   if (cpBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
@@ -3993,6 +4026,45 @@ app.get('/api/admin/label-lookup', requireAdmin, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: scrubKey(e.message) });
   }
+});
+
+/* 取引回数の分布。MistTrackを引くしきい値（いまは2万回）を決め直すために見る。
+   「名前が付いたアドレスの取引回数」と「付かなかったアドレスの取引回数」が
+   分かれる境目が、本来のしきい値。 */
+app.get('/api/admin/hop-stats', requireAdmin, (req, res) => {
+  const chain = String(req.query.chain || '').toLowerCase();
+  let rows = hopStats.filter(r => !r.via && !r.token);   // 通り道は対象外
+  if (chain) rows = rows.filter(r => r.chain === chain);
+  const BANDS = [0, 10, 50, 100, 500, 1000, 5000, 20000, 100000, 500000, Infinity];
+  const band = tx => {
+    for (let i = 0; i < BANDS.length - 1; i++) if (tx >= BANDS[i] && tx < BANDS[i + 1]) {
+      return BANDS[i + 1] === Infinity ? BANDS[i].toLocaleString() + '回以上'
+        : BANDS[i].toLocaleString() + '〜' + (BANDS[i + 1] - 1).toLocaleString() + '回';
+    }
+    return '?';
+  };
+  const tally = {};
+  for (const r of rows) {
+    const k = band(r.tx);
+    tally[k] = tally[k] || { 件数: 0, 名前あり: 0, 推定のみ: 0, 取引所: 0 };
+    tally[k].件数++;
+    if (r.named)    tally[k].名前あり++;
+    if (r.inferred) tally[k].推定のみ++;
+    if (r.ex)       tally[k].取引所++;
+  }
+  for (const k of Object.keys(tally)) {
+    const t = tally[k];
+    t['名前が付いた割合'] = Math.round(t.名前あり / t.件数 * 100) + '%';
+  }
+  res.json({
+    件数: rows.length,
+    ためた期間: rows.length ? {
+      最古: new Date(Math.min(...rows.map(r => r.at))).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
+      最新: new Date(Math.max(...rows.map(r => r.at))).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
+    } : null,
+    現在のしきい値: 'TX 20,000回以上でMistTrackを引く',
+    取引回数の分布: tally,
+  });
 });
 
 /* 取引先分析の疎通確認。1回分を消費するので、確認のとき以外は使わない。 */
