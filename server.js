@@ -1435,6 +1435,18 @@ async function investigate(txid, chain, opts = {}) {
 
   // 各アドレスノードに残高・TX件数を付加
   await enrichPathWithAddressInfo(result.path, chain, opts);
+
+  /* 到達取引所の一覧は経路をたどる段階で作られるが、名前が後から
+     （ラベルAPIや振る舞い推定で）付くことがある。その分をここで足す。
+     これをしないと、経路には「取引所」と出ているのに一覧が空になり、
+     画面の見出しや報告書の凍結要請先が出てこない。
+     DEX・ブリッジ・トークン契約は着金先ではないので入れない。 */
+  result.exchanges = result.exchanges || [];
+  for (const n of result.path || []) {
+    if (!n.isExchange || n.isVia || n.isToken || !n.address) continue;
+    if (result.exchanges.some(e => (e.address || '').toLowerCase() === n.address.toLowerCase())) continue;
+    result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address, amount: n.amount });
+  }
   return result;
 }
 
