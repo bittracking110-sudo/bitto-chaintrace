@@ -758,6 +758,86 @@ function xrpAccountName(j) {
   return name;
 }
 
+/* 住所プロファイル。そのアドレスが「何者か」を返す。
+   取引先分析が「どこに着いたか」を解くのに対し、こちらは
+   過去に詐欺として報告されているか・ENSやTwitterが紐づいているかを見る。
+   引く相手は着金先ではなく、被害者が最初に送った相手（犯人が指定したアドレス）。
+   そこが報告に載っている可能性がいちばん高い。
+   ※ エンドポイント名は address_profile ではなく address_trace（要注意）。 */
+const MISTTRACK_PROFILE_FREE = Number(process.env.MISTTRACK_PROFILE_FREE ?? 0);
+const MISTTRACK_PROFILE_PAID = Number(process.env.MISTTRACK_PROFILE_PAID ?? 1);
+const PROFILE_CACHE_FILE = path.join(DATA_DIR, 'profile-cache.json');
+const profileCache = new Map();   // 小文字アドレス → 整形済みプロフィール（null＝引いたが何も無し）
+try {
+  const saved = JSON.parse(fs.readFileSync(PROFILE_CACHE_FILE, 'utf8'));
+  for (const [addr, p] of Object.entries(saved)) profileCache.set(addr, p);
+  console.log(`[Profile] キャッシュ ${profileCache.size}件を読み込み`);
+} catch { /* 初回は無い */ }
+function saveProfileCache() {
+  fsp.writeFile(PROFILE_CACHE_FILE, JSON.stringify(Object.fromEntries(profileCache), null, 2), 'utf8')
+    .catch(e => console.error('[Profile] キャッシュ保存失敗:', e.message));
+}
+function profileApiUrl(addr, chain) {
+  const coin = MISTTRACK_COIN[chain] || String(chain).toUpperCase();
+  return `${MISTTRACK_BASE}/address_trace?coin=${coin}&address=${encodeURIComponent(addr)}&api_key=${MISTTRACK_KEY}`;
+}
+/* 不正事案の種別。報告書にそのまま載るので、断定を避けた日本語にする。 */
+const MALICIOUS_LABEL = {
+  phishing:   'フィッシング（偽サイト・偽アプリによる詐取）',
+  ransom:     '恐喝・ランサムウェア',
+  stealing:   '窃取（不正送金・ハッキング）',
+  laundering: '資金洗浄',
+};
+/* 応答は data の下に use_platform / malicious_event / relation_info。
+   それぞれ { 種別: { count, 種別_list } } という形。 */
+function pickProfileFromResponse(j) {
+  const d = (j && j.data) || {};
+  const bucket = (obj, key) => {
+    const b = (obj || {})[key] || {};
+    const list = Array.isArray(b[`${key}_list`]) ? b[`${key}_list`].filter(v => typeof v === 'string' && v.trim()) : [];
+    return { count: Number(b.count) || 0, list };
+  };
+  const malicious = [];
+  for (const key of Object.keys(MALICIOUS_LABEL)) {
+    const b = bucket(d.malicious_event, key);
+    if (b.count > 0 || b.list.length) malicious.push({ 種別: MALICIOUS_LABEL[key], 件数: b.count, 事例: b.list });
+  }
+  const platforms = {};
+  for (const key of ['exchange', 'dex', 'mixer', 'nft']) {
+    const b = bucket(d.use_platform, key);
+    if (b.list.length) platforms[key] = b.list;
+  }
+  const relation = {};
+  for (const key of ['wallet', 'ens', 'twitter']) {
+    const b = bucket(d.relation_info, key);
+    if (b.list.length) relation[key] = b.list;
+  }
+  const first = typeof d.first_address === 'string' ? d.first_address.trim() : '';
+  const empty = !malicious.length && !Object.keys(platforms).length && !Object.keys(relation).length && !first;
+  return empty ? null : { firstAddress: first, malicious, platforms, relation };
+}
+async function lookupProfileAPI(addr, chain) {
+  if (!MISTTRACK_KEY || !misttrackSupports(chain)) return null;
+  const lo = addr.toLowerCase();
+  if (profileCache.has(lo)) return profileCache.get(lo);
+  try {
+    const res = await fetchT(profileApiUrl(addr, chain));
+    const j   = await res.json();
+    if (j && j.success === false) {
+      console.warn('[Profile] 失敗応答:', scrubKey(JSON.stringify(j).slice(0, 160)));
+      return null;   // キーの誤りや上限。キャッシュしない
+    }
+    const picked = pickProfileFromResponse(j);
+    profileCache.set(lo, picked);
+    saveProfileCache();
+    console.log(`[Profile] ${addr.slice(0, 10)}... → ${picked ? `不正事案${picked.malicious.length}種・ENS${(picked.relation.ens || []).length}件` : '該当なし'}`);
+    return picked;
+  } catch (e) {
+    console.error('[Profile] 照会失敗:', addr.slice(0, 12), scrubKey(e.message));
+    return null;
+  }
+}
+
 /* 経路上のアドレスの「取引回数」と「名前が付いたか」を貯める。
    MistTrackを引くかどうかのしきい値を、見当ではなく分布で決めるため。
    すでに取得済みの値を書くだけなので、外部APIは一切使わない。 */
@@ -1263,6 +1343,27 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   /* 着金先の名前が取れなかった／推定どまりのときだけ、取引先分析を引く。
      取引所の入金用アドレスはラベルが付かないが、送り先の大半が特定の取引所なら
      そこの入金用と判断できる。DEX・ブリッジ・トークン契約は通り道なので対象外。 */
+  /* 犯人が指定してきたアドレス（最初の送金先）の素性を調べる。
+     過去に詐欺として報告されていれば、報告書の説得力が変わる。
+     すでに名前の付いた取引所なら、素性は分かっているので引かない。 */
+  const pfBudget = opts.paid ? MISTTRACK_PROFILE_PAID : MISTTRACK_PROFILE_FREE;
+  const target = (path || [])[1];
+  const knownExchange = target && target.isExchange && target.label && !target.inferred && !target.cpInferred;
+  if (pfBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
+      && target && target.address && !knownExchange && !target.isVia && !target.isToken) {
+    const known = profileCache.has(target.address.toLowerCase());
+    if (known || labelQuotaOk(opts.paid)) {
+      if (!known) labelQuotaUse();
+      const pf = await lookupProfileAPI(target.address, chain).catch(() => null);
+      if (pf) {
+        target.profile = pf;
+        if (pf.malicious.length) {
+          console.log(`[Profile] 不正事案として報告あり: ${pf.malicious.map(m => m.種別 + m.件数 + '件').join(' / ')}`);
+        }
+      }
+    }
+  }
+
   // しきい値を決め直すための材料を残す（外部APIは使わない）
   (path || []).forEach((n, i) => recordHopStat(n, chain, i, path.length));
   saveHopStats();
@@ -2918,6 +3019,39 @@ ${r.txid}
         ・資金が別のチェーンへ移動している場合は、移動先のチェーンでの調査<br>
         なお、ここまでの経路（この地点に資金が入ったこと）は、ブロックチェーン上の記録として確認できています。</p>` : ''}
         ${(() => {
+          // 送金先アドレスの素性。不正事案の報告があれば最優先で示す
+          const pn = (r.path || []).find(p => p && p.profile);
+          if (!pn) return '';
+          const pf = pn.profile;
+          const 一覧 = (title, obj, keys) => {
+            const rows = keys.filter(k => (obj[k[0]] || []).length)
+              .map(k => `<tr><th style="width:9em">${k[1]}</th><td>${obj[k[0]].map(escHtml).join('、')}</td></tr>`).join('');
+            return rows ? `<p class="ref-p" style="margin-top:12px"><strong>${title}</strong></p><table class="info-table">${rows}</table>` : '';
+          };
+          const 不正 = pf.malicious.length ? `
+            <div style="background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.45);border-radius:8px;padding:12px 14px;margin:10px 0">
+              <p style="margin:0 0 8px"><strong>このアドレスは、不正事案に関与したものとして外部の解析事業者に報告されています。</strong></p>
+              <table class="info-table">
+                <tr><th style="width:16em">報告されている種別</th><th>件数</th><th>事案名</th></tr>
+                ${pf.malicious.map(m => `<tr><td>${escHtml(m.種別)}</td><td>${m.件数}件</td><td>${(m.事例 || []).map(escHtml).join('、') || '—'}</td></tr>`).join('')}
+              </table>
+            </div>` : `<p class="ref-p">当社が参照した範囲では、<strong>不正事案としての報告は確認されませんでした</strong>
+              （報告が無いことは、安全であることを意味しません）。</p>`;
+          return `<div class="ref-box">
+            <div class="ref-h">送金先アドレスの属性情報</div>
+            <p class="ref-p">お客様が最初に送金されたアドレス（<span class="mono">${escHtml(pn.address || '')}</span>）について、
+            外部の解析事業者が保有する情報を照会した結果です。</p>
+            ${不正}
+            ${pf.firstAddress ? `<p class="ref-p">このアドレスの手数料の出所：<strong>${escHtml(pf.firstAddress)}</strong></p>` : ''}
+            ${一覧('利用が確認されたサービス', pf.platforms, [['exchange','取引所'],['dex','DEX'],['mixer','匿名化サービス'],['nft','NFT']])}
+            ${一覧('このアドレスに紐づく情報', pf.relation, [['ens','ENS名'],['twitter','X（Twitter）'],['wallet','関連ウォレット']])}
+            <p class="ref-warn"><strong>この情報の扱いについて</strong><br>
+            上記は外部事業者に蓄積された報告・関連付けであり、<strong>当社が独自に事実関係を確認したものではありません</strong>。
+            相手方の特定や法的な主張の根拠とされる場合は、必ず捜査機関を通じて確認してください。
+            ${(pf.relation.ens || []).length || (pf.relation.twitter || []).length ? 'ENS名やSNSアカウントは、捜査機関が発信者情報開示を検討する際の手がかりになり得ます。' : ''}</p>
+          </div>`;
+        })()}
+        ${(() => {
           // 取引先分析で着金先を推定した場合、その内訳を根拠として示す
           const cn = (r.path || []).find(p => Array.isArray(p.counterparty) && p.counterparty.length);
           if (!cn) return '';
@@ -4167,6 +4301,23 @@ app.get('/api/admin/hop-stats', requireAdmin, (req, res) => {
   });
 });
 
+/* 住所プロファイルの疎通確認。1回分を消費する。
+   エンドポイントは address_trace（address_profile ではない）。 */
+app.get('/api/admin/profile', requireAdmin, async (req, res) => {
+  const addr  = (req.query.address || '').trim();
+  const chain = (req.query.chain || 'eth').toLowerCase();
+  if (!addr) return res.status(400).json({ error: 'address が必要です' });
+  if (!MISTTRACK_KEY) return res.json({ ok: false, reason: 'MISTTRACK_API_KEY が未設定です' });
+  if (!misttrackSupports(chain)) return res.json({ ok: false, reason: chain + ' は MistTrack の対象外です' });
+  try {
+    const r = await fetchT(profileApiUrl(addr, chain));
+    const j = await r.json();
+    res.json({ ok: r.ok, status: r.status, 整形後: pickProfileFromResponse(j), raw: j });
+  } catch (e) {
+    res.status(500).json({ error: scrubKey(e.message) });
+  }
+});
+
 /* 取引先分析の疎通確認。1回分を消費するので、確認のとき以外は使わない。 */
 app.get('/api/admin/counterparty', requireAdmin, async (req, res) => {
   const addr  = (req.query.address || '').trim();
@@ -4578,6 +4729,7 @@ app.get('/api/admin/label-usage', requireAdmin, (_req, res) => {
     'キャッシュ済みアドレス': labelCache.size,
     '取引先分析キャッシュ': cpCache.size,
     'TRONで覚えた取引所名': tronTags.size,
+    '素性キャッシュ': profileCache.size,
     '取引先分析の回数': { '無料': MISTTRACK_CP_FREE, '有料': MISTTRACK_CP_PAID, '採用する最低割合': CP_MIN_PERCENT + '%' },
   });
 });

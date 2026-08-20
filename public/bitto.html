@@ -159,6 +159,9 @@
   .cp-row{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)}
   .cp-row:last-of-type{border-bottom:none}
   .cp-row b{color:var(--teal);font-variant-numeric:tabular-nums}
+  .pf-bad{background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.45);border-radius:8px;padding:11px 13px;margin-bottom:4px}
+  .pf-bad-t{font-size:13px;font-weight:800;color:#F87171;margin-bottom:7px}
+  .pf-bad .cp-row b{color:#F87171}
   .legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:9px;font-size:10.5px;color:var(--sub)}
   .legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
 
@@ -539,6 +542,28 @@ function hopName(i, total){
 const HIGH_TX = 1000;   // これ以上の取引回数は「取引所/サービスの可能性」の手がかり（断定はしない）
 const fmtNum = n => Number(n).toLocaleString('ja-JP');
 /* 取引先分析の内訳。着金先アドレスが誰と取引しているかの割合。 */
+/* 送金先アドレスの素性。詐欺として報告されていれば、それが一番の情報になる。 */
+function profileHTML(path){
+  const n = (path || []).find(x => x && x.profile);
+  if (!n) return '';
+  const pf = n.profile;
+  const 一覧 = (title, obj, keys) => {
+    const rows = keys.filter(k => (obj[k[0]] || []).length)
+      .map(k => `<div class="cp-row"><span>${k[1]}</span><b style="color:var(--ink)">${obj[k[0]].map(esc).join("、")}</b></div>`).join('');
+    return rows ? `<div class="cp-h" style="margin-top:12px">${title}</div>${rows}` : '';
+  };
+  const 不正 = pf.malicious.length
+    ? `<div class="pf-bad"><div class="pf-bad-t">⚠️ このアドレスは不正事案として報告されています</div>` +
+      pf.malicious.map(m => `<div class="cp-row"><span>${esc(m.種別)}</span><b>${m.件数}件</b></div>`).join('') +
+      `<div class="note" style="margin-top:8px">外部の解析事業者に蓄積された報告です。当社が事実関係を確認したものではありませんが、<b>相手方とのやり取りは中止し、警察にご相談ください。</b></div></div>`
+    : `<div class="note">当社が参照した範囲では、不正事案としての報告は確認されませんでした（報告が無いことは、安全であることを意味しません）。</div>`;
+  return `<div class="cp">
+    <div class="cp-h">送金先アドレスの属性（${esc(shortAddr(n.address))}）</div>
+    ${不正}
+    ${一覧('利用が確認されたサービス', pf.platforms, [['exchange','取引所'],['dex','DEX'],['mixer','匿名化'],['nft','NFT']])}
+    ${一覧('紐づく情報', pf.relation, [['ens','ENS名'],['twitter','X（Twitter）'],['wallet','関連ウォレット']])}
+  </div>`;
+}
 function cpHTML(path){
   const n = (path || []).find(x => x && Array.isArray(x.counterparty) && x.counterparty.length);
   if (!n) return '';
@@ -648,6 +673,7 @@ function resultCard(results){
     <div class="card"><h4>資金フロー（概要）${results.length>1 ? ` ${i+1}/${results.length}` : ''} — ${esc(r.chain)}</h4>
       ${flowHTML(p)}
       ${ex.length ? `<div class="note">到達した取引所：${esc(ex.join('、'))}</div>` : ''}
+      ${profileHTML(p)}
       ${cpHTML(p)}
       ${hiTx.length ? `<div class="note">※ <b style="color:var(--amber)">取引回数が非常に多いアドレス</b>（${fmtNum(HIGH_TX)}回以上）が${hiTx.length}件あります。取引所やサービスのウォレットである可能性がありますが、ラベルが未取得のため断定はできません。</div>` : ''}
     </div>`;
