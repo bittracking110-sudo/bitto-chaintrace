@@ -791,7 +791,11 @@ function saveHopStats() {
    取引所は利用者ごとに使い捨ての入金アドレスを発行するため、そのアドレス自体には
    名前が付かない。しかし「送り先の大半がBinance」なら、Binanceの入金用と分かる。
    1照会につき回数を消費するので、有料調査の着金先だけに使う（既定）。 */
-const MISTTRACK_CP_FREE = Number(process.env.MISTTRACK_CP_FREE || 0);
+/* 無料の追跡でも取引先分析を引く。月15回・1日5回の上限は共通なので、
+   これを1にしても1か月に使う回数の上限は変わらない。変わるのは使い道で、
+   「名前だけを15件」より「着金先まで特定できた結果を7件」の方が役に立つ。
+   0にすれば無料では引かなくなる。 */
+const MISTTRACK_CP_FREE = Number(process.env.MISTTRACK_CP_FREE ?? 1);
 const MISTTRACK_CP_PAID = Number(process.env.MISTTRACK_CP_PAID || 1);
 /* 上位の取引先がこの割合に満たなければ「よく使う相手」とは言えない。
    0.003%のBinanceを根拠に「Binanceの入金アドレス」とは書けない。 */
