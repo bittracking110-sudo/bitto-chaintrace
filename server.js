@@ -854,7 +854,8 @@ function truncateAfterVia(path) {
     const n = path[i];
     if (!n.isVia && !n.isToken) continue;
     // 取引が少ない小規模なサービスは、まだ追える見込みがあるので続ける
-    if (n.txCount != null && n.txCount < VIA_TRAFFIC_STOP) continue;
+    // 取引回数が取れないことがある（WETHは0で返ってきた）。その場合は打ち切る側に倒す。
+    if (n.txCount != null && n.txCount > 0 && n.txCount < VIA_TRAFFIC_STOP) continue;
     // 次のノードを同じ取引の中から特定できているなら、推測ではないので続ける
     if (path[i + 1] && path[i + 1].sameTx) continue;
     if (i < path.length - 1) {
