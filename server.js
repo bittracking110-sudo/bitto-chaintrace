@@ -2096,9 +2096,32 @@ function adminOk(req) {
     || readCookie(req, ADMIN_COOKIE) || '';
   return adminTokenMatches(t);
 }
+/* 合言葉を間違えた回数。総当たりを遅らせる。 */
+const adminTries = new Map();   // IP → { n, until }
+function adminTryOk(ip) {
+  const t = adminTries.get(ip);
+  if (t && t.until > Date.now()) return false;
+  return true;
+}
+function adminTryFail(ip) {
+  const t = adminTries.get(ip) || { n: 0, until: 0 };
+  t.n++;
+  // 5回間違えたら15分待たせる
+  if (t.n >= 5) { t.until = Date.now() + 15 * 60 * 1000; t.n = 0; }
+  adminTries.set(ip, t);
+}
+function reqIp(req) {
+  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || '';
+}
+
 function requireAdmin(req, res, next) {
   if (!adminOk(req)) {
-    // 存在自体を伏せる。総当たりの的にしない
+    /* 画面を開こうとした場合は入力欄へ送る。合言葉付きURLを
+       組み立てさせると、貼り間違えて外部に出る（実際に起きた）。
+       APIは従来どおり404のまま。総当たりの的にしない。 */
+    if (String(req.headers.accept || '').includes('text/html')) {
+      return res.redirect('/admin/login?next=' + encodeURIComponent(req.path));
+    }
     return res.status(404).send('Not found');
   }
   /* URLで渡ってきたときは Cookie に移し、合言葉を消したURLへ送り直す。
@@ -4391,6 +4414,75 @@ app.post('/api/hearing/submit', express.json(), async (req, res) => {
   h.sheetLogged = r.ok;
   h.sheetError  = r.ok ? null : r.reason;
   saveHearings();
+});
+
+/* 合言葉の入力欄。ここだけは合言葉なしで開ける。 */
+function adminLoginPage(next, err) {
+  const safeNext = /^\/[A-Za-z0-9/_-]*$/.test(next || '') ? next : '/admin';
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>BitTo 管理</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0C1728;color:#C7D6EC;font-family:-apple-system,'Hiragino Sans','Noto Sans JP',Meiryo,sans-serif;
+display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+form{background:#152741;border:1px solid #2C4468;border-radius:12px;padding:28px 26px;width:100%;max-width:420px}
+h1{font-size:17px;margin-bottom:6px}
+p{font-size:12.5px;color:#8FA3C4;line-height:1.8;margin-bottom:18px}
+input{width:100%;background:#0C1728;border:1px solid #2C4468;border-radius:8px;color:#C7D6EC;
+font:inherit;font-size:16px;padding:12px 13px;margin-bottom:14px}
+input:focus{outline:none;border-color:#34E1C8}
+button{width:100%;background:#34E1C8;color:#062A25;border:none;border-radius:8px;
+font:inherit;font-weight:700;font-size:15px;padding:13px;cursor:pointer}
+button:hover{background:#4FE9D4}
+.err{background:rgba(248,113,113,.12);border:1px solid #F87171;color:#F87171;
+border-radius:8px;padding:10px 12px;font-size:12.5px;margin-bottom:14px;line-height:1.7}
+</style></head><body>
+<form method="post" action="/admin/login">
+  <h1>BitTo 管理</h1>
+  <p>Railway の <b>ADMIN_TOKEN</b> に設定した合言葉を貼り付けてください。<br>
+  一度入れると12時間は入力不要です。</p>
+  ${err ? `<div class="err">${escHtml(err)}</div>` : ''}
+  <input type="password" name="token" placeholder="合言葉を貼り付け" autocomplete="current-password" autofocus>
+  <input type="hidden" name="next" value="${escHtml(safeNext)}">
+  <button type="submit">開く</button>
+</form></body></html>`;
+}
+
+app.get('/admin/login', (req, res) => {
+  if (!ADMIN_TOKEN) return res.redirect('/admin');
+  if (adminOk(req)) return res.redirect('/admin');   // すでに入れている
+  res.type('html').send(adminLoginPage(String(req.query.next || '/admin'), ''));
+});
+
+/* 合言葉は本文（POST）で受け取る。URLに載せないので履歴にもログにも残らない。 */
+app.post('/admin/login', express.urlencoded({ extended: false }), (req, res) => {
+  const ip = reqIp(req);
+  const next = String((req.body && req.body.next) || '/admin');
+  if (!adminTryOk(ip)) {
+    return res.status(429).type('html')
+      .send(adminLoginPage(next, '入力を何度も間違えたため、しばらく開けません。15分ほどお待ちください。'));
+  }
+  if (!adminTokenMatches((req.body && req.body.token) || '')) {
+    adminTryFail(ip);
+    console.warn('[Admin] 合言葉が違います:', ip);
+    return res.status(401).type('html').send(adminLoginPage(next, '合言葉が違います。'));
+  }
+  res.cookie(ADMIN_COOKIE, ADMIN_TOKEN, {
+    httpOnly: true,
+    secure: BASE_URL.startsWith('https'),
+    sameSite: 'strict',
+    maxAge: ADMIN_COOKIE_MAX_AGE,
+    path: '/',
+  });
+  adminTries.delete(ip);
+  res.redirect(/^\/[A-Za-z0-9/_-]*$/.test(next) ? next : '/admin');
+});
+
+/* Cookieを消す。共用の端末で開いたときに使う。 */
+app.get('/admin/logout', (_req, res) => {
+  res.clearCookie(ADMIN_COOKIE, { path: '/' });
+  res.redirect('/admin/login');
 });
 
 /* 相談チャットの記録を見る。一覧では本文を伏せ、開いたときだけ全文を出す。
