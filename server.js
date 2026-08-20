@@ -667,20 +667,29 @@ function saveLabelCache() {
 
 /* 応答の入れ物はプロバイダの仕様変更で変わりうる。
    ありがちな場所を順に見て、最初に見つかった名前を使う。 */
+/* 応答例：
+     { "success": true, "msg": "",
+       "data": { "label_list": ["Binance", "hot"], "label_type": "exchange" } }
+   label_list は「事業者名＋種別タグ」の混在。先頭を名前として使い、残りは括弧で添える。
+   label_type は exchange / defi / mixer / nft / 空 のいずれか。
+   これがあると、名前の文字列を当てにせず種類を判断できる。 */
 function pickLabelFromResponse(j) {
-  const cands = [
-    j && j.data && j.data.label, j && j.data && j.data.labels,
-    j && j.data && j.data.entity, j && j.data && j.data.name,
-    j && j.label, j && j.labels, j && j.entity, j && j.name,
-  ];
-  for (const c of cands) {
-    if (typeof c === 'string' && c.trim()) return c.trim();
-    if (Array.isArray(c) && c.length) {
-      const first = c.find(v => typeof v === 'string' && v.trim());
-      if (first) return first.trim();
+  const d = (j && j.data) || {};
+  const list = Array.isArray(d.label_list) ? d.label_list.filter(v => typeof v === 'string' && v.trim()) : [];
+  let name = '';
+  if (list.length) {
+    const head = list[0].trim();
+    const rest = list.slice(1).map(v => v.trim()).filter(Boolean);
+    name = rest.length ? `${head}（${rest.join('・')}）` : head;
+  } else {
+    // 形が変わった場合に備えて、よくある入れ物も見る
+    for (const c of [d.label, d.labels, d.entity, d.name, j && j.label, j && j.name]) {
+      if (typeof c === 'string' && c.trim()) { name = c.trim(); break; }
+      if (Array.isArray(c) && c.length) { const f = c.find(v => typeof v === 'string' && v.trim()); if (f) { name = f.trim(); break; } }
     }
   }
-  return '';
+  const type = typeof d.label_type === 'string' ? d.label_type.trim().toLowerCase() : '';
+  return { name, type };
 }
 
 function scrubKey(msg) {
@@ -693,23 +702,33 @@ function labelApiUrl(addr, chain) {
   return `${MISTTRACK_BASE}/address_labels?coin=${coin}&address=${encodeURIComponent(addr)}&api_key=${MISTTRACK_KEY}`;
 }
 
+/* 戻り値は { name, type }。type は exchange / defi / mixer / nft / ''。
+   キャッシュは古い形式（文字列）も読めるようにしておく。 */
 async function lookupLabelAPI(addr, chain) {
-  if (!MISTTRACK_KEY) return '';
+  const empty = { name: '', type: '' };
+  if (!MISTTRACK_KEY) return empty;
   const lo = addr.toLowerCase();
-  if (labelCache.has(lo)) return labelCache.get(lo);
+  if (labelCache.has(lo)) {
+    const c = labelCache.get(lo);
+    return typeof c === 'string' ? { name: c, type: '' } : (c || empty);
+  }
   try {
     const res = await fetchT(labelApiUrl(addr, chain));
     const j   = await res.json();
-    const name = pickLabelFromResponse(j);
-    labelCache.set(lo, name);
+    if (j && j.success === false) {
+      console.warn('[LabelAPI] 失敗応答:', scrubKey(JSON.stringify(j).slice(0, 160)));
+      return empty;   // キーの誤りや上限。キャッシュしない
+    }
+    const picked = pickLabelFromResponse(j);
+    labelCache.set(lo, picked);
     saveLabelCache();
-    if (name) console.log(`[LabelAPI] ${addr.slice(0, 10)}... → "${name}"`);
-    else console.log('[LabelAPI] 名前なし:', addr.slice(0, 12), JSON.stringify(j).slice(0, 200));
-    return name;
+    if (picked.name) console.log(`[LabelAPI] ${addr.slice(0, 10)}... → "${picked.name}" (${picked.type || '種別なし'})`);
+    else console.log('[LabelAPI] 名前なし:', addr.slice(0, 12), JSON.stringify(j).slice(0, 160));
+    return picked;
   } catch (e) {
     // 失敗はキャッシュしない（通信断・レート制限なら次の調査で拾える）
     console.error('[LabelAPI] 照会失敗:', addr.slice(0, 12), scrubKey(e.message));
-    return '';
+    return empty;
   }
 }
 
@@ -859,10 +878,17 @@ async function enrichPathWithAddressInfo(path, chain) {
       const known = labelCache.has(node.address.toLowerCase());
       if (known || apiLookups < MISTTRACK_MAX_LOOKUPS) {
         if (!known) apiLookups++;
-        const apiName = await lookupLabelAPI(node.address, chain);
-        if (apiName) {
-          node.label = apiName;
-          if (isExchange(apiName)) node.isExchange = true;
+        const api = await lookupLabelAPI(node.address, chain);
+        if (api.name) {
+          node.label = api.name;
+          node.labelType = api.type || undefined;
+          /* 種別が返るならそれを信じる。名前の文字列判定より確実。
+             defi（DEX・ブリッジ）とmixerは着金先ではなく通り道なので、
+             取引所としては扱わない。 */
+          if (api.type === 'exchange') node.isExchange = true;
+          else if (api.type === 'defi' || api.type === 'mixer') { node.isVia = true; node.isExchange = false; }
+          else if (!api.type && isExchange(api.name)) node.isExchange = true;
+          if (api.type === 'mixer') node.isMixer = true;
         }
       }
     }
@@ -3193,7 +3219,8 @@ app.get('/api/admin/label-lookup', requireAdmin, async (req, res) => {
   try {
     const r = await fetchT(labelApiUrl(addr, chain));
     const j = await r.json();
-    res.json({ ok: r.ok, status: r.status, picked: pickLabelFromResponse(j), raw: j });
+    const picked = pickLabelFromResponse(j);
+    res.json({ ok: r.ok, status: r.status, 名前: picked.name || '(なし)', 種別: picked.type || '(なし)', raw: j });
   } catch (e) {
     res.status(500).json({ error: scrubKey(e.message) });
   }
