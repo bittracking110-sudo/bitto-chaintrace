@@ -1970,6 +1970,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       let cls, icon, roleLabel;
       if (i === 0)           { cls = 'victim';   icon = '●'; roleLabel = '被害者ウォレット（起点）'; }
       else if (p.isToken) { cls = 'relay'; icon = '🔁'; roleLabel = `スワップ／トークンの通過点（${i}次先）${p.swapTo ? `：→ ${p.swapTo}` : ''}`; }
+      else if (p.isVia)   { cls = 'relay'; icon = '🔀'; roleLabel = `経由（DEX・ブリッジ・両替）（${i}次先）`; }
       else if (p.isExchange && p.inferred) { cls = 'exchange'; icon = '★'; roleLabel = `🏦 取引所候補（${i}次先・推定）`; }
       else if (p.isExchange) { cls = 'exchange'; icon = '★'; roleLabel = `🏦 取引所到達（${i}次先）`; }
       else if (p.role === 'internal') { cls = 'relay'; icon = '◆'; roleLabel = `内部コール（${i}次先）`; }
@@ -2130,6 +2131,9 @@ ${r.txid}
 
         <h3>📍 送金経路詳細</h3>
         <div class="flow-map">${flowNodes}</div>
+        ${(r.path || []).some(p => p.isVia || p.isToken) ? `<p class="flow-note">※ <strong>🔀 経由</strong>＝DEX・ブリッジ・両替サービスです。資金の通り道であって着金先ではないため、
+        凍結の要請先にはなりません。ブリッジを通っている場合、資金は<strong>別のチェーンへ移動している可能性</strong>があります。
+        <strong>🔁 スワップ／トークン</strong>＝そこで別の通貨（USDT等）に交換された地点です。</p>` : ''}
         <p class="flow-note">※「残高」は各アドレスに<strong>現在入っている総額</strong>（照会時点）です。最終到達先が取引所の場合、その残高は取引所ウォレット全体の合算額で、他の利用者の資産も含みます。<strong>お客様の被害額そのものではありません。</strong></p>
 
         <h3>🏦 取引所判定</h3>
