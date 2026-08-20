@@ -741,6 +741,15 @@ const MISTTRACK_COIN = { btc: 'BTC', eth: 'ETH' };
    MistTrackはETH・BTC・TRON系など21チェーンに対応するが、XRPは含まれない。 */
 function misttrackSupports(chain) { return !!MISTTRACK_COIN[chain]; }
 
+/* XRPScanのアカウント名。取引所名が入る場所が2か所あり、どちらか一方しか
+   埋まっていないことがある（実測：Binanceはname、Bitstampはusername）。
+   verified が付いているものは、ドメイン所有の確認が済んだアカウント。 */
+function xrpAccountName(j) {
+  const a = (j && j.accountName) || {};
+  const name = (a.name || a.username || j.username || '').trim();
+  return name;
+}
+
 /* 取引先分析（相手方分析）。ラベルが引けなかったときの代替。
    取引所は利用者ごとに使い捨ての入金アドレスを発行するため、そのアドレス自体には
    名前が付かない。しかし「送り先の大半がBinance」なら、Binanceの入金用と分かる。
@@ -1040,8 +1049,10 @@ async function getAddressInfo(addr, chain) {
       const balNative = parseFloat(j.xrpBalance || 0);
       const price     = await getUSDPrice('xrp');
       // XRPScanのアカウント名（取引所名が入ることが多い）
-      const bcLabel   = j.accountName?.name || j.username || '';
-      return { balance: balNative, txCount: j.TxCount || 0, balanceUSD: balNative * price, bcLabel };
+      const bcLabel   = xrpAccountName(j);
+      /* XRPScanのこの応答に取引回数は無い。0を入れると画面に「取引 0回」と
+         出てしまい、取引所なのに使われていないように見える。件数は出さない。 */
+      return { balance: balNative, txCount: null, balanceUSD: balNative * price, bcLabel };
     }
   } catch (e) { console.error('[AddrInfo]', addr, e.message); }
   return null;
@@ -1284,7 +1295,7 @@ async function fetchAddressLabel(addr, chain) {
     try {
       const r = await fetchT(`https://api.xrpscan.com/api/v1/account/${addr}`);
       const j = await r.json();
-      const xrpName = j.accountName?.name || j.username || '';
+      const xrpName = xrpAccountName(j);
       if (xrpName) {
         label = xrpName;
         console.log(`[ExLabel] XRPScanラベル: ${addr.slice(0,10)}... → "${xrpName}"`);
