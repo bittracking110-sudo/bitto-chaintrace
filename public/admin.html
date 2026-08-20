@@ -223,7 +223,7 @@
     <div class="card">
       <h2>🔢 調査 TXID を入力（1〜10件）</h2>
       <div class="warn-box">
-        ⚠️ BTC・ETH・XRP の TXID を貼り付けてください。チェーンは自動判定されます。<br>
+        ⚠️ BTC・ETH・XRP・TRON(USDT) の TXID を貼り付けてください。チェーンは自動判定されます。<br>
         調査には1件あたり30秒〜2分かかります。
       </div>
       <div id="txidList"></div>
@@ -269,7 +269,7 @@
 
       const input = document.createElement('input');
       input.type = 'text';
-      input.placeholder = 'TXID を貼り付け（BTC / ETH / XRP 自動判定）';
+      input.placeholder = 'TXID を貼り付け（BTC / ETH / XRP / TRON(USDT) 自動判定）';
       input.value = value;
 
       const tag = document.createElement('span');

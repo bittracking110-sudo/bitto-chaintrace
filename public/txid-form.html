@@ -92,7 +92,7 @@
         <h2>🔢 TXIDを入力してください</h2>
         <div class="warn-box" id="warnBox">
           ⚠️ このフォームは<strong>1回のみ</strong>使用可能です。<br>
-          BTC・ETH・XRP のTXIDを貼り付けてください。チェーンは自動判定されます。
+          BTC・ETH・XRP・TRON(USDT) のTXIDを貼り付けてください。チェーンは自動判定されます。
         </div>
         <div id="txidList"></div>
       </div>
@@ -135,7 +135,7 @@
 
       const input = document.createElement('input');
       input.type = 'text';
-      input.placeholder = 'TXIDを貼り付け（BTC / ETH / XRP 自動判定）';
+      input.placeholder = 'TXIDを貼り付け（BTC / ETH / XRP / TRON(USDT) 自動判定）';
       input.id = `txid-${index}`;
 
       const tag = document.createElement('span');
@@ -231,7 +231,7 @@
         if (!val) continue;
         const chain = detectChain(val);
         if (!chain) {
-          errorEl.textContent = `TXID ${i+1} のチェーンを認識できません。\nBTC/ETH/XRPのTXIDを確認してください。`;
+          errorEl.textContent = `TXID ${i+1} のチェーンを認識できません。\nBTC/ETH/XRP/TRONのTXIDを確認してください。`;
           errorEl.style.display = 'block';
           return;
         }

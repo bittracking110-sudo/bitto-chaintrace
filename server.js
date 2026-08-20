@@ -1,6 +1,6 @@
 // ============================================================
 // BitTo — LINE ブロックチェーン自動調査サーバー
-// BTC / ETH / XRP 対応 | LINE Messaging API + Stripe 決済
+// BTC / ETH / XRP / TRON(USDT) 対応 | LINE Messaging API + Stripe 決済
 // ============================================================
 require('dotenv').config();
 const express      = require('express');
@@ -736,7 +736,7 @@ function labelQuotaUse() {
   labelUsage.count++; labelUsage.monthCount++; labelUsage.total++;
   saveLabelUsage();
 }
-const MISTTRACK_COIN = { btc: 'BTC', eth: 'ETH' };
+const MISTTRACK_COIN = { btc: 'BTC', eth: 'ETH', tron: 'USDT-TRC20' };
 /* 対象外のチェーンに投げても名前は返らず、回数だけ減る。
    MistTrackはETH・BTC・TRON系など21チェーンに対応するが、XRPは含まれない。 */
 function misttrackSupports(chain) { return !!MISTTRACK_COIN[chain]; }
@@ -1043,6 +1043,20 @@ async function getAddressInfo(addr, chain) {
       const bcLabel   = d.label || '';
       return { balance: balNative, txCount: d.transaction_count || 0, balanceUSD: balNative * price, bcLabel };
     }
+    if (chain === 'tron') {
+      const r = await fetchT(`${TRONGRID}/v1/accounts/${addr}`, { headers: tronHeaders() });
+      const j = await r.json();
+      const d = (j.data || [])[0] || {};
+      /* 被害の大半はUSDTなので、TRXの残高よりUSDTの残高を見たい。
+         trc20 は [{コントラクト: 残高}] の配列で返る。 */
+      const usdtEntry = (d.trc20 || []).find(o => o && o[TRON_USDT] != null);
+      const usdt = usdtEntry ? Number(usdtEntry[TRON_USDT]) / 1e6 : 0;
+      const trx  = Number(d.balance || 0) / 1e6;
+      /* この応答に取引回数は無い。0を入れると「取引 0回」と出て、
+         使われていないアドレスに見えてしまうので入れない。 */
+      return { balance: usdt || trx, txCount: null, balanceUSD: usdt || null,
+               bcLabel: tronTags.get(addr) || '' };
+    }
     if (chain === 'xrp') {
       const r = await fetchT(`https://api.xrpscan.com/api/v1/account/${addr}`);
       const j = await r.json();
@@ -1243,6 +1257,58 @@ function detectChain(input) {
   return null;
 }
 
+// ══ TRON（TRC20・USDT） ══════════════════════════════════════
+
+/* USDTのTRC20コントラクト。日本の詐欺被害で最も多い送金手段。 */
+const TRON_USDT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+const TRONGRID  = 'https://api.trongrid.io';
+const TRONSCAN  = 'https://apilist.tronscanapi.com';
+/* キー無しでも動く。入れると回数制限が緩む（TronGrid・TronScan共通の書式）。 */
+const TRON_KEY  = process.env.TRON_API_KEY || '';
+const tronHeaders = () => (TRON_KEY ? { 'TRON-PRO-API-KEY': TRON_KEY } : {});
+const isTronAddr = a => /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(String(a || ''));
+
+/* TronScanは取引の応答に取引所名を同梱してくる（addressTag）。
+   追加の照会が要らないので、XRPにおけるXRPScanと同じ立ち位置で使える。
+   MistTrackの回数を使わずに済むのが大きい。 */
+const tronTags = new Map();   // アドレス → 名前
+function rememberTronTags(tagObj) {
+  if (!tagObj || typeof tagObj !== 'object') return;
+  for (const [addr, name] of Object.entries(tagObj)) {
+    if (typeof name === 'string' && name.trim()) tronTags.set(addr, name.trim());
+  }
+}
+
+/* TronScanの取引明細。TRC20送金と通常のTRX送金の両方をここで解く。 */
+async function tronTxInfo(txid) {
+  const r = await fetchT(`${TRONSCAN}/api/transaction-info?hash=${encodeURIComponent(txid)}`, { headers: tronHeaders() });
+  const j = await r.json();
+  if (!j || !j.timestamp) return null;   // 見つからないときは {} が返る
+  rememberTronTags(j.addressTag);
+  const tr = (j.trc20TransferInfo || [])[0];
+  if (tr) {
+    const dec = Number(tr.decimals != null ? tr.decimals : 6);
+    return {
+      time: j.timestamp, block: j.block,
+      from: tr.from_address, to: tr.to_address,
+      amount: Number(tr.amount_str || 0) / Math.pow(10, dec),
+      token: tr.symbol || 'TRC20', contract: tr.contract_address,
+      // 送金当時のドル建て評価額。あとから価格を引き直す必要がない
+      usdAtTime: Number(tr.usdValue?.history?.amountInUsd) || null,
+    };
+  }
+  const cd = j.contractData || {};
+  if (j.contractType === 1 && cd.to_address) {
+    return {
+      time: j.timestamp, block: j.block,
+      from: cd.owner_address, to: cd.to_address,
+      amount: Number(cd.amount || 0) / 1e6, token: null, contract: null,
+      usdAtTime: Number(cd.usdValue?.current?.amountInUsd) || null,
+    };
+  }
+  return null;   // スワップ等。追跡の起点にはしない
+}
+
 // ══ 外部ラベル取得（Etherscan / Blockchair） ══════════════════
 
 const labelFetchCache = new Map(); // addr → label（二重取得防止）
@@ -1290,7 +1356,15 @@ async function fetchAddressLabel(addr, chain) {
     } catch {}
   }
 
-  // ④ XRPScan アカウント名（XRP のみ）
+  // ④ TronScanのタグ（TRON のみ）。取引の応答に同梱されている分を先に使う
+  if (!label && chain === 'tron') {
+    if (tronTags.has(addr)) {
+      label = tronTags.get(addr);
+      console.log(`[ExLabel] TronScanタグ: ${addr.slice(0,10)}... → "${label}"`);
+    }
+  }
+
+  // ⑤ XRPScan アカウント名（XRP のみ）
   if (!label && chain === 'xrp') {
     try {
       const r = await fetchT(`https://api.xrpscan.com/api/v1/account/${addr}`);
@@ -1478,6 +1552,45 @@ async function getNextTxXRP(addr, afterTime) {
   return null;
 }
 
+/* TRONで次に出ていった送金を探す。TRC20を先に見て、無ければTRXを見る。
+   min_timestamp と昇順指定が効くので、着金の直後の送金だけを取れる。 */
+async function getNextTxTRON(addr, afterTime) {
+  const refMs = new Date(afterTime).getTime();
+  try {
+    const url = `${TRONGRID}/v1/accounts/${addr}/transactions/trc20`
+      + `?limit=50&order_by=block_timestamp,asc&min_timestamp=${Math.max(0, refMs - 1000)}`;
+    const j = await (await fetchT(url, { headers: tronHeaders() })).json();
+    for (const t of (j.data || [])) {
+      if (t.from !== addr) continue;              // 出ていった分だけ
+      if (t.block_timestamp < refMs - 1000) continue;
+      const dec = Number(t.token_info?.decimals != null ? t.token_info.decimals : 6);
+      const db  = getLabel(t.to);
+      return { addr: t.to, amount: Number(t.value || 0) / Math.pow(10, dec),
+               time: new Date(t.block_timestamp).toISOString(), txHash: t.transaction_id,
+               token: t.token_info?.symbol || 'TRC20', label: db.label || tronTags.get(t.to) || '' };
+    }
+  } catch (e) { console.error('getNextTxTRON(trc20):', e.message); }
+  try {
+    const url = `${TRONGRID}/v1/accounts/${addr}/transactions`
+      + `?limit=50&order_by=block_timestamp,asc&min_timestamp=${Math.max(0, refMs - 1000)}`;
+    const j = await (await fetchT(url, { headers: tronHeaders() })).json();
+    for (const t of (j.data || [])) {
+      const c = t.raw_data?.contract?.[0];
+      if (!c || c.type !== 'TransferContract') continue;
+      const v = c.parameter?.value || {};
+      if (v.owner_address_base58 && v.owner_address_base58 !== addr) continue;
+      const to = v.to_address_base58 || v.to_address;
+      if (!isTronAddr(to)) continue;              // 16進表記のものは扱わない
+      if (t.block_timestamp < refMs - 1000) continue;
+      const db = getLabel(to);
+      return { addr: to, amount: Number(v.amount || 0) / 1e6,
+               time: new Date(t.block_timestamp).toISOString(), txHash: t.txID,
+               label: db.label || tronTags.get(to) || '' };
+    }
+  } catch (e) { console.error('getNextTxTRON(trx):', e.message); }
+  return null;
+}
+
 /* 交換・橋渡しのコントラクトに入った資金の出口を、同じ取引の中から読む。
    Blockchairの取引明細には内部送金（calls）が含まれるので、
    そのコントラクトから出ていった分を拾う。推測が入らない。 */
@@ -1577,6 +1690,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
       if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime);
       else if (chain === 'eth') next = await getNextTxETH(currentAddr, currentTime);
       else if (chain === 'xrp') next = await getNextTxXRP(currentAddr, currentTime);
+      else if (chain === 'tron') next = await getNextTxTRON(currentAddr, currentTime);
     }
     if (!next) break;
     if (visited.has(next.addr.toLowerCase())) break; // ループ防止
@@ -1775,11 +1889,59 @@ async function investigateXRP(txid) {
     recipient: tx.Destination, destTag: tx.DestinationTag, path, exchanges };
 }
 
+/* TRON。被害の大半はUSDT-TRC20で、TronScanが取引所名（addressTag）まで
+   同梱してくれるため、名前を引くための追加照会がほとんど要らない。 */
+async function investigateTRON(txid) {
+  const t = await tronTxInfo(txid);
+  if (!t) throw new Error('TRON TXが見つかりません');
+  const senderDb = getLabel(t.from);
+  const destDb   = getLabel(t.to);
+  const destLbl  = (await fetchAddressLabel(t.to, 'tron')) || destDb.label || '';
+  const isDestEx = destDb.type === 'exchange' || isExchange(destLbl);
+  const path = [
+    { address: t.from, label: senderDb.label || tronTags.get(t.from) || '', role: 'sender' },
+    { address: t.to, label: destLbl, role: 'recipient', isExchange: isDestEx,
+      amount: t.amount, token: t.token || undefined },
+  ];
+  const exchanges = isDestEx ? [{ name: destLbl, address: t.to, amount: t.amount }] : [];
+  if (!isDestEx) {
+    const hops = await traceHops(t.to, new Date(t.time).toISOString(), 'tron', 10);
+    for (const hop of hops) {
+      if (path.some(p => p.address === hop.address)) continue;
+      path.push(hop);
+      if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
+    }
+  }
+  return { chain: 'TRON', txid, blockTime: new Date(t.time).toISOString(), blockHeight: t.block,
+    amount: t.token ? null : t.amount, tokenAmount: t.token ? t.amount : undefined,
+    tokenSymbol: t.token || undefined, amountUSD: t.usdAtTime,
+    sender: t.from, senderLabel: senderDb.label, recipient: t.to, path, exchanges };
+}
+
 async function investigate(txid, chain, opts = {}) {
   let result;
-  if (chain === 'btc') result = await investigateBTC(txid);
+  if (chain === 'btc') {
+    /* TRONのTXIDはBTCと同じ64桁の小文字16進で、形では区別できない。
+       BTCで見つからなければTRONを試す。日本の被害はUSDT-TRC20が最も多い。 */
+    try {
+      result = await investigateBTC(txid);
+    } catch (e) {
+      /* 通信断とTX不在を混同しない。混同するとBTCの一時障害が
+         「TRONにも見つかりません」という誤った案内になる。 */
+      if (!/見つかりません/.test(e.message)) throw e;
+      console.log(`[investigate] BTCで見つからず、TRONとして試します`);
+      try {
+        result = await investigateTRON(txid);
+        chain  = 'tron';
+      } catch (e2) {
+        if (!/見つかりません/.test(e2.message)) throw e2;
+        throw new Error('このTXIDは BTC・TRON のどちらにも見つかりませんでした');
+      }
+    }
+  }
   else if (chain === 'eth') result = await investigateETH(txid);
   else if (chain === 'xrp') result = await investigateXRP(txid);
+  else if (chain === 'tron') result = await investigateTRON(txid);
   else throw new Error('未対応チェーン');
 
   // 各アドレスノードに残高・TX件数を付加
@@ -2415,7 +2577,10 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       const arrow = i === 0 ? '' : `<tr class="route-tx"><td colspan="2">↓ TXID　<span class="mono">${escHtml(inTx || '（記録なし）')}</span></td></tr>`;
       return `${arrow}<tr><th>${mark}</th><td><span class="mono">${escHtml(p.address || '')}</span>${name ? ` <b>${name}</b>` : ''}</td></tr>`;
     }).join('');
-    const coinId      = { BTC: 'bitcoin', ETH: 'ethereum', XRP: 'ripple' }[r.chain] || 'ethereum';
+    const coinId      = { BTC: 'bitcoin', ETH: 'ethereum', XRP: 'ripple', TRON: 'tron' }[r.chain] || 'ethereum';
+    /* USDTのようなステーブルコインは、価格推移を出しても常に1ドル付近で
+       判断材料にならない。送金額そのものがドル建てなので、グラフは出さない。 */
+    const isStable    = /^(usdt|usdc|busd|dai|tusd|usdd|fdusd)$/i.test(String(r.tokenSymbol || ''));
     const blockTimeMs = (() => {
       try {
         const s = typeof r.blockTime === 'string'
@@ -2597,11 +2762,15 @@ ${r.txid}
         <p style="font-size:0.82rem;color:var(--r-ink2);margin:0 0 8px">調査により、下記のとおり資金が移動していました。</p>
         <table class="info-table route-table">${routeRows}</table>
 
+        ${isStable ? `<h3>📈 送金額の評価</h3>
+        <p style="font-size:0.86rem;margin:0 0 8px">${escHtml(String(r.tokenSymbol))} は米ドルに連動する通貨（ステーブルコイン）のため、
+        価格の推移は掲載しません。送金額 <strong>${r.tokenAmount != null ? r.tokenAmount.toLocaleString() : ""} ${escHtml(String(r.tokenSymbol))}</strong> が、
+        そのままドル建ての金額に相当します。${r.amountUSD ? `送金時点の評価額は <strong>約 $${Number(r.amountUSD).toLocaleString(undefined,{maximumFractionDigits:2})}</strong> です。` : ""}</p>` : `
         <h3>📈 ${r.chain}価格推移（送金前後30日）</h3>
         <div class="chart-wrap">
           <p class="tx-price-label"></p>
           <canvas id="priceChart${idx}" data-coin="${coinId}" data-time="${blockTimeMs}"></canvas>
-        </div>
+        </div>`}
 
         <h3>📍 送金経路詳細</h3>
         <div class="flow-map">${flowNodes}</div>
@@ -3350,7 +3519,7 @@ async function handleLineEvent(event) {
     resetSession(userId);
     return lineClient.replyMessage(event.replyToken, {
       type: 'text',
-      text: `🔄 リセットしました\n\nTXIDをお送りください\n対応：BTC / ETH / XRP`,
+      text: `🔄 リセットしました\n\nTXIDをお送りください\n対応：BTC / ETH / XRP / TRON(USDT)`,
     });
   }
 
@@ -3363,7 +3532,7 @@ async function handleLineEvent(event) {
       session.state = 'waiting_txid';
       return lineClient.replyMessage(event.replyToken, {
         type: 'text',
-        text: `先ずは無料調査を開始しますので\nTXIDを1件ずつお送りください\n\n※ TXIDの取得方法はLINEプロフィールを\n　ご参照ください\n\n対応：BTC / ETH / XRP`,
+        text: `先ずは無料調査を開始しますので\nTXIDを1件ずつお送りください\n\n※ TXIDの取得方法はLINEプロフィールを\n　ご参照ください\n\n対応：BTC / ETH / XRP / TRON(USDT)`,
       });
     }
 
@@ -3372,7 +3541,7 @@ async function handleLineEvent(event) {
       if (!chain) {
         return lineClient.replyMessage(event.replyToken, {
           type: 'text',
-          text: `TXIDを認識できませんでした\n\nBTC / ETH / XRP のTXIDをお送りください\n（例：ETH は 0x から始まる66文字）`,
+          text: `TXIDを認識できませんでした\n\nBTC / ETH / XRP / TRON(USDT) のTXIDをお送りください\n（例：ETH は 0x から始まる66文字）`,
         });
       }
       session.txid  = text;
@@ -3416,7 +3585,7 @@ async function handleLineEvent(event) {
       if (!chain) {
         return lineClient.replyMessage(event.replyToken, {
           type: 'text',
-          text: `次のTXIDをお送りください\n対応：BTC / ETH / XRP`,
+          text: `次のTXIDをお送りください\n対応：BTC / ETH / XRP / TRON(USDT)`,
         });
       }
 
@@ -3454,7 +3623,7 @@ async function handleLineEvent(event) {
       const ns = getSession(userId);
       ns.state = 'waiting_txid';
       return lineClient.replyMessage(event.replyToken, {
-        type: 'text', text: `TXIDをお送りください\n対応：BTC / ETH / XRP`,
+        type: 'text', text: `TXIDをお送りください\n対応：BTC / ETH / XRP / TRON(USDT)`,
       });
     }
   }
