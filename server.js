@@ -2055,9 +2055,48 @@ h2{font-size:0.95rem;color:#1a1a2e;margin:0 0 14px;padding-bottom:8px;border-bot
 
 // ══ Mermaid フロー図生成 ══════════════════════════════════════
 
+/* 経路によく出るサービスの一行説明。名前に含まれる語で引く。 */
+const SERVICE_NOTES = [
+  ['li.fi',        '複数のチェーンにまたがって交換・移動をまとめて行う橋渡しサービス'],
+  ['lifidiamond',  '複数のチェーンにまたがって交換・移動をまとめて行う橋渡しサービス（LI.FI）'],
+  ['tokenlon',     '取引所を介さずに通貨を交換できるサービス（分散型取引所）'],
+  ['permit2',      'ウォレットの利用許可をまとめて扱うUniswapの仕組み。資金の保管先ではない'],
+  ['wrapped ether','ETHを他のサービスで扱える形（WETH）に置き換える仕組み。中身はETHのまま'],
+  ['weth',         'ETHを他のサービスで扱える形に置き換える仕組み。中身はETHのまま'],
+  ['tokenwrapper', '通貨を別の形式に置き換える仕組み'],
+  ['ammwrapper',   '交換の仲介を行う仕組み（分散型取引所の一部）'],
+  ['uniswap',      '取引所を介さずに通貨を交換できるサービス（分散型取引所）'],
+  ['sushiswap',    '取引所を介さずに通貨を交換できるサービス（分散型取引所）'],
+  ['1inch',        '複数の分散型取引所から有利な交換先を探すサービス'],
+  ['paraswap',     '複数の分散型取引所から有利な交換先を探すサービス'],
+  ['transitswap',  '複数のチェーンにまたがる交換サービス'],
+  ['bridgers',     '複数のチェーンにまたがる交換・橋渡しサービス'],
+  ['stargate',     'チェーン間で資金を移動させる橋渡しサービス'],
+  ['layerzero',    'チェーン間で資金を移動させる橋渡しの仕組み'],
+  ['hop protocol', 'チェーン間で資金を移動させる橋渡しサービス'],
+  ['across',       'チェーン間で資金を移動させる橋渡しサービス'],
+  ['synapse',      'チェーン間で資金を移動させる橋渡しサービス'],
+  ['thorchain',    '異なるチェーンの通貨を直接交換できるサービス'],
+  ['changenow',    '口座開設なしで通貨を交換できるサービス'],
+  ['fixedfloat',   '口座開設なしで通貨を交換できるサービス'],
+  ['simpleswap',   '口座開設なしで通貨を交換できるサービス'],
+  ['sideshift',    '口座開設なしで通貨を交換できるサービス'],
+  ['tornado',      '資金の出所を分からなくするサービス（ミキサー）。ここを通ると追跡が著しく困難になります'],
+  ['mixer',        '資金の出所を分からなくするサービス（ミキサー）。ここを通ると追跡が著しく困難になります'],
+  ['tether',       '米ドルに連動する通貨（USDT）を発行する仕組み'],
+  ['usdc',         '米ドルに連動する通貨（USDC）を発行する仕組み'],
+];
+function serviceNote(label) {
+  if (!label) return '';
+  const lo = String(label).toLowerCase();
+  for (const [key, note] of SERVICE_NOTES) if (lo.includes(key)) return note;
+  return '';
+}
+
 function buildMermaidDiagram(path, chain) {
-  if (!path || path.length === 0) return 'graph LR\n  A["データなし"]';
-  const lines = ['graph LR'];
+  if (!path || path.length === 0) return 'graph TD\n  A["データなし"]';
+  // 縦積み（TD）。横並びだとノードが増えるほど1つ1つが潰れて読めなくなる
+  const lines = ['graph TD'];
 
   path.forEach((node, i) => {
     const id    = `N${i}`;
@@ -2187,12 +2226,15 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
         ? `<div class="node-meta">💰 ${balLabel}: ${p.balance < 0.0001 ? p.balance.toFixed(8) : p.balance.toFixed(4)} ${r.chain}${usdStr}</div>` : '';
       const txCntTd  = (p.txCount != null)
         ? `<div class="node-meta">📊 TX件数: ${p.txCount.toLocaleString()}件</div>` : '';
+      // 名前だけでは何のサービスか分からないため、分かるものには一行説明を添える
+      const svcNote  = serviceNote(p.label);
+      const svcTd    = svcNote ? `<div class="node-note">💡 ${svcNote}</div>` : '';
 
       return `
         <div class="flow-node ${cls}">
           <div class="node-role"><span class="node-icon">${icon}</span>${roleLabel}${exBadge}</div>
           <div class="node-address">${p.address}</div>
-          ${balTd}${txCntTd}${timeTd}${amtTd}
+          ${balTd}${txCntTd}${timeTd}${amtTd}${svcTd}
         </div>
         ${i < (r.path || []).length - 1 ? '<div class="flow-arrow">▼</div>' : ''}`;
     }).join('');
@@ -2397,6 +2439,8 @@ ${r.txid}
     .flow-node.exchange .node-role{color:var(--r-eink)}
     .node-address{font-family:var(--r-mono);font-size:0.77rem;color:var(--r-addrink);word-break:break-all;background:var(--r-addrbg);border:1px solid var(--r-border);border-radius:6px;padding:6px 8px;margin-bottom:4px}
     .node-meta{font-size:0.78rem;color:var(--r-ink2);margin-top:3px}
+    .node-note{font-size:0.76rem;color:var(--r-ink2);margin-top:6px;padding:6px 8px;border-radius:6px;
+      background:var(--r-softbg);border:1px solid var(--r-line);line-height:1.7}
     .usd-val{color:var(--r-usd);font-size:0.76rem;font-weight:600}
     .badge{background:var(--r-badgebg);color:var(--r-badgeink);font-size:0.72rem;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:400}
     .flow-arrow{font-size:1.4rem;color:var(--r-ink2);margin:4px 0;line-height:1}
@@ -2477,7 +2521,14 @@ ${r.txid}
       .print-bar{display:none}
       .tx-section{border:none;padding:0;margin-bottom:40px}
       .cover{border-radius:0}
+      /* 経路のノード・表・テンプレートがページの境目で割れないようにする */
+      .flow-node, .flow-arrow, .info-table tr, .template-box, .mermaid-wrap, .chart-wrap,
+      .ai-box, .note-box, .flow-hint { break-inside: avoid; page-break-inside: avoid; }
+      h3 { break-after: avoid; page-break-after: avoid; }
     }
+    /* 画面でもノードの途中で改ページされないようにしておく（PDFはこの指定も見る） */
+    .flow-node{break-inside:avoid;page-break-inside:avoid}
+    .info-table{break-inside:auto}
   </style>
 </head>
 <body>
@@ -2590,7 +2641,7 @@ ${r.txid}
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
   mermaid.initialize({
     startOnLoad: true, theme: 'base',
-    themeVariables: { fontSize: '13px', fontFamily: "${TH.font}" }
+    themeVariables: { fontSize: '15px', fontFamily: "${TH.font}" }
   });
 </script>
 
