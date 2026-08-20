@@ -224,6 +224,10 @@
 
   /* ── 二次被害防止シールド ── */
   #shield{margin-top:30px;padding-top:22px;border-top:1px solid var(--line);display:none}
+  #packEntry{margin-top:30px;padding-top:22px;border-top:1px solid var(--line)}
+  /* メニューから来たとき、どこを押せばいいか分かるように光らせる */
+  #packEntry.hi #packGo{animation:packPulse 1.1s ease-out 3}
+  @keyframes packPulse{0%,100%{box-shadow:none}50%{box-shadow:0 0 0 6px rgba(52,225,200,.28)}}
   #shield .sh-h{font-size:15px;font-weight:800;margin:0 0 6px}
   #shield .sh-lead{font-size:12px;color:var(--sub);margin:0 0 14px;line-height:1.7}
   #shield .sh-list{display:grid;gap:8px;margin-bottom:14px}
@@ -360,6 +364,12 @@
     </div>
     <button class="go" id="shGo">チェック結果を見る</button>
     <div id="shOut"></div>
+  </div>
+
+  <div id="packEntry">
+    <h2 class="sh-h">🆓 初動パックを作る（無料）</h2>
+    <p class="sh-lead">証拠の保全チェック・被害の時系列メモ・取引所への連絡文をまとめた書類です。印刷／PDF保存して、警察や取引所へのご相談にそのままお使いいただけます。</p>
+    <button class="go" id="packGo">初動パックを作成する</button>
   </div>
 
   <p style="font-size:10.5px;color:var(--sub);margin-top:16px;line-height:1.7;text-align:center">※ 本ナビは操作・相談先の案内です。特定の結果・回収を保証するものではありません。緊急時・進行中の犯罪は110へ。</p>
@@ -867,7 +877,7 @@ if (NAVI_ONLY) {
   showTab('navi');
   // アプリのメニューから直接呼ばれた場合は、その機能まで進める
   if (location.hash === '#shield') setTimeout(openShield, 60);
-  if (location.hash === '#pack')   setTimeout(openInitialPack, 60);
+  if (location.hash === '#pack')   setTimeout(openPackEntry, 60);
   const back = document.querySelector('#view-navi .navback');
   if (back) {
     back.textContent = '🔎 TXIDで調査する（BitTo）';
@@ -1035,6 +1045,13 @@ FBI・CFTCも、前払いを求める暗号資産回収サービスについて�
 <td>取引所へ凍結を命令する<br>KYC情報を強制的に取得する<br>資金の残存を保証する<br>被害資金の返還を保証する<br>強制処分を行う<br>秘密鍵で資金を取り戻す</td></tr></table>
 <div class="note">緊急・進行中の犯罪は110。緊急でない警察相談は#9110、被害届は最寄りの警察署、消費者トラブルは188、詐欺的投資・無登録業者は金融庁の相談窓口が候補です。</div>
 </body></html>`;
+}
+document.getElementById('packGo').addEventListener('click', openInitialPack);
+function openPackEntry(){
+  showTab('navi');
+  const box = document.getElementById('packEntry');
+  box.classList.add('hi');
+  setTimeout(() => box.scrollIntoView({behavior:'smooth', block:'center'}), 60);
 }
 function openInitialPack(){
   const html = buildPackHTML();
