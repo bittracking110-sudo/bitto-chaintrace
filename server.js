@@ -29,7 +29,8 @@ const GEMINI_MODEL              = process.env.GEMINI_MODEL || 'gemini-flash-late
 //   gemini-2.5-flash : 新規プロジェクトでは提供終了
 //   gemini-1.5-flash : v1beta に存在しない
 // gemini-2.0-flash は無料枠が0だが、課金を有効にすれば使えるので残す。
-const GEMINI_FALLBACK_MODELS    = [GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.0-flash'];
+// gemini-2.0-flash は提供終了（API応答で確認）。残すと失敗のたびに無駄な再試行が増えるため外した。
+const GEMINI_FALLBACK_MODELS    = [...new Set([GEMINI_MODEL, 'gemini-flash-latest'])];
 // 価格定数（トップレベルの文字列テンプレートでも使うため、ファイル冒頭で定義）
 const BITTO_PRICE              = 6600;  // BitToの報告書価格（Web/LINEのStripe用。IAP価格はストア側で設定）
 const BITTO_PRODUCT_ID         = process.env.BITTO_PRODUCT_ID || 'bitto_report';  // BitToアプリIAPの商品ID
@@ -2053,9 +2054,9 @@ h2{font-size:0.95rem;color:#1a1a2e;margin:0 0 14px;padding-bottom:8px;border-bot
 </div></body></html>`;
 }
 
-// ══ Mermaid フロー図生成 ══════════════════════════════════════
 
-/* 経路によく出るサービスの一行説明。名前に含まれる語で引く。 */
+/* 経路によく出るサービスの一行説明。名前に含まれる語で引く。
+   暗号資産に不慣れな方にも、その地点が何なのかが分かるようにする。 */
 const SERVICE_NOTES = [
   ['li.fi',        '複数のチェーンにまたがって交換・移動をまとめて行う橋渡しサービス'],
   ['lifidiamond',  '複数のチェーンにまたがって交換・移動をまとめて行う橋渡しサービス（LI.FI）'],
@@ -2091,45 +2092,6 @@ function serviceNote(label) {
   const lo = String(label).toLowerCase();
   for (const [key, note] of SERVICE_NOTES) if (lo.includes(key)) return note;
   return '';
-}
-
-function buildMermaidDiagram(path, chain) {
-  if (!path || path.length === 0) return 'graph TD\n  A["データなし"]';
-  // 縦積み（TD）。横並びだとノードが増えるほど1つ1つが潰れて読めなくなる
-  const lines = ['graph TD'];
-
-  path.forEach((node, i) => {
-    const id    = `N${i}`;
-    const short = node.address.slice(0, 8) + '…' + node.address.slice(-4);
-    const lbl   = node.label   ? `<br/>${node.label}` : '';
-    const bal   = (node.balance != null && !isNaN(node.balance))
-      ? `<br/>${node.isExchange ? '取引所内残高' : '残高'}: ${node.balance < 0.0001 ? node.balance.toFixed(6) : node.balance.toFixed(4)} ${chain}` : '';
-    const txc   = node.txCount != null ? `<br/>TX: ${node.txCount.toLocaleString()}件` : '';
-
-    if (i === 0) {
-      lines.push(`  ${id}["🔴 被害者<br/>${short}${bal}${txc}"]`);
-    } else if (node.isExchange) {
-      lines.push(`  ${id}["🟢 ${node.label || '取引所'}<br/>${short}${bal}${txc}"]`);
-    } else {
-      lines.push(`  ${id}["🔵 中継${i}<br/>${short}${bal}${txc}"]`);
-    }
-
-    if (i > 0) {
-      const amt = (node.amount != null && !isNaN(node.amount) && node.amount > 0)
-        ? `${node.amount.toFixed(4)} ${node.token || chain}` : '→';
-      lines.push(`  N${i - 1} -->|"${amt}"| ${id}`);
-    }
-  });
-
-  // ノードスタイル
-  path.forEach((node, i) => {
-    const id = `N${i}`;
-    if (i === 0)              lines.push(`  style ${id} fill:#fff5f5,stroke:#fca5a5,color:#dc2626`);
-    else if (node.isExchange) lines.push(`  style ${id} fill:#f0fdf4,stroke:#86efac,color:#16a34a`);
-    else                      lines.push(`  style ${id} fill:#eff6ff,stroke:#93c5fd,color:#2563eb`);
-  });
-
-  return lines.join('\n');
 }
 
 // ══ 有料HTMLレポート生成 ══════════════════════════════════════
@@ -2189,7 +2151,15 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
     const em = { BTC: '₿', ETH: 'Ξ', XRP: '✕' }[r.chain] || '🔗';
 
     // ── Mermaid・価格チャートデータ ──────────────────────
-    const mermaidDef  = buildMermaidDiagram(r.path, r.chain);
+    // 資金経路（アドレスとTXIDを順に並べる。図より読みやすく、印刷でも崩れない）
+    const routeRows = (r.path || []).map((p, i) => {
+      const mark = i === 0 ? '起点' : `経緯${String.fromCharCode(64 + i)}`;   // A, B, C…
+      const name = p.label ? `（${escHtml(p.label)}）` : '';
+      // この行へ入ってくる送金のTXID。1つ目は調査対象のTXID
+      const inTx = i === 0 ? '' : (i === 1 ? r.txid : (p.txHash || ''));
+      const arrow = i === 0 ? '' : `<tr class="route-tx"><td colspan="2">↓ TXID　<span class="mono">${escHtml(inTx || '（記録なし）')}</span></td></tr>`;
+      return `${arrow}<tr><th>${mark}</th><td><span class="mono">${escHtml(p.address || '')}</span>${name ? ` <b>${name}</b>` : ''}</td></tr>`;
+    }).join('');
     const coinId      = { BTC: 'bitcoin', ETH: 'ethereum', XRP: 'ripple' }[r.chain] || 'ethereum';
     const blockTimeMs = (() => {
       try {
@@ -2368,10 +2338,9 @@ ${r.txid}
           ${r.blockHeight ? `<tr><th>ブロック高</th><td>${r.blockHeight}</td></tr>` : ''}
         </table>
 
-        <h3>🔗 送金経路ビジュアルフロー</h3>
-        <div class="mermaid-wrap">
-          <pre class="mermaid">${mermaidDef}</pre>
-        </div>
+        <h3>🔗 資金経路</h3>
+        <p style="font-size:0.82rem;color:var(--r-ink2);margin:0 0 8px">調査により、下記のとおり資金が移動していました。</p>
+        <table class="info-table route-table">${routeRows}</table>
 
         <h3>📈 ${r.chain}価格推移（送金前後30日）</h3>
         <div class="chart-wrap">
@@ -2478,8 +2447,9 @@ ${r.txid}
     .ai-body{font-size:0.85rem;line-height:1.9;color:var(--r-aibody);white-space:pre-wrap;word-break:break-word}
     .ai-req-badge{background:var(--r-ailabelbg);color:#fff;font-size:0.68rem;padding:2px 8px;border-radius:10px;margin-left:8px;font-weight:700;vertical-align:middle}
     /* Mermaid フロー図 */
-    .mermaid-wrap{background:var(--r-softbg);border:1px solid var(--r-border);border-radius:8px;padding:16px;margin-bottom:8px;overflow-x:auto;text-align:center}
-    .mermaid-wrap pre{display:inline-block;text-align:left}
+    .route-table th{white-space:nowrap;width:6.5em;font-weight:700}
+    .route-table td{word-break:break-all}
+    .route-table .route-tx td{background:var(--r-softbg);font-size:0.78rem;color:var(--r-ink2);padding:5px 8px}
     /* 価格チャート */
     .chart-wrap{background:var(--r-card);border:1px solid var(--r-border);border-radius:8px;padding:16px;margin-bottom:8px}
     .tx-price-label{font-size:0.82rem;color:var(--r-accentink);font-weight:600;margin-bottom:8px;text-align:right}
@@ -2508,7 +2478,7 @@ ${r.txid}
       .node-role{font-size:0.8rem}
       .node-meta{font-size:0.73rem}
       .badge{font-size:0.67rem;padding:2px 6px}
-      .mermaid-wrap{padding:10px 8px;overflow-x:auto}
+
       .chart-wrap{padding:10px 8px}
       .template-box{font-size:0.75rem;padding:12px 10px}
       .ai-overall{padding:16px 14px}
@@ -2522,7 +2492,7 @@ ${r.txid}
       .tx-section{border:none;padding:0;margin-bottom:40px}
       .cover{border-radius:0}
       /* 経路のノード・表・テンプレートがページの境目で割れないようにする */
-      .flow-node, .flow-arrow, .info-table tr, .template-box, .mermaid-wrap, .chart-wrap,
+      .flow-node, .flow-arrow, .info-table tr, .template-box, .chart-wrap,
       .ai-box, .note-box, .flow-hint { break-inside: avoid; page-break-inside: avoid; }
       h3 { break-after: avoid; page-break-after: avoid; }
     }
@@ -2635,15 +2605,6 @@ ${r.txid}
     ${BR.footer}
   </p>
 </div>
-
-<!-- Mermaid.js -->
-<script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({
-    startOnLoad: true, theme: 'base',
-    themeVariables: { fontSize: '15px', fontFamily: "${TH.font}" }
-  });
-</script>
 
 <!-- Chart.js + 価格チャート描画 -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
