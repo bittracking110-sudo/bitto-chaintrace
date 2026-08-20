@@ -159,6 +159,12 @@
   .cp-row{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)}
   .cp-row:last-of-type{border-bottom:none}
   .cp-row b{color:var(--teal);font-variant-numeric:tabular-nums}
+  .sp-row{padding:7px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+  .sp-row:last-of-type{border-bottom:none}
+  .sp-a{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
+  .sp-am{color:var(--sub);font-size:11.5px}
+  .sp-tx{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;color:var(--teal);
+         word-break:break-all;margin-top:3px;cursor:pointer;user-select:all;-webkit-user-select:all}
   .pf-bad{background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.45);border-radius:8px;padding:11px 13px;margin-bottom:4px}
   .pf-bad-t{font-size:13px;font-weight:800;color:#F87171;margin-bottom:7px}
   .pf-bad .cp-row b{color:#F87171}
@@ -564,6 +570,29 @@ function profileHTML(path){
     ${一覧('紐づく情報', pf.relation, [['ens','ENS名'],['twitter','X（Twitter）'],['wallet','関連ウォレット']])}
   </div>`;
 }
+/* 資金が複数に分かれた地点。犯人が分割していると、追跡した1本が本命とは限らない。
+   別の枝を調べたい方のために、その枝のTXIDまで出す。BitToはTXIDで調べられるので、
+   これを貼り直せばその先を追える。 */
+function splitHTML(path){
+  const rows = [];
+  (path || []).forEach((n, i) => {
+    (n.siblings || []).forEach(sb => {
+      if (!sb || !sb.address) return;
+      rows.push(`<div class="sp-row">
+        <div class="sp-a">${esc(shortAddr(sb.address))}${sb.label ? " <b>" + esc(sb.label) + "</b>" : ""}
+          ${sb.amount != null ? `<span class="sp-am">${esc(String(sb.amount).slice(0,12))} ${esc(sb.token || "")}</span>` : ""}</div>
+        ${sb.txHash ? `<div class="sp-tx" data-tx="${esc(sb.txHash)}" title="タップでコピー">${esc(sb.txHash)}</div>` : ""}
+      </div>`);
+    });
+  });
+  if (!rows.length) return '';
+  return `<div class="cp">
+    <div class="cp-h">同じ地点から出た、別の送金先（${rows.length}件）</div>
+    <div class="note" style="margin-bottom:8px">資金が複数に分かれています。上の経路は<b>そのうちの1本</b>で、これが被害資金の主要な流れとは限りません。
+    別の経路を調べたい場合は、下のTXIDをコピーして調査欄に貼り付けてください。</div>
+    ${rows.join("")}
+  </div>`;
+}
 function cpHTML(path){
   const n = (path || []).find(x => x && Array.isArray(x.counterparty) && x.counterparty.length);
   if (!n) return '';
@@ -675,6 +704,7 @@ function resultCard(results){
       ${ex.length ? `<div class="note">到達した取引所：${esc(ex.join('、'))}</div>` : ''}
       ${profileHTML(p)}
       ${cpHTML(p)}
+      ${splitHTML(p)}
       ${hiTx.length ? `<div class="note">※ <b style="color:var(--amber)">取引回数が非常に多いアドレス</b>（${fmtNum(HIGH_TX)}回以上）が${hiTx.length}件あります。取引所やサービスのウォレットである可能性がありますが、ラベルが未取得のため断定はできません。</div>` : ''}
     </div>`;
   }).join('');
@@ -740,6 +770,17 @@ function chgBuyCount(d){
   buyCount = Math.max(1, Math.min(BITTO_MAX_COUNT, buyCount + d));
   renderBuyCount();
 }
+/* 別の送金先のTXIDは、タップで調査欄に入れられるようにする。
+   長い文字列を手で選ばせると、被害直後の方には負担が大きい。 */
+document.addEventListener("click", e => {
+  const el = e.target.closest(".sp-tx");
+  if (!el) return;
+  const tx = el.dataset.tx || el.textContent.trim();
+  const box = document.getElementById("msg");
+  if (box) { box.value = tx; box.focus(); toast("調査欄に入れました。送信で追跡できます"); return; }
+  if (navigator.clipboard) navigator.clipboard.writeText(tx).then(() => toast("TXIDをコピーしました")).catch(() => {});
+});
+
 document.getElementById('bmMinus').addEventListener('click', () => chgBuyCount(-1));
 document.getElementById('bmPlus').addEventListener('click',  () => chgBuyCount(1));
 renderBuyCount();

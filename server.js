@@ -1732,9 +1732,19 @@ async function getNextTxTRON(addr, afterTime) {
       if (t.block_timestamp < refMs - 1000) continue;
       const dec = Number(t.token_info?.decimals != null ? t.token_info.decimals : 6);
       const db  = getLabel(t.to);
+      /* 同じ地点から他にも出ていれば控えておく。犯人が資金を分けたとき、
+         こちらが本命の可能性がある。お客様に調べ直す手がかりを渡すため。 */
+      const others = (j.data || []).filter(x => x !== t && x.from === addr
+        && Math.abs(x.block_timestamp - t.block_timestamp) < 24 * 3600 * 1000)
+        .slice(0, 4).map(x => {
+          const d2 = Number(x.token_info?.decimals != null ? x.token_info.decimals : 6);
+          return { addr: x.to, label: tronTags.get(x.to) || '', txHash: x.transaction_id,
+                   amount: Number(x.value || 0) / Math.pow(10, d2), token: x.token_info?.symbol || 'TRC20' };
+        });
       return { addr: t.to, amount: Number(t.value || 0) / Math.pow(10, dec),
                time: new Date(t.block_timestamp).toISOString(), txHash: t.transaction_id,
-               token: t.token_info?.symbol || 'TRC20', label: db.label || tronTags.get(t.to) || '' };
+               token: t.token_info?.symbol || 'TRC20', label: db.label || tronTags.get(t.to) || '',
+               _siblings: others };
     }
   } catch (e) { console.error('getNextTxTRON(trc20):', e.message); }
   try {
@@ -1786,7 +1796,7 @@ async function getSwapOutputETH(routerAddr, txHash, prevAddr) {
     if (!outs.length) return null;
     console.log(`[SwapOut] ${routerAddr.slice(0, 10)}... の同一取引内の出金: ${outs.length}件 → ${outs[0].addr.slice(0, 10)}...`);
     const chosen = outs[0];
-    chosen._siblings = outs.slice(1, 5).map(o => ({ addr: o.addr, label: o.label, amount: o.amount }));
+    chosen._siblings = outs.slice(1, 5).map(o => ({ addr: o.addr, label: o.label, amount: o.amount, txHash: txid }));
     chosen._sameTx = true;
     return chosen;
   } catch (e) {
@@ -1871,6 +1881,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
     // 同時送金先（siblings）を保存
     const siblings = (next._siblings || []).map(s => ({
       address: s.addr, label: s.label || '', amount: s.amount, token: s.token,
+      txHash: s.txHash || '',   // これを渡せば、その枝をそのまま調べられる
     }));
     console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... label="${lbl}" exchange=${isEx} siblings=${siblings.length}`);
     hops.push({ address: next.addr, label: lbl, amount: next.amount, token: next.token, isExchange: isEx, isToken: isTok, isVia, sameTx: !!next._sameTx, time: next.time, txHash: next.txHash, siblings });
@@ -2163,7 +2174,8 @@ function buildReport(result) {
           const sa = s.address.slice(0,10)+'...'+s.address.slice(-6);
           const sl = s.label ? ` [${s.label}]` : '';
           const sm = (s.amount != null && s.amount > 0) ? ` ${s.amount.toFixed(4)}${s.token||result.chain}` : '';
-          return `   ┣ 同時送金先：${sa}${sl}${sm}`;
+          const st = s.txHash ? `\n   ┃  TXID：${s.txHash}` : '';
+          return `   ┣ 同時送金先：${sa}${sl}${sm}${st}`;
         }).join('\n')
       : '';
     return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}${siblingLines}`;
