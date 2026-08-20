@@ -649,18 +649,46 @@ const MISTTRACK_KEY  = process.env.MISTTRACK_API_KEY || '';
 const MISTTRACK_BASE = process.env.MISTTRACK_BASE_URL || 'https://openapi.misttrack.io/v1';
 const MISTTRACK_PAID_LOOKUPS = Number(process.env.MISTTRACK_PAID_LOOKUPS ?? 3);   // 有料レポート1件あたり
 const MISTTRACK_FREE_LOOKUPS = Number(process.env.MISTTRACK_FREE_LOOKUPS ?? 1);   // 無料の追跡1件あたり（0で無料は呼ばない）
-const MISTTRACK_DAILY_CAP    = Number(process.env.MISTTRACK_DAILY_CAP ?? 60);     // 1日の合計上限（残高を守る最後の砦）
+const MISTTRACK_DAILY_CAP    = Number(process.env.MISTTRACK_DAILY_CAP ?? 8);      // 1日の上限
+const MISTTRACK_MONTH_CAP    = Number(process.env.MISTTRACK_MONTH_CAP ?? 15);     // 1か月の上限
+const MISTTRACK_TOTAL_CAP    = Number(process.env.MISTTRACK_TOTAL_CAP ?? 100);    // 購入した総回数（使い切ったら止まる）
 
-/* 使った回数の記録。日付が変われば0に戻す。
-   再起動で消えるが、上限は「暴走を止める」ためのものなので許容する。 */
-let labelUsage = { day: '', count: 0, total: 0 };
-function labelDayKey() { return new Date().toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' }); }
-function labelQuotaOk() {
-  const d = labelDayKey();
-  if (labelUsage.day !== d) labelUsage = { day: d, count: 0, total: labelUsage.total };
-  return labelUsage.count < MISTTRACK_DAILY_CAP;
+/* 使った回数の記録。前払い分を守るのが目的なので、
+   再デプロイで0に戻らないようファイルに残す（報告書と同じ永続ボリューム）。 */
+const LABEL_USAGE_FILE = path.join(REPORTS_DIR, 'label-usage.json');
+let labelUsage = { day: '', count: 0, month: '', monthCount: 0, total: 0 };
+try {
+  if (fs.existsSync(LABEL_USAGE_FILE)) {
+    labelUsage = { ...labelUsage, ...JSON.parse(fs.readFileSync(LABEL_USAGE_FILE, 'utf8')) };
+    console.log(`[LabelAPI] これまでの照会 ${labelUsage.total}回を復元`);
+  }
+} catch (e) { console.error('[LabelAPI] 使用記録の読み込み失敗:', e.message); }
+function saveLabelUsage() {
+  fsp.writeFile(LABEL_USAGE_FILE, JSON.stringify(labelUsage), 'utf8')
+    .catch(e => console.error('[LabelAPI] 使用記録の保存失敗:', e.message));
 }
-function labelQuotaUse() { labelUsage.count++; labelUsage.total++; }
+
+function labelDayKey()   { return new Date().toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' }); }
+function labelMonthKey() { return labelDayKey().slice(0, 7); }   // 2026/8/20 → 2026/8
+
+/* 日・月・総量のどれかに当たったら照会しない。
+   当たっても調査自体は続く（名前が付かないだけ）。 */
+function labelQuotaOk() {
+  const d = labelDayKey(), m = labelMonthKey();
+  if (labelUsage.day !== d)   { labelUsage.day = d; labelUsage.count = 0; }
+  if (labelUsage.month !== m) { labelUsage.month = m; labelUsage.monthCount = 0; }
+  if (labelUsage.total >= MISTTRACK_TOTAL_CAP) {
+    console.warn(`[LabelAPI] 購入分を使い切りました（${labelUsage.total}/${MISTTRACK_TOTAL_CAP}）。以後は自前DBのみで動きます`);
+    return false;
+  }
+  if (labelUsage.monthCount >= MISTTRACK_MONTH_CAP) { console.warn('[LabelAPI] 今月の上限に達しました'); return false; }
+  if (labelUsage.count >= MISTTRACK_DAILY_CAP)      { console.warn('[LabelAPI] 本日の上限に達しました'); return false; }
+  return true;
+}
+function labelQuotaUse() {
+  labelUsage.count++; labelUsage.monthCount++; labelUsage.total++;
+  saveLabelUsage();
+}
 const MISTTRACK_COIN = { btc: 'BTC', eth: 'ETH', xrp: 'XRP' };
 const LABEL_CACHE_FILE = path.join(DATA_DIR, 'label-cache.json');
 const labelCache = new Map();   // 小文字アドレス → 名前（''＝引いたが名前なし）
@@ -3559,15 +3587,20 @@ app.post('/api/hearing/submit', express.json(), async (req, res) => {
 
 /* ラベルAPIの使用状況。前払いの残りを見積もるために使う。 */
 app.get('/api/admin/label-usage', requireAdmin, (_req, res) => {
+  const d = labelDayKey(), m = labelMonthKey();
   res.json({
     設定: {
       '有料1件あたり': MISTTRACK_PAID_LOOKUPS,
       '無料1件あたり': MISTTRACK_FREE_LOOKUPS,
       '1日の上限': MISTTRACK_DAILY_CAP,
+      '1か月の上限': MISTTRACK_MONTH_CAP,
+      '購入した総回数': MISTTRACK_TOTAL_CAP,
       キー: MISTTRACK_KEY ? '設定済み' : '未設定',
     },
-    '本日の照会回数': labelUsage.day === labelDayKey() ? labelUsage.count : 0,
-    '起動してからの合計': labelUsage.total,
+    '本日': labelUsage.day === d ? labelUsage.count : 0,
+    '今月': labelUsage.month === m ? labelUsage.monthCount : 0,
+    'これまでの合計': labelUsage.total,
+    '残り': Math.max(0, MISTTRACK_TOTAL_CAP - labelUsage.total),
     'キャッシュ済みアドレス': labelCache.size,
   });
 });
