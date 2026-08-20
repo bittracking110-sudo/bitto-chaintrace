@@ -846,6 +846,24 @@ function inferExchangeByBehavior(node) {
    条件＝次のノードが取引所で、自分は「取引回数が少なく残高をほぼ持たない」。
    取引所のホットウォレット（取引回数が数万回）と取り違えないよう、
    回数の少なさを条件に入れている。 */
+/* 利用者が多いコントラクトの目安。これ以上の取引があるDEX・ブリッジ・
+   トークン契約は、その先を追っても同一資金と言えない。 */
+const VIA_TRAFFIC_STOP = 10000;
+function truncateAfterVia(path) {
+  for (let i = 1; i < path.length; i++) {
+    const n = path[i];
+    if (!n.isVia && !n.isToken) continue;
+    // 取引が少ない小規模なサービスは、まだ追える見込みがあるので続ける
+    if (n.txCount != null && n.txCount < VIA_TRAFFIC_STOP) continue;
+    if (i < path.length - 1) {
+      console.log(`[trace] ${n.label || '経由'} で追跡を終了（利用者が多く、以降は同一資金と言えないため）`);
+      path.splice(i + 1);
+    }
+    n.traceStop = true;
+    return;
+  }
+}
+
 const DEPOSIT_MAX_TX = 50;
 function markDepositAddresses(path) {
   for (let i = 1; i < path.length - 1; i++) {
@@ -1033,6 +1051,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   }
 
   markDepositAddresses(path);
+  truncateAfterVia(path);
 
   /* 時間予算で打ち切ると、名前がいちばん要る最後のノード（着金先）だけ
      取り残される。そこだけ後から埋める。待ち時間は入れない。 */
@@ -2352,6 +2371,12 @@ ${r.txid}
 
         <h3>📍 送金経路詳細</h3>
         <div class="flow-map">${flowNodes}</div>
+        ${(r.path || []).some(p => p.traceStop) ? `<p class="flow-note" style="border-left:3px solid var(--r-accent);padding-left:10px">
+        <strong>■ この地点で追跡を終了しています。</strong><br>
+        DEX・ブリッジ・トークンの契約には多数の利用者の資金が集まり、絶えず送金が出入りしています。
+        そのため、ここから先の送金を追っても<strong>同じ資金である保証がありません</strong>。
+        誤った追跡結果をご提示しないため、当社ではこの地点で追跡を打ち切っています。<br>
+        資金が別のチェーンへ移動している場合は、移動先のチェーンでの調査が必要です。</p>` : ''}
         ${(r.path || []).some(p => p.isDeposit) ? `<p class="flow-note">※ <strong>🏧 入金用アドレス</strong>＝取引所が利用者ごとに割り当てる受け取り専用のアドレスと推定されます
         （受け取った資金をまとめて取引所のウォレットへ移す形が見られるため）。ここに着金している場合、
         <strong>その取引所が口座名義人の情報を保有している可能性</strong>があります。ただし名義人が誰であるかを当社が特定することはできません。</p>` : ''}
@@ -2608,7 +2633,7 @@ ${r.txid}
     <table class="cover-info">
       <tr><th>発行日時</th><td>${issuedAt}</td></tr>
       <tr><th>調査件数</th><td>${results.length}件</td></tr>
-      <tr><th>作成</th><td>BitTo（Himesen株式会社）</td></tr>
+      <tr><th>作成</th><td>BitTo</td></tr>
     </table>
   </div>
 
