@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>相談チャットの記録｜BitTo 管理</title>
+<style>
+:root{--bg:#0C1728;--panel:#152741;--line:#2C4468;--ink:#C7D6EC;--sub:#8FA3C4;--teal:#34E1C8;--red:#F87171}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,'Hiragino Sans','Noto Sans JP',Meiryo,sans-serif;font-size:14px;padding:20px}
+.wrap{max-width:1000px;margin:0 auto}
+h1{font-size:18px;margin-bottom:4px}
+.note{font-size:12px;color:var(--sub);line-height:1.8;margin-bottom:18px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.note b{color:var(--teal)}
+.bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+input{background:var(--panel);border:1px solid var(--line);border-radius:8px;color:var(--ink);font:inherit;padding:9px 11px}
+button{background:var(--teal);color:#062A25;border:none;border-radius:8px;font:inherit;font-weight:700;padding:9px 16px;cursor:pointer}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--sub)}
+button.danger{background:transparent;border:1px solid var(--red);color:var(--red)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:9px 8px;text-align:left;vertical-align:top}
+th{color:var(--sub);font-weight:600;font-size:12px}
+tr:hover td{background:rgba(52,225,200,.05)}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--sub)}
+.detail{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;margin-top:14px;white-space:pre-wrap;line-height:1.8;display:none}
+.detail h3{font-size:13px;color:var(--teal);margin:12px 0 6px}
+.detail h3:first-child{margin-top:0}
+.count{font-size:12px;color:var(--sub);margin-bottom:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>相談チャットの記録</h1>
+  <div class="note">
+    保存しているのは<b>端末ごとのランダムID・日時・質問・回答</b>だけです。氏名・メールアドレス・IPアドレスは保存していません。
+    シードフレーズ・秘密鍵・パスワードらしき記載は、保存する前に伏せ字にしています。<br>
+    一覧では本文の冒頭のみ表示し、開いたときだけ全文を表示します。<b>削除のご請求があった場合は、端末IDを指定して削除してください。</b>
+  </div>
+
+  <div class="bar">
+    <input type="text" id="q" placeholder="本文で検索（例：出金）" style="flex:1;min-width:180px">
+    <input type="text" id="device" placeholder="端末IDで絞り込み">
+    <button id="search">検索</button>
+    <button class="ghost" id="reset">条件をクリア</button>
+    <button class="danger" id="del">この端末IDの記録を削除</button>
+  </div>
+
+  <div class="count" id="count">読み込んでいます…</div>
+  <table>
+    <thead><tr><th style="width:150px">日時</th><th style="width:110px">端末ID</th><th style="width:90px">ブランド</th><th>相談内容（冒頭）</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="detail" id="detail"></div>
+</div>
+
+<script>
+// トークンはURLから読み、履歴に残らないようアドレスバーから消す
+const T = new URLSearchParams(location.search).get('t') || '';
+history.replaceState(null, '', location.pathname);
+
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function load(){
+  const q = document.getElementById('q').value.trim();
+  const device = document.getElementById('device').value.trim();
+  const u = `/api/admin/chatlogs?t=${encodeURIComponent(T)}&q=${encodeURIComponent(q)}&device=${encodeURIComponent(device)}`;
+  const r = await fetch(u);
+  if (!r.ok) { document.getElementById('count').textContent = '読み込めませんでした（トークンをご確認ください）'; return; }
+  const j = await r.json();
+  document.getElementById('count').textContent = `${j.件数}件`;
+  document.getElementById('rows').innerHTML = (j.記録 || []).map(c => `
+    <tr data-id="${c.id}" style="cursor:pointer">
+      <td>${esc(c.at)}</td>
+      <td class="mono">${esc(c.device).slice(0,10)}…</td>
+      <td>${esc(c.brand)}</td>
+      <td>${esc(c.抜粋)}</td>
+    </tr>`).join('');
+}
+
+document.getElementById('rows').addEventListener('click', async e => {
+  const tr = e.target.closest('tr[data-id]'); if (!tr) return;
+  const r = await fetch(`/api/admin/chatlogs/${tr.dataset.id}?t=${encodeURIComponent(T)}`);
+  if (!r.ok) return;
+  const c = await r.json();
+  const d = document.getElementById('detail');
+  d.style.display = 'block';
+  d.innerHTML = `<h3>日時</h3>${esc(c.at)}　／　端末ID <span class="mono">${esc(c.device)}</span>　／　${esc(c.brand)}
+    <h3>ご相談</h3>${esc(c.q)}
+    <h3>AIの回答</h3>${esc(c.a)}
+    ${(c.txids||[]).length ? `<h3>調査したTXID</h3><span class="mono">${(c.txids||[]).map(esc).join('<br>')}</span>` : ''}`;
+  d.scrollIntoView({behavior:'smooth', block:'nearest'});
+});
+
+document.getElementById('search').addEventListener('click', load);
+document.getElementById('reset').addEventListener('click', () => {
+  document.getElementById('q').value = ''; document.getElementById('device').value = ''; load();
+});
+document.getElementById('del').addEventListener('click', async () => {
+  const device = document.getElementById('device').value.trim();
+  if (!device) { alert('削除する端末IDを入力してください'); return; }
+  if (!confirm(`端末ID ${device} の記録をすべて削除します。元に戻せません。`)) return;
+  const r = await fetch(`/api/admin/chatlogs-delete?t=${encodeURIComponent(T)}&device=${encodeURIComponent(device)}`);
+  const j = await r.json();
+  alert(j.ok ? `${j.削除件数}件を削除しました` : (j.error || '削除できませんでした'));
+  load();
+});
+
+load();
+</script>
+</body>
+</html>

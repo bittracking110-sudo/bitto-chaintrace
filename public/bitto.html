@@ -790,12 +790,21 @@ async function runInvestigation(txids){
 }
 
 /* ── AI相談 ── */
+/* 相談内容の記録用に、端末ごとのランダムIDを付ける。
+   氏名やメールは送らない。削除のご請求があればこのIDで消せる。 */
+function deviceId(){
+  try{
+    let d = localStorage.getItem('bitto_device_v1');
+    if(!d){ d = (self.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Math.random())).replace(/-/g,'').slice(0,12); localStorage.setItem('bitto_device_v1', d); }
+    return d;
+  }catch(e){ return ''; }
+}
 async function askAI(text){
   const row = addAi('', {typing:true});
   try{
     const r = await fetch(API + '/api/connection/consult', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ brand:'bitto', message:text, messages:history.slice(-10), context:lastContext })
+      body: JSON.stringify({ brand:'bitto', message:text, messages:history.slice(-10), context:lastContext, device:deviceId() })
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || '応答を取得できませんでした');

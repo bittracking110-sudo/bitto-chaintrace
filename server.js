@@ -3954,6 +3954,45 @@ app.post('/api/hearing/submit', express.json(), async (req, res) => {
   saveHearings();
 });
 
+/* 相談チャットの記録を見る。一覧では本文を伏せ、開いたときだけ全文を出す。
+   画面は /admin/chats?t=<ADMIN_TOKEN>。 */
+app.get('/api/admin/chatlogs', requireAdmin, (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const device = String(req.query.device || '').trim();
+  let list = chatLogs;
+  if (device) list = list.filter(c => c.device === device);
+  if (q) list = list.filter(c => (c.q + ' ' + c.a).includes(q));
+  const total = list.length;
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const per = 50;
+  const rows = list.slice().reverse().slice((page - 1) * per, page * per).map(c => ({
+    id: c.id, at: new Date(c.at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
+    device: c.device, brand: c.brand,
+    // 一覧では冒頭だけ。全文は個別に開いたときだけ返す
+    抜粋: c.q.slice(0, 40) + (c.q.length > 40 ? '…' : ''),
+  }));
+  res.json({ 件数: total, ページ: page, 記録: rows });
+});
+
+app.get('/api/admin/chatlogs/:id', requireAdmin, (req, res) => {
+  const c = chatLogs.find(x => x.id === req.params.id);
+  if (!c) return res.status(404).json({ error: '見つかりません' });
+  res.json({ ...c, at: new Date(c.at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) });
+});
+
+/* 削除請求への対応。端末IDを指定して、その端末の記録をすべて消す。 */
+app.get('/api/admin/chatlogs-delete', requireAdmin, (req, res) => {
+  const device = String(req.query.device || '').trim();
+  if (!device) return res.status(400).json({ error: 'device が必要です' });
+  const before = chatLogs.length;
+  chatLogs = chatLogs.filter(c => c.device !== device);
+  saveChatLogs();
+  console.log(`[ChatLog] 削除請求により ${before - chatLogs.length}件を削除（端末 ${device}）`);
+  res.json({ ok: true, 削除件数: before - chatLogs.length, 残り: chatLogs.length });
+});
+
+app.get('/admin/chats', requireAdmin, (_req, res) => res.sendFile(path.join(__dirname, 'public', 'admin-chats.html')));
+
 /* ラベルAPIの使用状況。前払いの残りを見積もるために使う。 */
 app.get('/api/admin/label-usage', requireAdmin, (_req, res) => {
   const d = labelDayKey(), m = labelMonthKey();
@@ -4350,6 +4389,52 @@ setInterval(() => {
     if (keep.length) connRateMap.set(ip, keep); else connRateMap.delete(ip);
   }
 }, 3600000);
+
+/* ══ 相談チャットの記録 ═══════════════════════════════════════
+   目的：どんな相談が来ているかを運営が把握し、案内文を直すため。
+   保存しないもの：氏名・メールアドレス・IPアドレス
+   保存するもの　：端末ごとのランダムID・日時・ブランド・質問・回答
+   伏せるもの　　：シードフレーズ・秘密鍵・パスワードらしき文字列 */
+const CHATLOG_FILE = path.join(REPORTS_DIR, 'chatlogs.json');
+let chatLogs = [];
+try {
+  if (fs.existsSync(CHATLOG_FILE)) {
+    chatLogs = JSON.parse(fs.readFileSync(CHATLOG_FILE, 'utf8'));
+    console.log(`[ChatLog] ${chatLogs.length}件を復元`);
+  }
+} catch (e) { console.error('[ChatLog] 復元失敗:', e.message); }
+
+function saveChatLogs() {
+  fsp.writeFile(CHATLOG_FILE, JSON.stringify(chatLogs), 'utf8')
+    .catch(e => console.error('[ChatLog] 保存失敗:', e.message));
+}
+
+/* 万一漏れたときの被害を小さくするため、保存前に伏せる。
+   利用者が誤って書いてしまうことがあるため、こちらで持たない。 */
+function maskSecrets(text) {
+  let t = String(text || '');
+  // 12語以上の英単語の羅列＝シードフレーズの可能性
+  t = t.replace(/\b([a-z]{3,10}\s+){11,23}[a-z]{3,10}\b/gi, '［シードフレーズらしき記載を伏せました］');
+  // 0x以外の64桁16進＝秘密鍵の可能性（TXIDは0x付きなので残る）
+  t = t.replace(/(^|[^0-9a-fx])([0-9a-f]{64})(?![0-9a-f])/gi, (m, p) => p + '［秘密鍵らしき記載を伏せました］');
+  // 「パスワード」の後に続く文字列
+  t = t.replace(/(パスワード|password|暗証番号)\s*[:：はが]?\s*\S+/gi, '$1［伏せました］');
+  return t;
+}
+
+function addChatLog(entry) {
+  chatLogs.push({
+    id: crypto.randomUUID(),
+    at: Date.now(),
+    device: String(entry.device || '').slice(0, 40) || '（不明）',
+    brand: entry.brand === 'bitto' ? 'BitTo' : 'Connection',
+    q: maskSecrets(entry.q).slice(0, 2000),
+    a: String(entry.a || '').slice(0, 4000),
+    txids: (entry.txids || []).slice(0, 5),
+  });
+  if (chatLogs.length > 20000) chatLogs = chatLogs.slice(-20000);   // 際限なく増やさない
+  saveChatLogs();
+}
 
 // ── サポートチャット（購入者専用・ファイル永続化） ─────────────
 const connectionChats = new Map(); // token → { txid, chain, customerName, email, reportUrl, reportSummary, messages, createdAt }
@@ -4938,6 +5023,14 @@ ${refundBlock}
     if (asksRefund) reply = `${REFUND_NOTICE}
 
 ${reply}`;
+    // 相談内容を記録する（氏名・メール・IPは保存しない）
+    addChatLog({
+      device: req.body.device,
+      brand,
+      q: message,
+      a: reply,
+      txids: (ctx && ctx.txid) ? [ctx.txid] : [],
+    });
     res.json({ reply });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
