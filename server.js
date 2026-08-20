@@ -673,16 +673,19 @@ function labelMonthKey() { return labelDayKey().slice(0, 7); }   // 2026/8/20 �
 
 /* 日・月・総量のどれかに当たったら照会しない。
    当たっても調査自体は続く（名前が付かないだけ）。 */
-function labelQuotaOk() {
+function labelQuotaOk(paid = false) {
   const d = labelDayKey(), m = labelMonthKey();
   if (labelUsage.day !== d)   { labelUsage.day = d; labelUsage.count = 0; }
   if (labelUsage.month !== m) { labelUsage.month = m; labelUsage.monthCount = 0; }
+  // 買った分を超えることだけは誰であっても許さない
   if (labelUsage.total >= MISTTRACK_TOTAL_CAP) {
     console.warn(`[LabelAPI] 購入分を使い切りました（${labelUsage.total}/${MISTTRACK_TOTAL_CAP}）。以後は自前DBのみで動きます`);
     return false;
   }
-  if (labelUsage.monthCount >= MISTTRACK_MONTH_CAP) { console.warn('[LabelAPI] 今月の上限に達しました'); return false; }
-  if (labelUsage.count >= MISTTRACK_DAILY_CAP)      { console.warn('[LabelAPI] 本日の上限に達しました'); return false; }
+  // 日次・月次は無料利用の暴走止め。代金をいただいた報告書は対象外にする
+  if (paid) return true;
+  if (labelUsage.monthCount >= MISTTRACK_MONTH_CAP) { console.warn('[LabelAPI] 今月の上限に達しました（無料分）'); return false; }
+  if (labelUsage.count >= MISTTRACK_DAILY_CAP)      { console.warn('[LabelAPI] 本日の上限に達しました（無料分）'); return false; }
   return true;
 }
 function labelQuotaUse() {
@@ -928,7 +931,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
         && (isLastNode || inferExchangeByBehavior(node))) {
       const known = labelCache.has(node.address.toLowerCase());
       const budgetOk = isLastNode ? apiLookups < lookupBudget : apiLookups < lookupBudget - 1;
-      if (known || (budgetOk && labelQuotaOk())) {
+      if (known || (budgetOk && labelQuotaOk(opts.paid))) {
         if (!known) { apiLookups++; labelQuotaUse(); }
         const api = await lookupLabelAPI(node.address, chain);
         if (api.name) {
@@ -981,7 +984,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
       }
       if (!last.label && MISTTRACK_KEY) {
         const known = labelCache.has(last.address.toLowerCase());
-        if (known || (apiLookups < lookupBudget && labelQuotaOk())) {
+        if (known || (apiLookups < lookupBudget && labelQuotaOk(opts.paid))) {
           if (!known) { apiLookups++; labelQuotaUse(); }
           const api = await lookupLabelAPI(last.address, chain);
           if (api.name) {
