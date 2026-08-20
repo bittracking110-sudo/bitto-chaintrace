@@ -1060,10 +1060,27 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
      確定ではないことは報告書側で明示する。 */
   const stopNode = (path || []).find(p => p.traceStop);
   if (stopNode && chain === 'eth' && stopNode.address) {
-    stopNode.nextCandidates = await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 3);
-    if (stopNode.nextCandidates.length) {
-      console.log(`[Candidates] 参考の送金先 ${stopNode.nextCandidates.length}件を添付`);
+    const cands = await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 3);
+    /* それぞれの枝を短く追い、取引所に着いたものだけを残す。
+       着かなかった枝は判断材料にならないので載せない。
+       時間をかけすぎると調査全体が遅くなるため、枝ごとに3ホップ・全体で12秒まで。 */
+    const branchDeadline = Date.now() + 12000;
+    const reached = [];
+    for (const c of cands) {
+      if (Date.now() > branchDeadline) break;
+      const hops = await traceHops(c.address, c.time, 'eth', 3, branchDeadline).catch(() => []);
+      const ex = hops.find(h => h.isExchange && !h.isVia && !h.isToken);
+      if (ex) {
+        c.reachedExchange = ex.label || '取引所（名称未判明）';
+        c.reachedAddress  = ex.address;
+        c.reachedHops     = hops.indexOf(ex) + 1;
+        reached.push(c);
+        console.log(`[Candidates] 参考の枝 ${c.address.slice(0, 10)}... → ${c.reachedExchange}（${c.reachedHops}ホップ先）`);
+      }
     }
+    stopNode.nextCandidates = reached;
+    stopNode.candidatesChecked = cands.length;
+    console.log(`[Candidates] ${cands.length}件を追跡し、取引所に着いたのは ${reached.length}件`);
   }
 
   /* 時間予算で打ち切ると、名前がいちばん要る最後のノード（着金先）だけ
@@ -2489,16 +2506,22 @@ ${r.txid}
           const sn = (r.path || []).find(p => p.traceStop && (p.nextCandidates || []).length);
           if (!sn) return '';
           return `<div class="ref-box">
-            <div class="ref-h">参考情報（未確定）：この地点から出ていった送金</div>
-            <p class="ref-p">下記は、上記の地点に資金が入った<strong>日時に最も近い送金を3件</strong>拾ったものです。
-            多数の利用者の資金が集まる地点であるため、<strong>これらがご依頼の資金である保証はありません</strong>。
+            <div class="ref-h">参考情報（未確定）：この先で取引所に着いた送金</div>
+            <p class="ref-p">上記の地点に資金が入った<strong>日時に最も近い送金3件</strong>をさらに追跡し、
+            <strong>取引所に到達したものだけ</strong>を記載しています
+            （3件のうち${sn.nextCandidates.length}件）。
+            多数の利用者の資金が集まる地点であるため、
+            <strong>これらがご依頼の資金である保証はありません</strong>。
             状況を判断する材料としてのみご覧ください。</p>
             <table class="info-table">
-              <tr><th style="width:4em">日時差</th><th>送金先</th><th style="width:8em">数量</th></tr>
+              <tr><th style="width:4.5em">日時差</th><th>この地点から出た送金先</th><th>到達した取引所（未確定）</th></tr>
               ${sn.nextCandidates.map(c => `<tr>
                 <td>+${c.gapMin}分</td>
-                <td><span class="mono">${escHtml(c.address)}</span>${c.label ? `<br><b>${escHtml(c.label)}</b>` : ''}</td>
-                <td>${c.amount ? c.amount.toFixed(6) : '—'} ${escHtml(r.chain)}</td></tr>`).join('')}
+                <td><span class="mono">${escHtml(c.address)}</span>${c.label ? `<br><b>${escHtml(c.label)}</b>` : ''}
+                    <br><span style="font-size:0.78rem;color:var(--r-ink2)">${c.amount ? c.amount.toFixed(6) : '—'} ${escHtml(r.chain)}</span></td>
+                <td><b>${escHtml(c.reachedExchange || '')}</b>
+                    <br><span class="mono" style="font-size:0.72rem">${escHtml(c.reachedAddress || '')}</span>
+                    <br><span style="font-size:0.78rem;color:var(--r-ink2)">${c.reachedHops}回の送金を経て到達</span></td></tr>`).join('')}
             </table>
             <p class="ref-warn"><strong>法執行機関・取引所へご相談の際のお願い</strong><br>
             この欄は<strong>確定した到達先ではありません</strong>。凍結の要請や被害届で「資金の到達先」として
