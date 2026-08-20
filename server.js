@@ -5091,23 +5091,48 @@ setInterval(() => {
    外部APIとGeminiの費用がそのまま出ていくので、1日の上限も置く。
    携帯回線はCGNATで多数の利用者が同一IPになるため、日次は緩めにする。 */
 const connRateMap = new Map();
-const CONN_LIMIT_HOUR = 30;
-const CONN_LIMIT_DAY  = 80;
-function connRateOk(ip) {
+/* 端末ごと。被害直後に何件も調べる人がいるので、窮屈にしない。 */
+const DEVICE_LIMIT_HOUR = Number(process.env.DEVICE_LIMIT_HOUR ?? 15);
+const DEVICE_LIMIT_DAY  = Number(process.env.DEVICE_LIMIT_DAY  ?? 40);
+const connDeviceMap = new Map();
+/* IPごと。いまは端末ごとの上限が主なので、こちらは「端末IDを変えながら
+   叩く相手」への最後の歯止め。携帯回線は数百人が同じIPを共有するため、
+   ここを詰めると無関係の被害者まで巻き添えになる。広めに取る。
+   MistTrackの消費は別枠（1日5回）で守られているので、緩めても費用は増えない。 */
+const CONN_LIMIT_HOUR = Number(process.env.CONN_LIMIT_HOUR ?? 60);
+const CONN_LIMIT_DAY  = Number(process.env.CONN_LIMIT_DAY  ?? 200);
+/* 携帯回線は多数の利用者が少数のIPを共有する（CGNAT）。IPだけで数えると、
+   同じ回線の他人が使った分で被害者が締め出される。実際に困るのは、
+   被害直後に何度も調べたい人が「上限に達しました」で止まること。
+   そこで端末ごとの数を主にし、IPは荒らしへの最後の歯止めとして緩く持つ。
+   端末IDは利用者側で作られるので、それだけでは歯止めにならない。両方見る。 */
+function connRateOk(ip, device) {
   const now = Date.now();
-  const arr = (connRateMap.get(ip) || []).filter(t => now - t < 86400000);
-  connRateMap.set(ip, arr);
-  if (arr.filter(t => now - t < 3600000).length >= CONN_LIMIT_HOUR) return false;
-  if (arr.length >= CONN_LIMIT_DAY) return false;
-  arr.push(now);
+  const count = (key, map, perHour, perDay) => {
+    if (!key) return true;                       // 手がかりが無ければこの軸では数えない
+    const arr = (map.get(key) || []).filter(t => now - t < 86400000);
+    map.set(key, arr);
+    if (arr.filter(t => now - t < 3600000).length >= perHour) return false;
+    if (arr.length >= perDay) return false;
+    return true;
+  };
+  const okDevice = count(device, connDeviceMap, DEVICE_LIMIT_HOUR, DEVICE_LIMIT_DAY);
+  const okIp     = count(ip,     connRateMap,   CONN_LIMIT_HOUR,   CONN_LIMIT_DAY);
+  if (!okDevice) { console.warn('[Rate] 端末の上限:', String(device).slice(0, 8)); return false; }
+  if (!okIp)     { console.warn('[Rate] IPの上限:', ip); return false; }
+  /* 通す時だけ記録する。弾いた分まで数えると、待っても解除されなくなる。
+     count() が済んだ時点で、どちらの Map にも配列が入っている。 */
+  if (device) connDeviceMap.get(device).push(now);
+  if (ip)     connRateMap.get(ip).push(now);
   return true;
 }
 // 溜まりっぱなしにしない（1日経った記録は捨てる）
 setInterval(() => {
   const cutoff = Date.now() - 86400000;
-  for (const [ip, arr] of connRateMap) {
+  for (const map of [connRateMap, connDeviceMap])
+  for (const [ip, arr] of map) {
     const keep = arr.filter(t => t > cutoff);
-    if (keep.length) connRateMap.set(ip, keep); else connRateMap.delete(ip);
+    if (keep.length) map.set(ip, keep); else map.delete(ip);
   }
 }, 3600000);
 
@@ -5368,8 +5393,9 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
   const txid  = (req.body.txid || '').trim();
   const chain = detectChain(txid);
   if (!chain) return res.status(400).json({ error: 'TXIDの形式が正しくありません。64文字のトランザクションIDをご入力ください。' });
-  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || '';
-  if (!connRateOk(ip)) return res.status(429).json({ error: '調査回数の上限に達しました。しばらく時間をおいてお試しください。' });
+  const ip = reqIp(req);
+  const device = String((req.body && req.body.device) || '').trim().slice(0, 64);
+  if (!connRateOk(ip, device)) return res.status(429).json({ error: '調査回数の上限に達しました。しばらく時間をおいてお試しください。' });
 
   const jobId = crypto.randomUUID();
   connectionJobs.set(jobId, { status: 'running', txid, chain, createdAt: Date.now() });
