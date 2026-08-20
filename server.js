@@ -855,6 +855,8 @@ function truncateAfterVia(path) {
     if (!n.isVia && !n.isToken) continue;
     // 取引が少ない小規模なサービスは、まだ追える見込みがあるので続ける
     if (n.txCount != null && n.txCount < VIA_TRAFFIC_STOP) continue;
+    // 次のノードを同じ取引の中から特定できているなら、推測ではないので続ける
+    if (path[i + 1] && path[i + 1].sameTx) continue;
     if (i < path.length - 1) {
       console.log(`[trace] ${n.label || '経由'} で追跡を終了（利用者が多く、以降は同一資金と言えないため）`);
       path.splice(i + 1);
@@ -1335,18 +1337,65 @@ async function getNextTxXRP(addr, afterTime) {
   return null;
 }
 
+/* 交換・橋渡しのコントラクトに入った資金の出口を、同じ取引の中から読む。
+   Blockchairの取引明細には内部送金（calls）が含まれるので、
+   そのコントラクトから出ていった分を拾う。推測が入らない。 */
+async function getSwapOutputETH(routerAddr, txHash, prevAddr) {
+  if (!txHash) return null;
+  try {
+    const j = await apiJson(`https://api.blockchair.com/ethereum/dashboards/transaction/${txHash}?key=${BLOCKCHAIR_KEY}`);
+    const data = j.data?.[String(txHash).toLowerCase()];
+    if (!data) return null;
+    const router = String(routerAddr).toLowerCase();
+    const prev   = String(prevAddr || '').toLowerCase();
+    const outs = (data.calls || [])
+      .filter(c => c.sender && c.recipient
+        && String(c.sender).toLowerCase() === router
+        && String(c.recipient).toLowerCase() !== prev
+        && String(c.recipient).toLowerCase() !== router
+        && parseFloat(c.value || '0') > 0)
+      .map(c => ({
+        addr: c.recipient,
+        amount: parseFloat(c.value) / 1e18,
+        time: data.transaction?.time,
+        txHash,
+        label: c.recipient_label || '',
+      }))
+      .sort((a, b) => b.amount - a.amount);
+    if (!outs.length) return null;
+    console.log(`[SwapOut] ${routerAddr.slice(0, 10)}... の同一取引内の出金: ${outs.length}件 → ${outs[0].addr.slice(0, 10)}...`);
+    const chosen = outs[0];
+    chosen._siblings = outs.slice(1, 5).map(o => ({ addr: o.addr, label: o.label, amount: o.amount }));
+    chosen._sameTx = true;
+    return chosen;
+  } catch (e) {
+    console.error('[SwapOut] 取得失敗:', e.message);
+    return null;
+  }
+}
+
 async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = Date.now() + TRACE_BUDGET_MS) {
   const hops = [];
   let currentAddr = startAddr;
   let currentTime = startTime;
   const visited = new Set([startAddr.toLowerCase()]);
   let exCount = 0;                       // ラベルで判明した取引所の数
+  let incomingHash = null;               // いま居る住所へ資金を運んできた取引
+  let prevAddr = null;                   // その1つ前の住所
+  let currentIsVia = false;              // いま居るのが交換・橋渡しのコントラクトか
   for (let i = 0; i < maxHops; i++) {
     if (Date.now() > deadline) { console.log(`[traceHops] 時間予算に達したため打ち切り（${i}ホップで部分結果を返す）`); break; }
     let next = null;
-    if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime);
-    else if (chain === 'eth') next = await getNextTxETH(currentAddr, currentTime);
-    else if (chain === 'xrp') next = await getNextTxXRP(currentAddr, currentTime);
+    /* 交換・橋渡しの中に居るときは、次の送金を探しに行かない。
+       同じ取引の中の出金を読む方が確実で、他人の資金を拾わない。 */
+    if (chain === 'eth' && currentIsVia && incomingHash) {
+      next = await getSwapOutputETH(currentAddr, incomingHash, prevAddr);
+    }
+    if (!next) {
+      if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime);
+      else if (chain === 'eth') next = await getNextTxETH(currentAddr, currentTime);
+      else if (chain === 'xrp') next = await getNextTxXRP(currentAddr, currentTime);
+    }
     if (!next) break;
     if (visited.has(next.addr.toLowerCase())) break; // ループ防止
     visited.add(next.addr.toLowerCase());
@@ -1361,14 +1410,17 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
       address: s.addr, label: s.label || '', amount: s.amount, token: s.token,
     }));
     console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... label="${lbl}" exchange=${isEx} siblings=${siblings.length}`);
-    hops.push({ address: next.addr, label: lbl, amount: next.amount, token: next.token, isExchange: isEx, isToken: isTok, isVia, time: next.time, txHash: next.txHash, siblings });
+    hops.push({ address: next.addr, label: lbl, amount: next.amount, token: next.token, isExchange: isEx, isToken: isTok, isVia, sameTx: !!next._sameTx, time: next.time, txHash: next.txHash, siblings });
     if (isEx) {
       exCount++;
       console.log(`[traceHops] 取引所到達(${exCount}件目): ${lbl}`);
       if (exCount >= 2) break;          // 2個目の取引所で停止
     }
-    currentAddr = next.addr;
-    currentTime = next.time;
+    prevAddr     = currentAddr;
+    currentAddr  = next.addr;
+    currentTime  = next.time;
+    incomingHash = next.txHash;
+    currentIsVia = isVia || isTok;
   }
   return hops;
 }
