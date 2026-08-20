@@ -1391,11 +1391,17 @@ async function listNextCandidatesETH(addr, afterTime, limit = 3) {
   try {
     const refSec = Math.floor(new Date(normalizeTimeStr(afterTime)).getTime() / 1000);
     if (!refSec) return [];
-    // 1回の照会で済ませる（打ち切り地点は取引が非常に多く、1件ずつ引くと時間切れになる）
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}`
+    /* 打ち切り地点はコントラクト（WETH等）であることが多い。
+       コントラクトは通常の取引の送信者にならないので、内部送金を見る。
+       個人の住所だった場合に備えて、空なら通常の取引も見る。 */
+    const base = `https://api.etherscan.io/v2/api?chainid=1&module=account&address=${addr}`
       + `&startblock=0&endblock=latest&page=1&offset=100&sort=desc&apikey=${ETHERSCAN_KEY}`;
-    const j = await apiJson(url);
-    const txs = Array.isArray(j.result) ? j.result : [];
+    let j = await apiJson(base + '&action=txlistinternal');
+    let txs = Array.isArray(j.result) ? j.result : [];
+    if (!txs.length) {
+      j = await apiJson(base + '&action=txlist');
+      txs = Array.isArray(j.result) ? j.result : [];
+    }
     const out = [];
     for (const t of txs) {
       const sec = parseInt(t.timeStamp);
