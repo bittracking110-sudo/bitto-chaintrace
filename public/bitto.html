@@ -154,6 +154,11 @@
   .node.ex-guess{border-color:rgba(251,191,36,.58);
     box-shadow:inset 0 0 0 999px rgba(251,191,36,.07),0 0 0 1.5px rgba(251,191,36,.3)}
   .arrow{flex:none;align-self:center;color:var(--sub);font-size:15px}
+  .cp{margin-top:12px;padding:12px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:8px}
+  .cp-h{font-size:12px;color:var(--sub2);font-weight:700;margin-bottom:8px}
+  .cp-row{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)}
+  .cp-row:last-of-type{border-bottom:none}
+  .cp-row b{color:var(--teal);font-variant-numeric:tabular-nums}
   .legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:9px;font-size:10.5px;color:var(--sub)}
   .legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
 
@@ -511,6 +516,7 @@ function nodeBadge(n){
   if (n.isDeposit)                    return `<span class="badge b-known">🏧 入金用アドレス（推定）</span>`;
   if (n.isToken)                      return `<span class="badge b-via">🔁 スワップ／トークン${n.swapTo ? "（→" + esc(n.swapTo) + "）" : ""}</span>`;
   if (isBridgeLike(n))                return `<span class="badge b-via">経由（DEX/ブリッジ）</span>`;
+  if (n.cpInferred)                   return `<span class="badge b-guess">取引先から推定${n.cpPercent != null ? "（" + Math.round(n.cpPercent) + "%）" : ""}</span>`;
   if (n.isExchange && n.label)        return `<span class="badge b-known">判明</span>`;
   if (n.isExchange)                   return `<span class="badge b-guess">推定</span>`;
   return `<span class="badge b-unk">未特定</span>`;
@@ -519,6 +525,7 @@ function nodeBadge(n){
 function nodeCls(n){
   if (n.isToken)               return '';
   if (isBridgeLike(n))         return '';
+  if (n.cpInferred)            return 'ex-guess';
   if (n.isExchange && n.label) return 'ex-known';
   if (n.isExchange)            return 'ex-guess';
   return '';
@@ -531,6 +538,18 @@ function hopName(i, total){
 }
 const HIGH_TX = 1000;   // これ以上の取引回数は「取引所/サービスの可能性」の手がかり（断定はしない）
 const fmtNum = n => Number(n).toLocaleString('ja-JP');
+/* 取引先分析の内訳。着金先アドレスが誰と取引しているかの割合。 */
+function cpHTML(path){
+  const n = (path || []).find(x => x && Array.isArray(x.counterparty) && x.counterparty.length);
+  if (!n) return '';
+  const rows = n.counterparty.map(c =>
+    `<div class="cp-row"><span>${esc(c.name)}</span><b>${c.percent >= 0.1 ? c.percent.toFixed(1) : '&lt;0.1'}%</b></div>`).join('');
+  return `<div class="cp">
+    <div class="cp-h">着金先アドレスの取引先（${esc(shortAddr(n.address))}）</div>
+    ${rows}
+    <div class="note" style="margin-top:8px">このアドレスが実際にやり取りしている相手の割合です。取引所の入金用アドレスは名前が登録されていないことが多いため、取引先から着金先を推定しています。<b>確定ではありません。</b></div>
+  </div>`;
+}
 function flowHTML(path){
   const nodes = path;   // 最終到達先まで全て表示（横スクロール）
   return `<div class="flow-wrap at-start">
@@ -629,6 +648,7 @@ function resultCard(results){
     <div class="card"><h4>資金フロー（概要）${results.length>1 ? ` ${i+1}/${results.length}` : ''} — ${esc(r.chain)}</h4>
       ${flowHTML(p)}
       ${ex.length ? `<div class="note">到達した取引所：${esc(ex.join('、'))}</div>` : ''}
+      ${cpHTML(p)}
       ${hiTx.length ? `<div class="note">※ <b style="color:var(--amber)">取引回数が非常に多いアドレス</b>（${fmtNum(HIGH_TX)}回以上）が${hiTx.length}件あります。取引所やサービスのウォレットである可能性がありますが、ラベルが未取得のため断定はできません。</div>` : ''}
     </div>`;
   }).join('');

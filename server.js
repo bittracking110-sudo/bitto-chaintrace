@@ -625,6 +625,9 @@ const EX_KEYWORDS = [
   'cold wallet','bitbank','mexc','crypto.com','hot','cold',
   'hitbtc','hit btc','poloniex','gemini','bitget','lbank','whitebit',
   'phemex','bitmart','digifinex','xt.com','latoken','probit',
+  // 国内取引所
+  'gmo coin','gmoコイン','sbi vc','bitpoint','dmm bitcoin','bittrade',
+  'coinbest','okcoin','bitmax','decurret','coinbook','bitTrade',
   // ブリッジ・スワップ・DEXアグリゲーター
   'bridgers','transit finance','transitswap','transitfinance',
   'changenow','fixedfloat','simpleswap',
@@ -733,7 +736,78 @@ function labelQuotaUse() {
   labelUsage.count++; labelUsage.monthCount++; labelUsage.total++;
   saveLabelUsage();
 }
-const MISTTRACK_COIN = { btc: 'BTC', eth: 'ETH', xrp: 'XRP' };
+const MISTTRACK_COIN = { btc: 'BTC', eth: 'ETH' };
+/* 対象外のチェーンに投げても名前は返らず、回数だけ減る。
+   MistTrackはETH・BTC・TRON系など21チェーンに対応するが、XRPは含まれない。 */
+function misttrackSupports(chain) { return !!MISTTRACK_COIN[chain]; }
+
+/* 取引先分析（相手方分析）。ラベルが引けなかったときの代替。
+   取引所は利用者ごとに使い捨ての入金アドレスを発行するため、そのアドレス自体には
+   名前が付かない。しかし「送り先の大半がBinance」なら、Binanceの入金用と分かる。
+   1照会につき回数を消費するので、有料調査の着金先だけに使う（既定）。 */
+const MISTTRACK_CP_FREE = Number(process.env.MISTTRACK_CP_FREE || 0);
+const MISTTRACK_CP_PAID = Number(process.env.MISTTRACK_CP_PAID || 1);
+/* 上位の取引先がこの割合に満たなければ「よく使う相手」とは言えない。
+   0.003%のBinanceを根拠に「Binanceの入金アドレス」とは書けない。 */
+const CP_MIN_PERCENT = Number(process.env.MISTTRACK_CP_MIN_PERCENT || 30);
+const CP_CACHE_FILE = path.join(DATA_DIR, 'counterparty-cache.json');
+const cpCache = new Map();   // 小文字アドレス → [{name,percent}]（[]＝引いたが該当なし）
+try {
+  const cached = JSON.parse(fs.readFileSync(CP_CACHE_FILE, 'utf8'));
+  for (const [addr, list] of Object.entries(cached)) cpCache.set(addr, list);
+  console.log(`[Counterparty] キャッシュ ${cpCache.size}件を読み込み`);
+} catch { /* 初回は無い */ }
+function saveCpCache() {
+  fsp.writeFile(CP_CACHE_FILE, JSON.stringify(Object.fromEntries(cpCache), null, 2), 'utf8')
+    .catch(e => console.error('[Counterparty] キャッシュ保存失敗:', e.message));
+}
+function counterpartyApiUrl(addr, chain) {
+  const coin = MISTTRACK_COIN[chain] || String(chain).toUpperCase();
+  return `${MISTTRACK_BASE}/address_counterparty?coin=${coin}&address=${encodeURIComponent(addr)}&api_key=${MISTTRACK_KEY}`;
+}
+/* 応答は { success, msg, address_counterparty_list:[{name,amount,percent}] }。
+   ラベル取得と違って data で包まれていない。 */
+function pickCounterpartyFromResponse(j) {
+  const list = Array.isArray(j && j.address_counterparty_list) ? j.address_counterparty_list : [];
+  return list
+    .filter(x => x && typeof x.name === 'string' && x.name.trim())
+    .map(x => ({ name: x.name.trim(), percent: Number(x.percent) || 0 }))
+    // 「Unknown」は名前ではないので落とす
+    .filter(x => x.name.toLowerCase() !== 'unknown')
+    .sort((a, b) => b.percent - a.percent)
+    .slice(0, 5);
+}
+async function lookupCounterpartyAPI(addr, chain) {
+  if (!MISTTRACK_KEY || !misttrackSupports(chain)) return [];
+  const lo = addr.toLowerCase();
+  if (cpCache.has(lo)) return cpCache.get(lo) || [];
+  try {
+    const res = await fetchT(counterpartyApiUrl(addr, chain));
+    const j   = await res.json();
+    if (j && j.success === false) {
+      console.warn('[Counterparty] 失敗応答:', scrubKey(JSON.stringify(j).slice(0, 160)));
+      return [];   // キーの誤りや上限。キャッシュしない
+    }
+    const picked = pickCounterpartyFromResponse(j);
+    cpCache.set(lo, picked);
+    saveCpCache();
+    console.log(`[Counterparty] ${addr.slice(0, 10)}... → ${picked.length ? picked.map(c => `${c.name} ${c.percent}%`).join(' / ') : '該当なし'}`);
+    return picked;
+  } catch (e) {
+    console.error('[Counterparty] 照会失敗:', addr.slice(0, 12), scrubKey(e.message));
+    return [];
+  }
+}
+/* 取引先の並びから「着金先の取引所」を1つ選ぶ。
+   DEX・ブリッジ・トークン契約は通り道であって着金先ではないので飛ばす。 */
+function exchangeFromCounterparty(list) {
+  for (const c of list || []) {
+    if (isTokenContract(c.name) || isViaService(c.name)) continue;
+    if (!isExchange(c.name)) continue;
+    return c.percent >= CP_MIN_PERCENT ? c : null;   // 上位の取引所が薄ければ諦める
+  }
+  return null;
+}
 const LABEL_CACHE_FILE = path.join(DATA_DIR, 'label-cache.json');
 const labelCache = new Map();   // 小文字アドレス → 名前（''＝引いたが名前なし）
 
@@ -791,7 +865,7 @@ function labelApiUrl(addr, chain) {
    キャッシュは古い形式（文字列）も読めるようにしておく。 */
 async function lookupLabelAPI(addr, chain) {
   const empty = { name: '', type: '' };
-  if (!MISTTRACK_KEY) return empty;
+  if (!MISTTRACK_KEY || !misttrackSupports(chain)) return empty;
   const lo = addr.toLowerCase();
   if (labelCache.has(lo)) {
     const c = labelCache.get(lo);
@@ -1118,6 +1192,33 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
       }
       console.log("[enrich] 打ち切り後、最後のノードだけ補完しました");
     } catch (e) { console.error("[enrich] 最後のノードの補完に失敗:", e.message); }
+  }
+
+  /* 着金先の名前が取れなかった／推定どまりのときだけ、取引先分析を引く。
+     取引所の入金用アドレスはラベルが付かないが、送り先の大半が特定の取引所なら
+     そこの入金用と判断できる。DEX・ブリッジ・トークン契約は通り道なので対象外。 */
+  const cpBudget = opts.paid ? MISTTRACK_CP_PAID : MISTTRACK_CP_FREE;
+  const named = last && last.isExchange && last.label && !last.inferred;
+  if (cpBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
+      && last && last.address && !named && !last.isVia && !last.isToken) {
+    const known = cpCache.has(last.address.toLowerCase());
+    if (known || labelQuotaOk(opts.paid)) {
+      if (!known) labelQuotaUse();
+      const cp = await lookupCounterpartyAPI(last.address, chain).catch(() => []);
+      if (cp.length) {
+        last.counterparty = cp;
+        const hit = exchangeFromCounterparty(cp);
+        if (hit) {
+          last.label      = `${hit.name}（取引先から推定）`;
+          last.isExchange = true;
+          last.cpInferred = true;
+          last.cpPercent  = hit.percent;
+          console.log(`[Counterparty] 着金先を ${hit.name} と推定（取引の${hit.percent}%）`);
+        } else {
+          console.log('[Counterparty] 取引所と言える相手は見つかりませんでした');
+        }
+      }
+    }
   }
 }
 
@@ -2504,6 +2605,25 @@ ${r.txid}
         ・資金が別のチェーンへ移動している場合は、移動先のチェーンでの調査<br>
         なお、ここまでの経路（この地点に資金が入ったこと）は、ブロックチェーン上の記録として確認できています。</p>` : ''}
         ${(() => {
+          // 取引先分析で着金先を推定した場合、その内訳を根拠として示す
+          const cn = (r.path || []).find(p => Array.isArray(p.counterparty) && p.counterparty.length);
+          if (!cn) return '';
+          const rows = cn.counterparty.map(c => `<tr><td>${escHtml(c.name)}</td><td style="text-align:right">${c.percent >= 0.1 ? c.percent.toFixed(1) : '&lt;0.1'}%</td></tr>`).join('');
+          return `<div class="ref-box">
+            <div class="ref-h">参考情報：着金先アドレスの取引先分析</div>
+            <p class="ref-p">取引所は利用者ごとに入金用のアドレスを発行するため、そのアドレス自体には
+            取引所名が登録されていないことがあります。そこで、着金先アドレス
+            （<span class="mono">${escHtml(cn.address || '')}</span>）が
+            <strong>実際にやり取りしている相手の割合</strong>を示します。${cn.cpInferred ? 'この結果から、着金先を <strong>' + escHtml(String(cn.label || '')) + '</strong> と推定しています。' : ''}</p>
+            <table class="info-table">
+              <tr><th>取引先</th><th style="width:6em;text-align:right">割合</th></tr>
+              ${rows}
+            </table>
+            <p class="ref-warn"><strong>この推定は確定ではありません。</strong>取引先の割合は入出金の両方を含み、
+            第三者を経由した取引も含まれます。凍結のご要請にあたっては、必ず捜査機関を通じて
+            当該取引所へ確認してください。</p></div>`;
+        })()}
+        ${(() => {
           const sn = (r.path || []).find(p => p.traceStop && p.candidatesChecked);
           if (!sn) return '';
           if (!(sn.nextCandidates || []).length) {
@@ -3695,6 +3815,29 @@ app.get('/api/admin/label-lookup', requireAdmin, async (req, res) => {
   }
 });
 
+/* 取引先分析の疎通確認。1回分を消費するので、確認のとき以外は使わない。 */
+app.get('/api/admin/counterparty', requireAdmin, async (req, res) => {
+  const addr  = (req.query.address || '').trim();
+  const chain = (req.query.chain || 'eth').toLowerCase();
+  if (!addr) return res.status(400).json({ error: 'address が必要です' });
+  if (!MISTTRACK_KEY) return res.json({ ok: false, reason: 'MISTTRACK_API_KEY が未設定です' });
+  if (!misttrackSupports(chain)) return res.json({ ok: false, reason: chain + ' は MistTrack の対象外です' });
+  try {
+    const r = await fetchT(counterpartyApiUrl(addr, chain));
+    const j = await r.json();
+    const picked = pickCounterpartyFromResponse(j);
+    const hit    = exchangeFromCounterparty(picked);
+    res.json({
+      ok: r.ok, status: r.status,
+      取引先: picked,
+      推定した取引所: hit ? hit.name + '（' + hit.percent + '%）' : '(なし)',
+      raw: j,
+    });
+  } catch (e) {
+    res.status(500).json({ error: scrubKey(e.message) });
+  }
+});
+
 // /apply → apply.html（クエリパラメータ付きでも対応）
 app.get('/apply', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'apply.html')));
 
@@ -4010,6 +4153,8 @@ app.get('/api/admin/label-usage', requireAdmin, (_req, res) => {
     'これまでの合計': labelUsage.total,
     '残り': Math.max(0, MISTTRACK_TOTAL_CAP - labelUsage.total),
     'キャッシュ済みアドレス': labelCache.size,
+    '取引先分析キャッシュ': cpCache.size,
+    '取引先分析の回数': { '無料': MISTTRACK_CP_FREE, '有料': MISTTRACK_CP_PAID, '採用する最低割合': CP_MIN_PERCENT + '%' },
   });
 });
 
