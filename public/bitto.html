@@ -498,6 +498,7 @@ const setBubble = (row, html) => {
 
 /* ── 結果カードの組み立て ── */
 function nodeBadge(n){
+  if (n.isDeposit)                    return `<span class="badge b-known">🏧 入金用アドレス（推定）</span>`;
   if (n.isToken)                      return `<span class="badge b-via">🔁 スワップ／トークン${n.swapTo ? "（→" + esc(n.swapTo) + "）" : ""}</span>`;
   if (isBridgeLike(n))                return `<span class="badge b-via">経由（DEX/ブリッジ）</span>`;
   if (n.isExchange && n.label)        return `<span class="badge b-known">判明</span>`;

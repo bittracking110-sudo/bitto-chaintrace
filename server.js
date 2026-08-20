@@ -801,6 +801,25 @@ function inferExchangeByBehavior(node) {
   return null;
 }
 
+/* 入金用アドレスの推定。
+   条件＝次のノードが取引所で、自分は「取引回数が少なく残高をほぼ持たない」。
+   取引所のホットウォレット（取引回数が数万回）と取り違えないよう、
+   回数の少なさを条件に入れている。 */
+const DEPOSIT_MAX_TX = 50;
+function markDepositAddresses(path) {
+  for (let i = 1; i < path.length - 1; i++) {
+    const node = path[i], next = path[i + 1];
+    if (!node || !next || node.isExchange || node.isVia || node.isToken) continue;
+    if (!(next.isExchange && !next.isVia && !next.isToken)) continue;
+    if (node.txCount == null || node.txCount > DEPOSIT_MAX_TX) continue;
+    if (node.balance != null && node.balance > 0.01) continue;
+    node.isDeposit  = true;
+    node.depositFor = next.label || '';
+    if (!node.label) node.label = '取引所の入金用アドレス（推定）';
+    console.log(`[Deposit] 入金用アドレスと推定: ${node.address?.slice(0, 10)}... → ${next.label || '取引所'}`);
+  }
+}
+
 // ══ アドレス残高・TX件数取得 ══════════════════════════════════
 
 const priceCache = new Map(); // chain → { price, ts }
@@ -968,6 +987,8 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
       }
     }
   }
+
+  markDepositAddresses(path);
 
   /* 時間予算で打ち切ると、名前がいちばん要る最後のノード（着金先）だけ
      取り残される。そこだけ後から埋める。待ち時間は入れない。 */
@@ -2100,6 +2121,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       if (i === 0)           { cls = 'victim';   icon = '●'; roleLabel = '被害者ウォレット（起点）'; }
       else if (p.isToken) { cls = 'relay'; icon = '🔁'; roleLabel = `スワップ／トークンの通過点（${i}次先）${p.swapTo ? `：→ ${p.swapTo}` : ''}`; }
       else if (p.isVia)   { cls = 'relay'; icon = '🔀'; roleLabel = `経由（DEX・ブリッジ・両替）（${i}次先）`; }
+      else if (p.isDeposit) { cls = 'exchange'; icon = '🏧'; roleLabel = `取引所の入金用アドレス（推定）（${i}次先）${p.depositFor ? `：${p.depositFor} 宛` : ''}`; }
       else if (p.isExchange && p.inferred) { cls = 'exchange'; icon = '★'; roleLabel = `🏦 取引所候補（${i}次先・推定）`; }
       else if (p.isExchange) { cls = 'exchange'; icon = '★'; roleLabel = `🏦 取引所到達（${i}次先）`; }
       else if (p.role === 'internal') { cls = 'relay'; icon = '◆'; roleLabel = `内部コール（${i}次先）`; }
@@ -2260,6 +2282,9 @@ ${r.txid}
 
         <h3>📍 送金経路詳細</h3>
         <div class="flow-map">${flowNodes}</div>
+        ${(r.path || []).some(p => p.isDeposit) ? `<p class="flow-note">※ <strong>🏧 入金用アドレス</strong>＝取引所が利用者ごとに割り当てる受け取り専用のアドレスと推定されます
+        （受け取った資金をまとめて取引所のウォレットへ移す形が見られるため）。ここに着金している場合、
+        <strong>その取引所が口座名義人の情報を保有している可能性</strong>があります。ただし名義人が誰であるかを当社が特定することはできません。</p>` : ''}
         ${(r.path || []).some(p => p.isVia || p.isToken) ? `<p class="flow-note">※ <strong>🔀 経由</strong>＝DEX・ブリッジ・両替サービスです。資金の通り道であって着金先ではないため、
         凍結の要請先にはなりません。ブリッジを通っている場合、資金は<strong>別のチェーンへ移動している可能性</strong>があります。
         <strong>🔁 スワップ／トークン</strong>＝そこで別の通貨（USDT等）に交換された地点です。</p>` : ''}
