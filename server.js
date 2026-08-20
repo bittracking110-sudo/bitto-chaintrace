@@ -1304,12 +1304,33 @@ const isTronAddr = a => /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(String(a || ''));
 /* TronScanは取引の応答に取引所名を同梱してくる（addressTag）。
    追加の照会が要らないので、XRPにおけるXRPScanと同じ立ち位置で使える。
    MistTrackの回数を使わずに済むのが大きい。 */
+const TRON_TAGS_FILE = path.join(DATA_DIR, 'tron-tags.json');
 const tronTags = new Map();   // アドレス → 名前
+try {
+  const saved = JSON.parse(fs.readFileSync(TRON_TAGS_FILE, 'utf8'));
+  for (const [addr, name] of Object.entries(saved)) tronTags.set(addr, name);
+  console.log(`[TronTags] ${tronTags.size}件を読み込み`);
+} catch { /* 初回は無い */ }
+let tronTagsTimer = null;
+/* 取引ごとに何度も呼ばれるので、まとめて書く。 */
+function saveTronTags() {
+  if (tronTagsTimer) return;
+  tronTagsTimer = setTimeout(() => {
+    tronTagsTimer = null;
+    fsp.writeFile(TRON_TAGS_FILE, JSON.stringify(Object.fromEntries(tronTags), null, 2), 'utf8')
+      .catch(e => console.error('[TronTags] 保存失敗:', e.message));
+  }, 2000);
+}
 function rememberTronTags(tagObj) {
   if (!tagObj || typeof tagObj !== 'object') return;
+  let added = 0;
   for (const [addr, name] of Object.entries(tagObj)) {
-    if (typeof name === 'string' && name.trim()) tronTags.set(addr, name.trim());
+    if (typeof name !== 'string' || !name.trim()) continue;
+    if (tronTags.get(addr) === name.trim()) continue;
+    tronTags.set(addr, name.trim());
+    added++;
   }
+  if (added) { console.log(`[TronTags] ${added}件を追加（計${tronTags.size}件）`); saveTronTags(); }
 }
 
 /* TronScanの取引明細。TRC20送金と通常のTRX送金の両方をここで解く。 */
@@ -2612,7 +2633,7 @@ function serviceNote(label) {
 // ══ 有料HTMLレポート生成 ══════════════════════════════════════
 
 function generateReportHTML(results, customerName, issuedAt, aiData = {}, reportUrl = '', brand = 'bitto', hearingUrl = '') {
-  const chainFull = { BTC: 'Bitcoin', ETH: 'Ethereum', XRP: 'XRP Ledger' };
+  const chainFull = { BTC: 'Bitcoin', ETH: 'Ethereum', XRP: 'XRP Ledger', TRON: 'TRON（TRC20）' };
 
   // ── ブランド出し分け（未指定はBitTo＝従来どおり） ──
   const BRANDS = {
@@ -3648,7 +3669,7 @@ async function handleLineEvent(event) {
       session.chain = chain;
       session.state = 'investigating';
 
-      const chainName = { btc: 'Bitcoin', eth: 'Ethereum', xrp: 'XRP Ledger' }[chain];
+      const chainName = { btc: 'Bitcoin', eth: 'Ethereum', xrp: 'XRP Ledger', tron: 'TRON（TRC20）' }[chain];
       const txShort   = text.slice(0, 10) + '...' + text.slice(-6);
       const cached    = txidCache.get(text.toLowerCase());
       const waitMsg   = cached
@@ -3707,7 +3728,7 @@ async function handleLineEvent(event) {
       session.txid  = text;
       session.chain = chain;
       session.state = 'investigating';
-      const chainName = { btc: 'Bitcoin', eth: 'Ethereum', xrp: 'XRP Ledger' }[chain];
+      const chainName = { btc: 'Bitcoin', eth: 'Ethereum', xrp: 'XRP Ledger', tron: 'TRON（TRC20）' }[chain];
       const txShort   = text.slice(0, 10) + '...' + text.slice(-6);
       const cached    = txidCache.get(text.toLowerCase());
       const waitMsg   = cached
@@ -4542,6 +4563,7 @@ app.get('/api/admin/label-usage', requireAdmin, (_req, res) => {
     '残り': Math.max(0, MISTTRACK_TOTAL_CAP - labelUsage.total),
     'キャッシュ済みアドレス': labelCache.size,
     '取引先分析キャッシュ': cpCache.size,
+    'TRONで覚えた取引所名': tronTags.size,
     '取引先分析の回数': { '無料': MISTTRACK_CP_FREE, '有料': MISTTRACK_CP_PAID, '採用する最低割合': CP_MIN_PERCENT + '%' },
   });
 });
