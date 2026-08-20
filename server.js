@@ -696,6 +696,9 @@ const MISTTRACK_FREE_LOOKUPS = Number(process.env.MISTTRACK_FREE_LOOKUPS ?? 1); 
 const MISTTRACK_DAILY_CAP    = Number(process.env.MISTTRACK_DAILY_CAP ?? 8);      // 1日の上限
 const MISTTRACK_MONTH_CAP    = Number(process.env.MISTTRACK_MONTH_CAP ?? 15);     // 1か月の上限
 const MISTTRACK_TOTAL_CAP    = Number(process.env.MISTTRACK_TOTAL_CAP ?? 100);    // 購入した総回数（使い切ったら止まる）
+/* 有料の報告書のために取っておく回数。無料の追跡はここに手を付けない。
+   代金をいただいた調査で「名前が引けませんでした」となるのが最悪のため。 */
+const MISTTRACK_PAID_RESERVE = Number(process.env.MISTTRACK_PAID_RESERVE ?? 30);
 
 /* 使った回数の記録。前払い分を守るのが目的なので、
    再デプロイで0に戻らないようファイルに残す（報告書と同じ永続ボリューム）。 */
@@ -728,6 +731,11 @@ function labelQuotaOk(paid = false) {
   }
   // 日次・月次は無料利用の暴走止め。代金をいただいた報告書は対象外にする
   if (paid) return true;
+  // 無料は、有料のために取っておく分には手を付けない
+  if (labelUsage.total >= MISTTRACK_TOTAL_CAP - MISTTRACK_PAID_RESERVE) {
+    console.warn(`[LabelAPI] 残り${MISTTRACK_TOTAL_CAP - labelUsage.total}回は有料調査用に確保します（無料分は停止）`);
+    return false;
+  }
   if (labelUsage.monthCount >= MISTTRACK_MONTH_CAP) { console.warn('[LabelAPI] 今月の上限に達しました（無料分）'); return false; }
   if (labelUsage.count >= MISTTRACK_DAILY_CAP)      { console.warn('[LabelAPI] 本日の上限に達しました（無料分）'); return false; }
   return true;
@@ -4561,6 +4569,8 @@ app.get('/api/admin/label-usage', requireAdmin, (_req, res) => {
     '今月': labelUsage.month === m ? labelUsage.monthCount : 0,
     'これまでの合計': labelUsage.total,
     '残り': Math.max(0, MISTTRACK_TOTAL_CAP - labelUsage.total),
+    '無料が使える残り': Math.max(0, MISTTRACK_TOTAL_CAP - MISTTRACK_PAID_RESERVE - labelUsage.total),
+    '有料のために確保': MISTTRACK_PAID_RESERVE,
     'キャッシュ済みアドレス': labelCache.size,
     '取引先分析キャッシュ': cpCache.size,
     'TRONで覚えた取引所名': tronTags.size,
