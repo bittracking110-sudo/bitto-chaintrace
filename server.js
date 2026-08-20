@@ -693,7 +693,7 @@ const MISTTRACK_KEY  = process.env.MISTTRACK_API_KEY || '';
 const MISTTRACK_BASE = process.env.MISTTRACK_BASE_URL || 'https://openapi.misttrack.io/v1';
 const MISTTRACK_PAID_LOOKUPS = Number(process.env.MISTTRACK_PAID_LOOKUPS ?? 3);   // 有料レポート1件あたり
 const MISTTRACK_FREE_LOOKUPS = Number(process.env.MISTTRACK_FREE_LOOKUPS ?? 1);   // 無料の追跡1件あたり（0で無料は呼ばない）
-const MISTTRACK_DAILY_CAP    = Number(process.env.MISTTRACK_DAILY_CAP ?? 8);      // 1日の上限
+const MISTTRACK_DAILY_CAP    = Number(process.env.MISTTRACK_DAILY_CAP ?? 5);      // 1日の上限（無料）
 const MISTTRACK_MONTH_CAP    = Number(process.env.MISTTRACK_MONTH_CAP ?? 15);     // 1か月の上限
 const MISTTRACK_TOTAL_CAP    = Number(process.env.MISTTRACK_TOTAL_CAP ?? 100);    // 購入した総回数（使い切ったら止まる）
 /* 有料の報告書のために取っておく回数。無料の追跡はここに手を付けない。

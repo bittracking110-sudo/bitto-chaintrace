@@ -210,6 +210,13 @@
       <p>TXID を入力してレポートを生成（LINE・決済不要）</p>
     </div>
 
+    <!-- 取引所名の照会回数。買った分を使い切ると名前が付かなくなるので、
+         レポートを作る前に目に入る位置に置く。 -->
+    <div class="card" id="usageCard" style="display:none">
+      <h2>🏦 取引所名の照会（MistTrack）</h2>
+      <div id="usageBody"></div>
+    </div>
+
     <!-- お客様名 -->
     <div class="card">
       <h2>👤 お客様情報</h2>
@@ -396,6 +403,36 @@
 
     // 初期化：最初の1行を追加
     addRow();
-  </script>
+  
+/* 残りの照会回数。少なくなったら赤で警告する。 */
+(async () => {
+  try {
+    const r = await fetch('/api/admin/label-usage');
+    if (!r.ok) return;
+    const u = await r.json();
+    const 残り     = u['残り'] ?? 0;
+    const 無料残り = u['無料が使える残り'] ?? 0;
+    const 総数     = u['設定'] && u['設定']['購入した総回数'] || 0;
+    const 危険     = 残り <= 10;
+    const 色 = 危険 ? '#F87171' : (残り <= 30 ? '#FBBF24' : '#34E1C8');
+    document.getElementById('usageBody').innerHTML =
+      '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:baseline;margin-bottom:10px">' +
+      '<div><span style="font-size:26px;font-weight:700;color:' + 色 + '">' + 残り + '</span>' +
+      '<span style="opacity:.6"> / ' + 総数 + ' 回</span></div>' +
+      '<div style="font-size:13px;opacity:.75">有料レポート換算 約' + Math.floor(残り / 4) + '件分</div></div>' +
+      '<div style="font-size:13px;line-height:1.9;opacity:.85">' +
+      '無料の追跡が使える残り：<b>' + 無料残り + '回</b>' +
+      (無料残り === 0 ? '（停止中。残りは有料レポート用に確保しています）' : '') + '<br>' +
+      '本日 ' + (u['本日'] ?? 0) + '回 ／ 今月 ' + (u['今月'] ?? 0) + '回 ／ これまで ' + (u['これまでの合計'] ?? 0) + '回<br>' +
+      '自前で覚えた名前：TRON ' + (u['TRONで覚えた取引所名'] ?? 0) + '件 ／ 照会済み ' + (u['キャッシュ済みアドレス'] ?? 0) + '件' +
+      '</div>' +
+      (危険 ? '<div style="margin-top:12px;padding:10px 12px;border:1px solid #F87171;border-radius:8px;font-size:13px;line-height:1.8;color:#F87171">' +
+        '残りがわずかです。使い切ると取引所名が付かなくなります（追跡そのものは続きます）。' +
+        'MistTrackの回数を買い増すか、しばらく自前のラベルだけで運用してください。</div>' : '');
+    document.getElementById('usageCard').style.display = '';
+  } catch (e) { /* 出せなくても本来の作業は続けられる */ }
+})();
+
+</script>
 </body>
 </html>
