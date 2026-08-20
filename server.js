@@ -1055,6 +1055,17 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   markDepositAddresses(path);
   truncateAfterVia(path);
 
+  /* 打ち切った地点から先を、参考として3件だけ添える。
+     何も見えないまま終わるより、状況を判断する材料にはなる。
+     確定ではないことは報告書側で明示する。 */
+  const stopNode = (path || []).find(p => p.traceStop);
+  if (stopNode && chain === 'eth' && stopNode.address) {
+    stopNode.nextCandidates = await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 3);
+    if (stopNode.nextCandidates.length) {
+      console.log(`[Candidates] 参考の送金先 ${stopNode.nextCandidates.length}件を添付`);
+    }
+  }
+
   /* 時間予算で打ち切ると、名前がいちばん要る最後のノード（着金先）だけ
      取り残される。そこだけ後から埋める。待ち時間は入れない。 */
   const last = path[path.length - 1];
@@ -1371,6 +1382,41 @@ async function getSwapOutputETH(routerAddr, txHash, prevAddr) {
   } catch (e) {
     console.error('[SwapOut] 取得失敗:', e.message);
     return null;
+  }
+}
+
+/* 打ち切り地点から出ていった送金を、入金時刻に近い順で数件拾う。
+   確定情報ではないため「参考」としてのみ使う。ラベルAPIは呼ばない（消費しない）。 */
+async function listNextCandidatesETH(addr, afterTime, limit = 3) {
+  try {
+    const refSec = Math.floor(new Date(normalizeTimeStr(afterTime)).getTime() / 1000);
+    if (!refSec) return [];
+    // 1回の照会で済ませる（打ち切り地点は取引が非常に多く、1件ずつ引くと時間切れになる）
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}`
+      + `&startblock=0&endblock=latest&page=1&offset=100&sort=desc&apikey=${ETHERSCAN_KEY}`;
+    const j = await apiJson(url);
+    const txs = Array.isArray(j.result) ? j.result : [];
+    const out = [];
+    for (const t of txs) {
+      const sec = parseInt(t.timeStamp);
+      if (!(sec >= refSec)) continue;                                   // 入金より前は対象外
+      if (String(t.from).toLowerCase() !== String(addr).toLowerCase()) continue;  // 出ていく送金だけ
+      if (!t.to) continue;
+      const db = getLabel(t.to);
+      out.push({
+        address: t.to,
+        label: db.label || '',
+        amount: parseFloat(t.value || '0') / 1e18,
+        time: new Date(sec * 1000).toISOString(),
+        txHash: t.hash,
+        gapMin: Math.round((sec - refSec) / 60),
+      });
+    }
+    out.sort((a, b) => a.gapMin - b.gapMin);                            // 入金日時に近い順
+    return out.slice(0, limit);
+  } catch (e) {
+    console.error('[Candidates] 取得失敗:', e.message);
+    return [];
   }
 }
 
@@ -2433,6 +2479,28 @@ ${r.txid}
         ・この地点の取引を個別に精査する追加調査（同一取引内での資金の出口を特定する作業）<br>
         ・資金が別のチェーンへ移動している場合は、移動先のチェーンでの調査<br>
         なお、ここまでの経路（この地点に資金が入ったこと）は、ブロックチェーン上の記録として確認できています。</p>` : ''}
+        ${(() => {
+          const sn = (r.path || []).find(p => p.traceStop && (p.nextCandidates || []).length);
+          if (!sn) return '';
+          return `<div class="ref-box">
+            <div class="ref-h">参考情報（未確定）：この地点から出ていった送金</div>
+            <p class="ref-p">下記は、上記の地点に資金が入った<strong>日時に最も近い送金を3件</strong>拾ったものです。
+            多数の利用者の資金が集まる地点であるため、<strong>これらがご依頼の資金である保証はありません</strong>。
+            状況を判断する材料としてのみご覧ください。</p>
+            <table class="info-table">
+              <tr><th style="width:4em">日時差</th><th>送金先</th><th style="width:8em">数量</th></tr>
+              ${sn.nextCandidates.map(c => `<tr>
+                <td>+${c.gapMin}分</td>
+                <td><span class="mono">${escHtml(c.address)}</span>${c.label ? `<br><b>${escHtml(c.label)}</b>` : ''}</td>
+                <td>${c.amount ? c.amount.toFixed(6) : '—'} ${escHtml(r.chain)}</td></tr>`).join('')}
+            </table>
+            <p class="ref-warn"><strong>法執行機関・取引所へご相談の際のお願い</strong><br>
+            この欄は<strong>確定した到達先ではありません</strong>。凍結の要請や被害届で「資金の到達先」として
+            提示すると、<strong>無関係な方の口座を対象にしてしまう恐れ</strong>があります。
+            ご相談の際は、この部分が未確定であることを十分にご理解のうえ、
+            必要に応じて「参考情報」として区別してお伝えください。</p>
+          </div>`;
+        })()}
         ${(r.path || []).some(p => p.isDeposit) ? `<p class="flow-note">※ <strong>🏧 入金用アドレス</strong>＝取引所が利用者ごとに割り当てる受け取り専用のアドレスと推定されます
         （受け取った資金をまとめて取引所のウォレットへ移す形が見られるため）。ここに着金している場合、
         <strong>その取引所が口座名義人の情報を保有している可能性</strong>があります。ただし名義人が誰であるかを当社が特定することはできません。</p>` : ''}
@@ -2514,6 +2582,12 @@ ${r.txid}
     .flow-arrow{font-size:1.4rem;color:var(--r-ink2);margin:4px 0;line-height:1}
     .no-ex{color:var(--r-ink2);font-size:0.85rem;padding:10px}
     .note-box{background:var(--r-softbg);border:1px solid var(--r-border);border-radius:8px;padding:12px 14px;font-size:0.85rem;line-height:1.8;color:var(--r-ink2)}
+    .ref-box{border:1px dashed var(--r-border);border-radius:8px;padding:14px;margin:14px 0;background:var(--r-softbg)}
+    .ref-h{font-size:0.9rem;font-weight:700;color:var(--r-ink);margin-bottom:8px}
+    .ref-p{font-size:0.82rem;color:var(--r-ink2);line-height:1.8;margin-bottom:10px}
+    .ref-warn{font-size:0.8rem;line-height:1.8;margin-top:10px;padding:10px 12px;border-radius:6px;
+      background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.45);color:var(--r-ink2)}
+    .ref-warn strong{color:#F87171}
     .note-box strong{color:var(--r-ink)}
     .flow-note{color:var(--r-ink2);font-size:0.78rem;line-height:1.7;margin-top:10px}
     /* 要請テンプレート */
