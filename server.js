@@ -2503,8 +2503,15 @@ ${r.txid}
         ・資金が別のチェーンへ移動している場合は、移動先のチェーンでの調査<br>
         なお、ここまでの経路（この地点に資金が入ったこと）は、ブロックチェーン上の記録として確認できています。</p>` : ''}
         ${(() => {
-          const sn = (r.path || []).find(p => p.traceStop && (p.nextCandidates || []).length);
+          const sn = (r.path || []).find(p => p.traceStop && p.candidatesChecked);
           if (!sn) return '';
+          if (!(sn.nextCandidates || []).length) {
+            return `<div class="ref-box"><div class="ref-h">参考情報（未確定）：この先の追跡</div>
+              <p class="ref-p">上記の地点から出ていった送金のうち、資金が入った日時に最も近い
+              <strong>${sn.candidatesChecked}件</strong>について、さらに追跡を行いました。
+              <strong>いずれも取引所には到達しませんでした</strong>（当社が追跡できた範囲内での結果です）。
+              これらの送金がご依頼の資金である保証はないため、到達先としての記載は行いません。</p></div>`;
+          }
           return `<div class="ref-box">
             <div class="ref-h">参考情報（未確定）：この先で取引所に着いた送金</div>
             <p class="ref-p">上記の地点に資金が入った<strong>日時に最も近い送金3件</strong>をさらに追跡し、
