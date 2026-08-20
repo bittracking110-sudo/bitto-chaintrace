@@ -647,7 +647,20 @@ function getLabel(addr) {
    同じアドレスを二度引かないため。名前が無かった場合も空で残す。 */
 const MISTTRACK_KEY  = process.env.MISTTRACK_API_KEY || '';
 const MISTTRACK_BASE = process.env.MISTTRACK_BASE_URL || 'https://openapi.misttrack.io/v1';
-const MISTTRACK_MAX_LOOKUPS = 3;
+const MISTTRACK_PAID_LOOKUPS = Number(process.env.MISTTRACK_PAID_LOOKUPS ?? 3);   // 有料レポート1件あたり
+const MISTTRACK_FREE_LOOKUPS = Number(process.env.MISTTRACK_FREE_LOOKUPS ?? 1);   // 無料の追跡1件あたり（0で無料は呼ばない）
+const MISTTRACK_DAILY_CAP    = Number(process.env.MISTTRACK_DAILY_CAP ?? 60);     // 1日の合計上限（残高を守る最後の砦）
+
+/* 使った回数の記録。日付が変われば0に戻す。
+   再起動で消えるが、上限は「暴走を止める」ためのものなので許容する。 */
+let labelUsage = { day: '', count: 0, total: 0 };
+function labelDayKey() { return new Date().toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' }); }
+function labelQuotaOk() {
+  const d = labelDayKey();
+  if (labelUsage.day !== d) labelUsage = { day: d, count: 0, total: labelUsage.total };
+  return labelUsage.count < MISTTRACK_DAILY_CAP;
+}
+function labelQuotaUse() { labelUsage.count++; labelUsage.total++; }
 const MISTTRACK_COIN = { btc: 'BTC', eth: 'ETH', xrp: 'XRP' };
 const LABEL_CACHE_FILE = path.join(DATA_DIR, 'label-cache.json');
 const labelCache = new Map();   // 小文字アドレス → 名前（''＝引いたが名前なし）
@@ -848,14 +861,21 @@ async function getAddressInfo(addr, chain) {
   return null;
 }
 
-async function enrichPathWithAddressInfo(path, chain) {
+async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   let exchangeCount = 0;                 // 判明＋推定を合わせた取引所ノード数
   let apiLookups    = 0;                 // 外部ラベルAPIを引いた回数（1調査あたりの上限あり）
+  // 有料レポートは名前がそのまま凍結要請の宛先になるので多めに引く
+  const lookupBudget = opts.paid ? MISTTRACK_PAID_LOOKUPS : MISTTRACK_FREE_LOOKUPS;
   const deadline = Date.now() + ENRICH_BUDGET_MS;  // 巨大コントラクト混在でも全体を止めない
+  let truncatedAt = -1;                            // 途中で打ち切った位置（-1＝最後まで回った）
   for (let idx = 0; idx < path.length; idx++) {
     const node = path[idx];
     if (!node.address) continue;
-    if (Date.now() > deadline) { console.log(`[enrich] 時間予算に達したため残りノードの情報付与を省略（index ${idx}）`); break; }
+    if (Date.now() > deadline) {
+      console.log(`[enrich] 時間予算に達したため残りノードの情報付与を省略（index ${idx}）`);
+      truncatedAt = idx;
+      break;
+    }
     await new Promise(res => setTimeout(res, 250)); // レート制限対策
     const info = await getAddressInfo(node.address, chain);
     if (info) {
@@ -876,8 +896,8 @@ async function enrichPathWithAddressInfo(path, chain) {
     if (!node.label && MISTTRACK_KEY
         && (idx === path.length - 1 || inferExchangeByBehavior(node))) {
       const known = labelCache.has(node.address.toLowerCase());
-      if (known || apiLookups < MISTTRACK_MAX_LOOKUPS) {
-        if (!known) apiLookups++;
+      if (known || (apiLookups < lookupBudget && labelQuotaOk())) {
+        if (!known) { apiLookups++; labelQuotaUse(); }
         const api = await lookupLabelAPI(node.address, chain);
         if (api.name) {
           node.label = api.name;
@@ -912,6 +932,42 @@ async function enrichPathWithAddressInfo(path, chain) {
         break;
       }
     }
+  }
+
+  /* 時間予算で打ち切ると、名前がいちばん要る最後のノード（着金先）だけ
+     取り残される。そこだけ後から埋める。待ち時間は入れない。 */
+  const last = path[path.length - 1];
+  if (truncatedAt >= 0 && last && last.address && !last.label) {
+    try {
+      const info = await getAddressInfo(last.address, chain);
+      if (info) {
+        last.balance = info.balance; last.txCount = info.txCount; last.balanceUSD = info.balanceUSD;
+        if (info.bcLabel && !last.label) {
+          last.label = info.bcLabel;
+          if (isExchange(info.bcLabel)) last.isExchange = true;
+        }
+      }
+      if (!last.label && MISTTRACK_KEY) {
+        const known = labelCache.has(last.address.toLowerCase());
+        if (known || (apiLookups < lookupBudget && labelQuotaOk())) {
+          if (!known) { apiLookups++; labelQuotaUse(); }
+          const api = await lookupLabelAPI(last.address, chain);
+          if (api.name) {
+            last.label = api.name;
+            last.labelType = api.type || undefined;
+            if (api.type === "exchange") last.isExchange = true;
+            else if (api.type === "defi" || api.type === "mixer") { last.isVia = true; last.isExchange = false; }
+            else if (!api.type && isExchange(api.name)) last.isExchange = true;
+            if (api.type === "mixer") last.isMixer = true;
+          }
+        }
+      }
+      if (!last.label && !last.isExchange) {
+        const inferred = inferExchangeByBehavior(last);
+        if (inferred) { last.label = inferred; last.isExchange = true; last.inferred = true; }
+      }
+      console.log("[enrich] 打ち切り後、最後のノードだけ補完しました");
+    } catch (e) { console.error("[enrich] 最後のノードの補完に失敗:", e.message); }
   }
 }
 
@@ -1366,7 +1422,7 @@ async function investigateXRP(txid) {
     recipient: tx.Destination, destTag: tx.DestinationTag, path, exchanges };
 }
 
-async function investigate(txid, chain) {
+async function investigate(txid, chain, opts = {}) {
   let result;
   if (chain === 'btc') result = await investigateBTC(txid);
   else if (chain === 'eth') result = await investigateETH(txid);
@@ -1374,7 +1430,7 @@ async function investigate(txid, chain) {
   else throw new Error('未対応チェーン');
 
   // 各アドレスノードに残高・TX件数を付加
-  await enrichPathWithAddressInfo(result.path, chain);
+  await enrichPathWithAddressInfo(result.path, chain, opts);
   return result;
 }
 
@@ -3181,7 +3237,7 @@ app.post('/api/admin/generate-report', requireAdmin, express.json(), async (req,
         const cacheKey = txid.toLowerCase();
         let result = txidCache.get(cacheKey)?.result;
         if (!result) {
-          result = await investigate(txid, chain);
+          result = await investigate(txid, chain, { paid: true });
           txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
         }
         list.push({ txid, chain, result });
@@ -3485,6 +3541,21 @@ app.post('/api/hearing/submit', express.json(), async (req, res) => {
   saveHearings();
 });
 
+/* ラベルAPIの使用状況。前払いの残りを見積もるために使う。 */
+app.get('/api/admin/label-usage', requireAdmin, (_req, res) => {
+  res.json({
+    設定: {
+      '有料1件あたり': MISTTRACK_PAID_LOOKUPS,
+      '無料1件あたり': MISTTRACK_FREE_LOOKUPS,
+      '1日の上限': MISTTRACK_DAILY_CAP,
+      キー: MISTTRACK_KEY ? '設定済み' : '未設定',
+    },
+    '本日の照会回数': labelUsage.day === labelDayKey() ? labelUsage.count : 0,
+    '起動してからの合計': labelUsage.total,
+    'キャッシュ済みアドレス': labelCache.size,
+  });
+});
+
 /* すでにあるタブを整形し直す。見出しを変えたときや、手で触って崩れたときに戻す。 */
 app.get('/api/admin/hearing-format', requireAdmin, async (_req, res) => {
   const sheets = getSheets();
@@ -3628,7 +3699,7 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
           const cacheKey = item.txid.toLowerCase();
           let result = txidCache.get(cacheKey)?.result;
           if (!result) {
-            result = await investigate(item.txid, item.chain);
+            result = await investigate(item.txid, item.chain, { paid: true });
             txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
           }
           list.push({ txid: item.txid, chain: item.chain, result });
@@ -3901,7 +3972,7 @@ async function fulfillConnectionOrder({ txid, customerName, email, count = 1 }) 
   const cacheKey = txid.toLowerCase();
   let result = txidCache.get(cacheKey)?.result;
   if (!result) {
-    result = await investigate(txid, chain);
+    result = await investigate(txid, chain, { paid: true });
     txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
   }
 
