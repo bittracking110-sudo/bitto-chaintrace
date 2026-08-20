@@ -865,6 +865,9 @@ const NAVI_ONLY = new URLSearchParams(location.search).get('only') === 'navi';
 if (NAVI_ONLY) {
   document.documentElement.classList.add('navi-only');
   showTab('navi');
+  // アプリのメニューから直接呼ばれた場合は、その機能まで進める
+  if (location.hash === '#shield') setTimeout(openShield, 60);
+  if (location.hash === '#pack')   setTimeout(openInitialPack, 60);
   const back = document.querySelector('#view-navi .navback');
   if (back) {
     back.textContent = '🔎 TXIDで調査する（BitTo）';

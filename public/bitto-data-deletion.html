@@ -64,6 +64,7 @@ li::before{content:'▸';color:var(--teal);position:absolute;left:0}
   <table class="tbl">
     <tr><th>お申込み情報</th><td>お名前、メールアドレス、電話番号</td></tr>
     <tr><td style="color:var(--teal)">連携・注文情報</td><td>LINEの連携情報、ご依頼のトランザクションID（TXID）、注文履歴、調査報告書、チャットの内容</td></tr>
+    <tr><td style="color:var(--teal)">AI相談の記録</td><td>AIチャットでのご質問と回答。お名前やメールアドレスとは結びつけず、<b>端末ごとの番号</b>のみで管理しているため、削除には下記フォームの「この端末の番号」が必要です。</td></tr>
   </table>
   <p style="font-size:13px;color:var(--sub)">※ クレジットカード情報は決済代行会社（Stripe）が管理しており、当社は保持していません。ブロックチェーン上の公開取引データそのものは、当社が削除できる対象ではありません。</p>
 
@@ -77,6 +78,12 @@ li::before{content:'▸';color:var(--teal);position:absolute;left:0}
     <input type="email" id="demail" placeholder="you@example.com" autocomplete="email">
     <label for="ddetail">対象の注文情報・TXIDなど（任意）</label>
     <textarea id="ddetail" placeholder="お申込み時の情報や、削除をご希望の内容があればご記入ください（任意）"></textarea>
+
+    <label for="ddevice">この端末の番号（AI相談の記録を削除する場合）</label>
+    <input type="text" id="ddevice" placeholder="自動で入力されます">
+    <p class="hint">AI相談の記録には、お名前もメールアドレスも保存していません。端末ごとの番号だけで管理しているため、
+    削除にはこの番号が必要です。上の欄は、この画面を開いた端末の番号を自動で入れています。<br>
+    <b>アプリからお越しの場合</b>は番号が異なります。アプリの「メニュー → この端末の番号」でご確認のうえ、貼り付けてください。</p>
     <p class="hint">送信後、本人確認のためご登録のメールアドレス宛にご連絡する場合があります。</p>
     <button class="btn" id="dsubmit" onclick="submitDeletion()">削除を請求する</button>
     <div class="msg" id="dmsg"></div>
@@ -107,6 +114,13 @@ li::before{content:'▸';color:var(--teal);position:absolute;left:0}
   <p class="footlink">Himesen株式会社</p>
 </div>
 <script>
+/* この画面を開いた端末の番号。AI相談の記録と同じ規則で作る（chat側と同一キー）。 */
+(function(){
+  try{
+    let d = localStorage.getItem('bitto_device_v1');
+    if (d) { const el = document.getElementById('ddevice'); if (el) el.value = d; }
+  }catch(e){}
+})();
 async function submitDeletion(){
   var name=document.getElementById('dname').value.trim();
   var email=document.getElementById('demail').value.trim();
@@ -118,7 +132,7 @@ async function submitDeletion(){
   if(!email || email.indexOf('@')<1){ msg.className='msg err'; msg.textContent='ご登録のメールアドレスをご入力ください。'; return; }
   btn.disabled=true; btn.textContent='送信中…';
   try{
-    var r=await fetch('/api/data-deletion-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,email:email,detail:detail,brand:'bitto'})});
+    var r=await fetch('/api/data-deletion-request',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({name:name,email:email,detail:detail,brand:'bitto', device: (document.getElementById('ddevice')||{}).value || '' })});
     var j=await r.json();
     if(!r.ok) throw new Error(j.error||'送信に失敗しました');
     msg.className='msg ok';

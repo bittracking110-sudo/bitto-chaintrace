@@ -4584,6 +4584,8 @@ app.post('/api/data-deletion-request', express.json(), async (req, res) => {
     const detail = esc((req.body.detail || '').toString().trim().slice(0, 1000));
     if (!name)  return res.status(400).json({ error: 'お名前が未入力です' });
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'メールアドレスの形式が正しくありません' });
+    // AI相談の記録は端末ごとの番号でしか消せないため、請求時に受け取る
+    const device = esc((req.body.device || '').toString().trim().slice(0, 40));
     const brand = req.body.brand === 'bitto' ? 'BitTo' : 'Connection';
     const at = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
     const CONTACT = 'himesen.inc2512@gmail.com';
@@ -4595,6 +4597,7 @@ app.post('/api/data-deletion-request', express.json(), async (req, res) => {
          <tr><td style="padding:4px 10px;color:#64748b">お名前</td><td style="padding:4px 10px">${name}</td></tr>
          <tr><td style="padding:4px 10px;color:#64748b">メール</td><td style="padding:4px 10px">${esc(email)}</td></tr>
          <tr><td style="padding:4px 10px;color:#64748b;vertical-align:top">詳細</td><td style="padding:4px 10px;white-space:pre-wrap">${detail || '（記載なし）'}</td></tr>
+         <tr><td style="padding:4px 10px;color:#64748b">端末の番号</td><td style="padding:4px 10px">${device || '（記載なし）'}</td></tr>
        </table>`,
       brand
     ).catch(e => console.error('[DataDeletion] 運営通知失敗:', e.message));
