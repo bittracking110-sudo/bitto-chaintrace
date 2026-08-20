@@ -986,7 +986,10 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
     /* 着金先の名前が最優先。回数を手前のノードで使い切ると、肝心の
        到達先が名無しのまま終わる（実際にそうなった）。最後の1回は着金先に残す。 */
     const isLastNode = idx === path.length - 1;
-    if (!node.label && MISTTRACK_KEY
+    /* 送金元（起点）は照会しない。被害者自身が使った取引所であり、
+       本人に聞けば分かる。有料の回数はその先に使う。 */
+    const isSender = idx === 0 || node.role === 'sender';
+    if (!node.label && MISTTRACK_KEY && !isSender
         && (isLastNode || inferExchangeByBehavior(node))) {
       const known = labelCache.has(node.address.toLowerCase());
       const budgetOk = isLastNode ? apiLookups < lookupBudget : apiLookups < lookupBudget - 1;
