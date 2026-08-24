@@ -838,6 +838,102 @@ async function lookupProfileAPI(addr, chain) {
   }
 }
 
+/* AMLリスクスコア。そのアドレスが不正な資金とどれだけ近いかを 3〜100 で返す。
+   素性（address_trace）が「報告されているか」を見るのに対し、こちらは
+   制裁対象・窃取・ミキサーとの距離を、ホップ数と割合つきで返す。
+   有料レポートでのみ引く（費用を売上にひもづける）。無料調査は従来どおり
+   「匿名化・スワップ経由」「ブリッジ・DEX経由」の検出だけ。
+   ※ このエンドポイントだけ v3。MISTTRACK_BASE は v1 なので差し替える。 */
+const MISTTRACK_RISK_FREE = Number(process.env.MISTTRACK_RISK_FREE ?? 0);
+const MISTTRACK_RISK_PAID = Number(process.env.MISTTRACK_RISK_PAID ?? 1);
+const RISK_CACHE_FILE = path.join(DATA_DIR, 'risk-cache.json');
+const riskCache = new Map();   // 小文字アドレス → 整形済みリスク（null＝引いたが何も無し）
+try {
+  const saved = JSON.parse(fs.readFileSync(RISK_CACHE_FILE, 'utf8'));
+  for (const [addr, r] of Object.entries(saved)) riskCache.set(addr, r);
+  console.log(`[Risk] キャッシュ ${riskCache.size}件を読み込み`);
+} catch { /* 初回は無い */ }
+function saveRiskCache() {
+  fsp.writeFile(RISK_CACHE_FILE, JSON.stringify(Object.fromEntries(riskCache), null, 2), 'utf8')
+    .catch(e => console.error('[Risk] キャッシュ保存失敗:', e.message));
+}
+function riskApiUrl(addr, chain) {
+  const coin = MISTTRACK_COIN[chain] || String(chain).toUpperCase();
+  const base = MISTTRACK_BASE.replace(/\/v\d+$/, '/v3');
+  return `${base}/risk_score?coin=${coin}&address=${encodeURIComponent(addr)}&api_key=${MISTTRACK_KEY}`;
+}
+/* 被害に遭われた方が読む文章になる。英語のまま出さない。
+   知らない値が増えたときは原文のまま通す（黙って消すと気づけない）。 */
+const RISK_LEVEL_JA = { Low: '低い', Moderate: '中程度', High: '高い', Severe: '非常に高い' };
+const RISK_DETAIL_JA = {
+  'Malicious Address':                          '悪質なアドレスとして登録されています',
+  'Suspected Malicious Address':                '悪質なアドレスの疑いがあります',
+  'High-risk Tag Address':                      '高リスクのタグが付いています',
+  'Medium-risk Tag Address':                    '中リスクのタグが付いています',
+  'Mixer':                                      '匿名化サービス（ミキサー）です',
+  'Sanctioned Entity':                          '制裁対象として指定された事業者です',
+  'Risk Exchange':                              'リスクのある取引所です',
+  'Gambling':                                   'ギャンブル関連です',
+  'Involved Theft Activity':                    '窃取（ハッキング・不正送金）に関与しています',
+  'Involved Ransom Activity':                   '恐喝・ランサムウェアに関与しています',
+  'Involved Phishing Activity':                 'フィッシングに関与しています',
+  'Involved Illicit Activity':                  '不正な活動に関与しています',
+  'Interact With Malicious Address':            '悪質なアドレスとやり取りがあります',
+  'Interact With Suspected Malicious Address':  '悪質な疑いのあるアドレスとやり取りがあります',
+  'Interact With High-risk Tag Address':        '高リスクのアドレスとやり取りがあります',
+  'Interact With Medium-risk Tag Addresses':    '中リスクのアドレスとやり取りがあります',
+};
+const RISK_TYPE_JA = {
+  sanctioned_entity: '制裁対象', illicit_activity: '不正な活動', mixer: '匿名化サービス',
+  gambling: 'ギャンブル', risk_exchange: 'リスクのある取引所', bridge: 'ブリッジ',
+};
+/* 応答は data の下に score / risk_level / detail_list / risk_detail / hacking_event。
+   risk_report_url も返るがアクセストークン付きなので保存も表示もしない。 */
+function pickRiskFromResponse(j) {
+  const d = (j && j.data) || {};
+  const score = Number(d.score);
+  if (!Number.isFinite(score)) return null;
+  const details = (Array.isArray(d.detail_list) ? d.detail_list : [])
+    .filter(v => typeof v === 'string' && v.trim())
+    .map(v => RISK_DETAIL_JA[v] || v);
+  /* 割合の大きい順に3件。全部載せると読み手が要点を掴めない。 */
+  const exposures = (Array.isArray(d.risk_detail) ? d.risk_detail : [])
+    .filter(x => x && typeof x.entity === 'string' && x.entity.trim())
+    .sort((a, b) => (Number(b.percent) || 0) - (Number(a.percent) || 0))
+    .slice(0, 3)
+    .map(x => ({
+      相手:   x.entity.trim(),
+      種別:   RISK_TYPE_JA[x.risk_type] || x.risk_type || '',
+      経路:   x.exposure_type === 'direct' ? '直接' : '間接',
+      ホップ: Number(x.hop_num) || 0,
+      割合:   Number(x.percent) || 0,
+    }));
+  const level = typeof d.risk_level === 'string' ? d.risk_level.trim() : '';
+  const hacking = typeof d.hacking_event === 'string' ? d.hacking_event.trim() : '';
+  return { score, level, levelJa: RISK_LEVEL_JA[level] || level, details, exposures, hacking };
+}
+async function lookupRiskAPI(addr, chain) {
+  if (!MISTTRACK_KEY || !misttrackSupports(chain)) return null;
+  const lo = addr.toLowerCase();
+  if (riskCache.has(lo)) return riskCache.get(lo);
+  try {
+    const res = await fetchT(riskApiUrl(addr, chain));
+    const j   = await res.json();
+    if (j && j.success === false) {
+      console.warn('[Risk] 失敗応答:', scrubKey(JSON.stringify(j).slice(0, 160)));
+      return null;   // キーの誤りや上限。キャッシュしない
+    }
+    const picked = pickRiskFromResponse(j);
+    riskCache.set(lo, picked);
+    saveRiskCache();
+    console.log(`[Risk] ${addr.slice(0, 10)}... → ${picked ? `${picked.score}/100（${picked.level}）・指標${picked.details.length}件` : '該当なし'}`);
+    return picked;
+  } catch (e) {
+    console.error('[Risk] 照会失敗:', addr.slice(0, 12), scrubKey(e.message));
+    return null;
+  }
+}
+
 /* 経路上のアドレスの「取引回数」と「名前が付いたか」を貯める。
    MistTrackを引くかどうかのしきい値を、見当ではなく分布で決めるため。
    すでに取得済みの値を書くだけなので、外部APIは一切使わない。 */
@@ -1361,6 +1457,20 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
           console.log(`[Profile] 不正事案として報告あり: ${pf.malicious.map(m => m.種別 + m.件数 + '件').join(' / ')}`);
         }
       }
+    }
+  }
+
+  /* 同じアドレス（犯人が指定してきた送金先）のAMLリスクスコア。
+     素性が「報告されているか」なのに対し、こちらは不正な資金との距離を数値で返す。
+     有料レポートのみ。素性と同じ条件で引くので、対象なら1件につき1回で済む。 */
+  const rkBudget = opts.paid ? MISTTRACK_RISK_PAID : MISTTRACK_RISK_FREE;
+  if (rkBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
+      && target && target.address && !knownExchange && !target.isVia && !target.isToken) {
+    const known = riskCache.has(target.address.toLowerCase());
+    if (known || labelQuotaOk(opts.paid)) {
+      if (!known) labelQuotaUse();
+      const rk = await lookupRiskAPI(target.address, chain).catch(() => null);
+      if (rk) target.risk = rk;
     }
   }
 
@@ -3064,6 +3174,41 @@ ${r.txid}
           </div>`;
         })()}
         ${(() => {
+          /* AMLリスクスコア。数値だけを大きく出すと独り歩きするので、
+             必ず「何がスコアの理由か」と「何を意味しないか」を添える。 */
+          const rn = (r.path || []).find(p => p && p.risk);
+          if (!rn) return '';
+          const rk = rn.risk;
+          const 高 = rk.score >= 60;
+          const 色 = 高 ? '248,113,113' : (rk.score >= 30 ? '251,191,36' : '110,231,183');
+          return `<div class="ref-box">
+            <div class="ref-h">送金先アドレスのリスク評価（AMLスコア）</div>
+            <p class="ref-p">お客様が最初に送金されたアドレス（<span class="mono">${escHtml(rn.address || '')}</span>）が、
+            不正な資金とどの程度近いかを外部の解析事業者が評価した数値です。</p>
+            <div style="background:rgba(${色},.10);border:1px solid rgba(${色},.45);border-radius:8px;padding:12px 14px;margin:10px 0">
+              <p style="margin:0"><strong style="font-size:15px">${rk.score} / 100</strong>
+              ${rk.levelJa ? `（リスク水準：<strong>${escHtml(rk.levelJa)}</strong>）` : ''}</p>
+              ${rk.details.length ? `<ul style="margin:8px 0 0;padding-left:1.2em">
+                ${rk.details.map(d => `<li>${escHtml(d)}</li>`).join('')}
+              </ul>` : ''}
+            </div>
+            ${rk.hacking ? `<p class="ref-p">関連が指摘されている事案：<strong>${escHtml(rk.hacking)}</strong></p>` : ''}
+            ${rk.exposures.length ? `<p class="ref-p" style="margin-top:12px"><strong>スコアの根拠となった資金のつながり</strong></p>
+            <table class="info-table">
+              <tr><th>相手</th><th>種別</th><th>経路</th><th style="text-align:right">割合</th></tr>
+              ${rk.exposures.map(e => `<tr><td>${escHtml(e.相手)}</td><td>${escHtml(e.種別)}</td>
+                <td>${escHtml(e.経路)}（${e.ホップ}ホップ先）</td>
+                <td style="text-align:right">${e.割合 >= 0.1 ? e.割合.toFixed(1) : '&lt;0.1'}%</td></tr>`).join('')}
+            </table>` : ''}
+            <p class="ref-warn"><strong>この数値の扱いについて</strong><br>
+            スコアは<strong>このアドレスに出入りした資金全体</strong>をもとに算出されており、
+            お客様の資金がそのまま不正な資金になったことを示すものではありません。
+            また、スコアが低いことは<strong>安全であることを意味しません</strong>
+            （新しく作られたアドレスは、記録が無いため低く出ます）。
+            相手方の特定や法的な主張の根拠とされる場合は、必ず捜査機関を通じて確認してください。</p>
+          </div>`;
+        })()}
+        ${(() => {
           // 取引先分析で着金先を推定した場合、その内訳を根拠として示す
           const cn = (r.path || []).find(p => Array.isArray(p.counterparty) && p.counterparty.length);
           if (!cn) return '';
@@ -4330,6 +4475,23 @@ app.get('/api/admin/profile', requireAdmin, async (req, res) => {
   }
 });
 
+/* AMLリスクスコアの疎通確認。1回分を消費する。
+   このエンドポイントだけ v3 なので、URLの組み立ても含めてここで確かめる。 */
+app.get('/api/admin/risk', requireAdmin, async (req, res) => {
+  const addr  = (req.query.address || '').trim();
+  const chain = (req.query.chain || 'eth').toLowerCase();
+  if (!addr) return res.status(400).json({ error: 'address が必要です' });
+  if (!MISTTRACK_KEY) return res.json({ ok: false, reason: 'MISTTRACK_API_KEY が未設定です' });
+  if (!misttrackSupports(chain)) return res.json({ ok: false, reason: chain + ' は MistTrack の対象外です' });
+  try {
+    const r = await fetchT(riskApiUrl(addr, chain));
+    const j = await r.json();
+    res.json({ ok: r.ok, status: r.status, 整形後: pickRiskFromResponse(j), raw: j });
+  } catch (e) {
+    res.status(500).json({ error: scrubKey(e.message) });
+  }
+});
+
 /* 取引先分析の疎通確認。1回分を消費するので、確認のとき以外は使わない。 */
 app.get('/api/admin/counterparty', requireAdmin, async (req, res) => {
   const addr  = (req.query.address || '').trim();
@@ -4742,7 +4904,9 @@ app.get('/api/admin/label-usage', requireAdmin, (_req, res) => {
     '取引先分析キャッシュ': cpCache.size,
     'TRONで覚えた取引所名': tronTags.size,
     '素性キャッシュ': profileCache.size,
+    'リスクスコアキャッシュ': riskCache.size,
     '取引先分析の回数': { '無料': MISTTRACK_CP_FREE, '有料': MISTTRACK_CP_PAID, '採用する最低割合': CP_MIN_PERCENT + '%' },
+    'リスクスコアの回数': { '無料': MISTTRACK_RISK_FREE, '有料': MISTTRACK_RISK_PAID },
   });
 });
 
