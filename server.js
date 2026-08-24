@@ -1915,6 +1915,15 @@ async function getSwapOutputETH(routerAddr, txHash, prevAddr) {
   }
 }
 
+/* 入金からこれ以上離れた送金は候補にしない。
+   「入金時刻以降で近い順」だけだと上限が無く、8.8時間後の送金が
+   「最も近い3件」になっていた（実例 +526分）。
+   取得は直近100件なので、混雑したアドレスでは入金直後の送金がそもそも
+   取れておらず、何ヶ月も後の送金が拾われることもある。上限があれば落ちる。 */
+const CANDIDATE_MAX_GAP_MIN = 24 * 60;
+/* これを超えたら報告書側で日時差を強調する。同じ資金である見込みが下がるため。 */
+const CANDIDATE_WARN_GAP_MIN = 60;
+
 /* 打ち切り地点から出ていった送金を、入金時刻に近い順で数件拾う。
    確定情報ではないため「参考」としてのみ使う。ラベルAPIは呼ばない（消費しない）。 */
 async function listNextCandidatesETH(addr, afterTime, limit = 3) {
@@ -1933,11 +1942,14 @@ async function listNextCandidatesETH(addr, afterTime, limit = 3) {
       txs = Array.isArray(j.result) ? j.result : [];
     }
     const out = [];
+    let tooFar = 0;
     for (const t of txs) {
       const sec = parseInt(t.timeStamp);
       if (!(sec >= refSec)) continue;                                   // 入金より前は対象外
       if (String(t.from).toLowerCase() !== String(addr).toLowerCase()) continue;  // 出ていく送金だけ
       if (!t.to) continue;
+      const gapMin = Math.round((sec - refSec) / 60);
+      if (gapMin > CANDIDATE_MAX_GAP_MIN) { tooFar++; continue; }       // 離れすぎ。同じ資金の見込みが薄い
       const db = getLabel(t.to);
       out.push({
         address: t.to,
@@ -1945,10 +1957,11 @@ async function listNextCandidatesETH(addr, afterTime, limit = 3) {
         amount: parseFloat(t.value || '0') / 1e18,
         time: new Date(sec * 1000).toISOString(),
         txHash: t.hash,
-        gapMin: Math.round((sec - refSec) / 60),
+        gapMin,
       });
     }
     out.sort((a, b) => a.gapMin - b.gapMin);                            // 入金日時に近い順
+    if (tooFar) console.log(`[Candidates] 24時間を超える送金 ${tooFar}件を除外`);
     return out.slice(0, limit);
   } catch (e) {
     console.error('[Candidates] 取得失敗:', e.message);
@@ -3246,29 +3259,37 @@ ${r.txid}
           if (!sn) return '';
           if (!(sn.nextCandidates || []).length) {
             return `<div class="ref-box"><div class="ref-h">参考情報（未確定）：この先の追跡</div>
-              <p class="ref-p">上記の地点から出ていった送金のうち、資金が入った日時に最も近い
-              <strong>${sn.candidatesChecked}件</strong>について、さらに追跡を行いました。
+              <p class="ref-p">上記の地点から資金が入って<strong>24時間以内</strong>に出ていった送金のうち、
+              日時が最も近い<strong>${sn.candidatesChecked}件</strong>について、さらに追跡を行いました。
               <strong>いずれも取引所には到達しませんでした</strong>（当社が追跡できた範囲内での結果です）。
               これらの送金がご依頼の資金である保証はないため、到達先としての記載は行いません。</p></div>`;
           }
+          /* 日時差が開くほど、同じ資金である見込みは下がる。分で書くと桁が大きくなって
+             読み手が離れ具合を掴めないため、1時間を超えたら時間で書き、色を変える。 */
+          const fmtGap = min => min < 60 ? `+${min}分`
+            : `+${Math.floor(min / 60)}時間${min % 60 ? (min % 60) + '分' : ''}`;
+          const 離れている = sn.nextCandidates.some(c => c.gapMin > 60);
           return `<div class="ref-box">
             <div class="ref-h">参考情報（未確定）：この先で取引所に着いた送金</div>
-            <p class="ref-p">上記の地点に資金が入った<strong>日時に最も近い送金3件</strong>をさらに追跡し、
-            <strong>取引所に到達したものだけ</strong>を記載しています
-            （3件のうち${sn.nextCandidates.length}件）。
+            <p class="ref-p">上記の地点に資金が入って<strong>24時間以内</strong>に出ていった送金のうち、
+            日時が最も近い<strong>3件</strong>をさらに追跡し、<strong>取引所に到達したものだけ</strong>を
+            記載しています（3件のうち${sn.nextCandidates.length}件）。
             多数の利用者の資金が集まる地点であるため、
             <strong>これらがご依頼の資金である保証はありません</strong>。
             状況を判断する材料としてのみご覧ください。</p>
             <table class="info-table">
-              <tr><th style="width:4.5em">日時差</th><th>この地点から出た送金先</th><th>到達した取引所（未確定）</th></tr>
+              <tr><th style="width:5.5em">日時差</th><th>この地点から出た送金先</th><th>到達した取引所（未確定）</th></tr>
               ${sn.nextCandidates.map(c => `<tr>
-                <td>+${c.gapMin}分</td>
+                <td${c.gapMin > 60 ? ' style="color:#fbbf24;font-weight:700"' : ''}>${fmtGap(c.gapMin)}</td>
                 <td><span class="mono">${escHtml(c.address)}</span>${c.label ? `<br><b>${escHtml(c.label)}</b>` : ''}
                     <br><span style="font-size:0.78rem;color:var(--r-ink2)">${c.amount ? c.amount.toFixed(6) : '—'} ${escHtml(r.chain)}</span></td>
                 <td><b>${escHtml(c.reachedExchange || '')}</b>
                     <br><span class="mono" style="font-size:0.72rem">${escHtml(c.reachedAddress || '')}</span>
                     <br><span style="font-size:0.78rem;color:var(--r-ink2)">${c.reachedHops}回の送金を経て到達</span></td></tr>`).join('')}
             </table>
+            ${離れている ? `<p class="ref-p" style="margin-top:8px;font-size:0.85em;color:#fbbf24">
+            ⚠ <strong style="color:#fbbf24">色の付いた日時差</strong>は、資金が入ってから1時間以上あいて出ていった送金です。
+            間があくほど、ご依頼の資金とは別の資金である可能性が高くなります。</p>` : ''}
             <p class="ref-warn"><strong>法執行機関・取引所へご相談の際のお願い</strong><br>
             この欄は<strong>確定した到達先ではありません</strong>。凍結の要請や被害届で「資金の到達先」として
             提示すると、<strong>無関係な方の口座を対象にしてしまう恐れ</strong>があります。
