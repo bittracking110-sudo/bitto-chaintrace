@@ -3081,18 +3081,32 @@ ${r.txid}
       }
     }
 
-    // USDT（Tether発行）の場合：Tether社への凍結要請窓口を併記（Tetherはトークンを凍結可能）
+    /* USDT（Tether発行）なら、発行体への凍結要請窓口を併記する。
+       Tetherは自社発行のトークンを、取引所を介さずアドレス単位で凍結できるため、
+       取引所を特定できなかった場合に残る数少ない実効的な要請先になる。
+       最初の送金が別の通貨でも、途中でUSDTにスワップされていれば今の資金はUSDTなので対象。 */
     let tetherHTML = '';
-    if (/usdt|tether/i.test(r.tokenSymbol || '')) {
+    const usdtRe    = /usdt|tether/i;
+    const usdtFirst = usdtRe.test(r.tokenSymbol || '');
+    const usdtNode  = (r.path || []).find(p => usdtRe.test(p.token || '') || usdtRe.test(p.swapTo || ''));
+    if (usdtFirst || usdtNode) {
+      const exFound = !!(r.exchanges && r.exchanges.length);
+      const holder  = lastPathNode?.address || '';
       tetherHTML = `
         <h3>🪙 Tether社（USDT発行体）への凍結要請</h3>
         <div style="background:rgba(5,150,105,.08);border:1px solid rgba(5,150,105,.3);border-radius:8px;padding:14px 16px">
-          <p style="margin:0 0 10px">本件は <strong>USDT（Tether社発行）</strong>です。Tether社は自社発行のUSDTトークンを<strong>凍結する権限</strong>を持つため、到達先取引所への要請に加え、<strong>発行体（Tether社）への凍結要請も有効</strong>です。</p>
+          <p style="margin:0 0 10px">本件の資金は <strong>USDT（Tether社発行）</strong>です${usdtFirst ? '' : '（経路の途中でUSDTに交換されています）'}。
+          Tether社は自社発行のUSDTを<strong>アドレス単位で凍結する権限</strong>を持ちます。
+          ${exFound
+            ? '到達先取引所への要請に加え、<strong>発行体（Tether社）への凍結要請も有効</strong>です。'
+            : '<strong>取引所を特定できていない場合でも、Tether社であれば資金が置かれているアドレスを直接凍結できます。</strong>本件では、こちらへの要請が有力な選択肢になります。'}</p>
           <table class="info-table">
+            ${holder ? `<tr><th>凍結を求めるアドレス</th><td class="mono">${holder}</td></tr>` : ''}
             <tr><th>法執行機関向け窓口</th><td><a href="https://tether.to/en/legal/?tab=law-enforcement-requests">https://tether.to/en/legal/?tab=law-enforcement-requests</a></td></tr>
             <tr><th>連絡先メール</th><td>inforequests@tether.to</td></tr>
           </table>
-          <p style="font-size:0.85em;color:#94a3b8;margin:10px 0 0">※ 通常、Tether社への要請は警察・弁護士等の法執行機関を通じて行います。本資料を添えてご相談ください。</p>
+          <p style="font-size:0.85em;color:#94a3b8;margin:10px 0 0">※ 通常、Tether社への要請は警察・弁護士等の法執行機関を通じて行います。本資料を添えてご相談ください。
+          凍結の可否はTether社の判断であり、応じる義務はありません。また、凍結できるのは<strong>そのアドレスに残っている分だけ</strong>で、既に移動・換金された分は対象になりません。</p>
         </div>`;
     }
 
