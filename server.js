@@ -1915,26 +1915,43 @@ async function getSwapOutputETH(routerAddr, txHash, prevAddr) {
   }
 }
 
-/* 入金からこれ以上離れた送金は候補にしない。
-   「入金時刻以降で近い順」だけだと上限が無く、8.8時間後の送金が
-   「最も近い3件」になっていた（実例 +526分）。
-   取得は直近100件なので、混雑したアドレスでは入金直後の送金がそもそも
-   取れておらず、何ヶ月も後の送金が拾われることもある。上限があれば落ちる。 */
-const CANDIDATE_MAX_GAP_MIN = 24 * 60;
-/* これを超えたら報告書側で日時差を強調する。同じ資金である見込みが下がるため。 */
+/* 日時差がこれを超えたら報告書側で強調する。除外はしない。
+   間があくほど同じ資金である確からしさは下がるが、無関係とは限らない。 */
 const CANDIDATE_WARN_GAP_MIN = 60;
 
-/* 打ち切り地点から出ていった送金を、入金時刻に近い順で数件拾う。
-   確定情報ではないため「参考」としてのみ使う。ラベルAPIは呼ばない（消費しない）。 */
+/* 時刻からブロック番号を引く。ここを起点に昇順で取るために使う。
+   引けなければ 0（＝最初から）。その場合は従来どおりの精度に落ちるだけで壊れない。 */
+async function blockNoByTime(sec) {
+  try {
+    const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=block`
+      + `&action=getblocknobytime&timestamp=${sec}&closest=before&apikey=${ETHERSCAN_KEY}`);
+    const n = parseInt(j.result);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch { return 0; }
+}
+
+/* 打ち切り地点から次に出ていった送金を数件拾う。
+   確定情報ではないため「参考」としてのみ使う。ラベルAPIは呼ばない（消費しない）。
+
+   ★ 日時差での足切りはしない。被害に気づくのが1〜3ヶ月後という相談は多く、
+     犯人が資金を10日・1ヶ月寝かせてから動かす例は実際にある。そこを外すと
+     肝心の動きを見落とす。離れていることは報告書に見えるように出して、
+     読み手に判断してもらう。
+
+   ★ 取得は「入金時刻のブロックから昇順」。以前は降順で直近100件を取って
+     時刻で絞っていたため、混雑したアドレスでは入金直後の送金が100件の中に
+     入らず、ずっと後の送金が「最も近い3件」になっていた（実例 +526分）。
+     昇順なら、間が何日あいても「次に出ていった送金」を確実に拾える。 */
 async function listNextCandidatesETH(addr, afterTime, limit = 3) {
   try {
     const refSec = Math.floor(new Date(normalizeTimeStr(afterTime)).getTime() / 1000);
     if (!refSec) return [];
+    const startBlock = await blockNoByTime(refSec);
     /* 打ち切り地点はコントラクト（WETH等）であることが多い。
        コントラクトは通常の取引の送信者にならないので、内部送金を見る。
        個人の住所だった場合に備えて、空なら通常の取引も見る。 */
     const base = `https://api.etherscan.io/v2/api?chainid=1&module=account&address=${addr}`
-      + `&startblock=0&endblock=latest&page=1&offset=100&sort=desc&apikey=${ETHERSCAN_KEY}`;
+      + `&startblock=${startBlock}&endblock=latest&page=1&offset=100&sort=asc&apikey=${ETHERSCAN_KEY}`;
     let j = await apiJson(base + '&action=txlistinternal');
     let txs = Array.isArray(j.result) ? j.result : [];
     if (!txs.length) {
@@ -1942,27 +1959,25 @@ async function listNextCandidatesETH(addr, afterTime, limit = 3) {
       txs = Array.isArray(j.result) ? j.result : [];
     }
     const out = [];
-    let tooFar = 0;
     for (const t of txs) {
       const sec = parseInt(t.timeStamp);
       if (!(sec >= refSec)) continue;                                   // 入金より前は対象外
       if (String(t.from).toLowerCase() !== String(addr).toLowerCase()) continue;  // 出ていく送金だけ
       if (!t.to) continue;
-      const gapMin = Math.round((sec - refSec) / 60);
-      if (gapMin > CANDIDATE_MAX_GAP_MIN) { tooFar++; continue; }       // 離れすぎ。同じ資金の見込みが薄い
-      const db = getLabel(t.to);
       out.push({
         address: t.to,
-        label: db.label || '',
+        label: getLabel(t.to).label || '',
         amount: parseFloat(t.value || '0') / 1e18,
         time: new Date(sec * 1000).toISOString(),
         txHash: t.hash,
-        gapMin,
+        gapMin: Math.round((sec - refSec) / 60),
       });
+      if (out.length >= limit) break;        // 昇順なので、先頭から順に「次の送金」
     }
-    out.sort((a, b) => a.gapMin - b.gapMin);                            // 入金日時に近い順
-    if (tooFar) console.log(`[Candidates] 24時間を超える送金 ${tooFar}件を除外`);
-    return out.slice(0, limit);
+    if (out.length) {
+      console.log(`[Candidates] 次の送金 ${out.length}件（日時差 ${out.map(c => c.gapMin + '分').join('・')}）`);
+    }
+    return out;
   } catch (e) {
     console.error('[Candidates] 取得失敗:', e.message);
     return [];
@@ -3259,21 +3274,24 @@ ${r.txid}
           if (!sn) return '';
           if (!(sn.nextCandidates || []).length) {
             return `<div class="ref-box"><div class="ref-h">参考情報（未確定）：この先の追跡</div>
-              <p class="ref-p">上記の地点から資金が入って<strong>24時間以内</strong>に出ていった送金のうち、
-              日時が最も近い<strong>${sn.candidatesChecked}件</strong>について、さらに追跡を行いました。
+              <p class="ref-p">上記の地点から<strong>次に出ていった送金${sn.candidatesChecked}件</strong>について、
+              さらに追跡を行いました。
               <strong>いずれも取引所には到達しませんでした</strong>（当社が追跡できた範囲内での結果です）。
               これらの送金がご依頼の資金である保証はないため、到達先としての記載は行いません。</p></div>`;
           }
-          /* 日時差が開くほど、同じ資金である見込みは下がる。分で書くと桁が大きくなって
-             読み手が離れ具合を掴めないため、1時間を超えたら時間で書き、色を変える。 */
-          const fmtGap = min => min < 60 ? `+${min}分`
-            : `+${Math.floor(min / 60)}時間${min % 60 ? (min % 60) + '分' : ''}`;
-          const 離れている = sn.nextCandidates.some(c => c.gapMin > 60);
+          /* 日時差は分で書くと桁が大きくなって離れ具合を掴めない。
+             時間・日に繰り上げる。1時間を超えたら色を変えるが、除外はしない。
+             犯人が資金を寝かせてから動かす例があるため、間があく＝無関係ではない。 */
+          const fmtGap = min =>
+            min < 60        ? `+${min}分`
+          : min < 60 * 24   ? `+${Math.floor(min / 60)}時間${min % 60 ? (min % 60) + '分' : ''}`
+          :                   `+${Math.floor(min / 1440)}日${Math.floor((min % 1440) / 60) ? Math.floor((min % 1440) / 60) + '時間' : ''}`;
+          const 離れている = sn.nextCandidates.some(c => c.gapMin > CANDIDATE_WARN_GAP_MIN);
           return `<div class="ref-box">
             <div class="ref-h">参考情報（未確定）：この先で取引所に着いた送金</div>
-            <p class="ref-p">上記の地点に資金が入って<strong>24時間以内</strong>に出ていった送金のうち、
-            日時が最も近い<strong>3件</strong>をさらに追跡し、<strong>取引所に到達したものだけ</strong>を
-            記載しています（3件のうち${sn.nextCandidates.length}件）。
+            <p class="ref-p">上記の地点から<strong>次に出ていった送金${sn.candidatesChecked}件</strong>をさらに追跡し、
+            <strong>取引所に到達したものだけ</strong>を記載しています
+            （${sn.candidatesChecked}件のうち${sn.nextCandidates.length}件）。
             多数の利用者の資金が集まる地点であるため、
             <strong>これらがご依頼の資金である保証はありません</strong>。
             状況を判断する材料としてのみご覧ください。</p>
@@ -3289,7 +3307,9 @@ ${r.txid}
             </table>
             ${離れている ? `<p class="ref-p" style="margin-top:8px;font-size:0.85em;color:#fbbf24">
             ⚠ <strong style="color:#fbbf24">色の付いた日時差</strong>は、資金が入ってから1時間以上あいて出ていった送金です。
-            間があくほど、ご依頼の資金とは別の資金である可能性が高くなります。</p>` : ''}
+            間があくほど、ご依頼の資金とは別の資金である可能性は上がります。
+            ただし、<strong style="color:#fbbf24">資金をしばらく置いてから動かす手口は珍しくありません</strong>。
+            間があいていること自体が、無関係であることを意味するものではありません。</p>` : ''}
             <p class="ref-warn"><strong>法執行機関・取引所へご相談の際のお願い</strong><br>
             この欄は<strong>確定した到達先ではありません</strong>。凍結の要請や被害届で「資金の到達先」として
             提示すると、<strong>無関係な方の口座を対象にしてしまう恐れ</strong>があります。
