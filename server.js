@@ -1509,20 +1509,58 @@ function inferExchangeByBehavior(node) {
 /* 利用者が多いコントラクトの目安。これ以上の取引があるDEX・ブリッジ・
    トークン契約は、その先を追っても同一資金と言えない。 */
 const VIA_TRAFFIC_STOP = 10000;
+/* 利用者が多いアドレスを通った先は、同一資金と言えないので打ち切る。
+
+   ★ラベルの有無で判断してはいけない。
+     実測：同じ取引を2回調べたら行き先が変わった。
+       1回目 … → MainnetSettler → 0x4b36b6a5…（4.58 ETH）
+       2回目 … → MainnetSettler → 0x510b2d8e…（20.03 ETH）
+     MainnetSettler は取引回数 373,001 回の共有決済コントラクトで、
+     無数の人の資金が通る。そこから「金額が最大の送金」を選ぶと、
+     新しい取引が流れ込むたびに別人の資金を掴む。
+     2回目の 20.03 ETH は被害額 4.87 ETH より多く、明らかに他人の資金。
+
+     それでも素通りしていたのは、打ち切りの条件が
+     「経由サービス」「トークン契約」というラベル付きのノードに
+     限られていたため。MainnetSettler はどちらのラベルも持たない。
+
+   ★取引所は打ち切らない。そこが到達先＝要請先そのものなので、
+     取引回数が多いのは当たり前。
+
+   短く正確に終える方を選ぶ。行き先を1つ余計に見せるより、
+   無関係の方の口座に凍結要請が飛ぶ事故の方が重い。
+   打ち切った先は「参考情報（未確定）」の仕組みで控えめに出る。 */
 function truncateAfterVia(path) {
   for (let i = 1; i < path.length; i++) {
     const n = path[i];
-    if (!n.isVia && !n.isToken) continue;
+    // 到達先の取引所は打ち切らない（そこが目的地）
+    if (n.isExchange) continue;
+    const crowded = n.txCount != null && n.txCount >= VIA_TRAFFIC_STOP;
+    /* 情報を取れなかった区間は「混雑していないと確かめられていない」。
+       確かめられないまま先を見せない。 */
+    if (n.unverified) {
+      if (i < path.length - 1) {
+        console.log(`[trace] index ${i} 以降は取引回数を確認できなかったため打ち切る`);
+        path.splice(i + 1);
+      }
+      n.traceStop = true;
+      n.stopReason = 'unverified';
+      return;
+    }
+    if (!n.isVia && !n.isToken && !crowded) continue;
     // 取引が少ない小規模なサービスは、まだ追える見込みがあるので続ける
     // 取引回数が取れないことがある（WETHは0で返ってきた）。その場合は打ち切る側に倒す。
-    if (n.txCount != null && n.txCount > 0 && n.txCount < VIA_TRAFFIC_STOP) continue;
+    if ((n.isVia || n.isToken) && !crowded
+        && n.txCount != null && n.txCount > 0) continue;
     // 次のノードを同じ取引の中から特定できているなら、推測ではないので続ける
     if (path[i + 1] && path[i + 1].sameTx) continue;
     if (i < path.length - 1) {
-      console.log(`[trace] ${n.label || '経由'} で追跡を終了（利用者が多く、以降は同一資金と言えないため）`);
+      console.log(`[trace] ${n.label || 'このアドレス'}（取引${n.txCount ?? '不明'}回）で追跡を終了`
+        + `（利用者が多く、以降は同一資金と言えないため）`);
       path.splice(i + 1);
     }
     n.traceStop = true;
+    n.stopReason = crowded ? 'crowded' : 'via';
     return;
   }
 }
@@ -1591,7 +1629,7 @@ async function apiJson(url) {
 const TRACE_BUDGET_MS = 27000;   // トークン契約・ブリッジを通過点として追い越すようになり、
                                  // ホップ数が増えた分だけ時間が要る（18秒では取引所の手前で切れていた）
 // アドレス情報付与(enrich)の時間予算。USDT等の巨大コントラクトが混じっても全体を止めない。
-const ENRICH_BUDGET_MS = 10000;
+const ENRICH_BUDGET_MS = 20000;   // 混雑したコントラクトはBlockchairの応答が遅い。ここで足りないと経路を確かめられない
 // investigateETH の内部呼び出し(calls)ラベル取得の時間予算。
 const CALLS_BUDGET_MS = 6000;
 // 上記の予算をすべてすり抜けた場合に調査ジョブを強制終了させる上限時間。
@@ -1662,6 +1700,11 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
     if (Date.now() > deadline) {
       console.log(`[enrich] 時間予算に達したため残りノードの情報付与を省略（index ${idx}）`);
       truncatedAt = idx;
+      /* ★ここから先は取引回数が分からない＝「利用者が多いアドレスか」を
+         判定できない。判定できないまま経路を見せると、共有の決済
+         コントラクトを素通りして他人の資金を指してしまう（実測あり）。
+         確かめられなかった区間は、確定した経路として出さない。 */
+      for (let k = idx; k < path.length; k++) path[k].unverified = true;
       break;
     }
     await new Promise(res => setTimeout(res, 250)); // レート制限対策
