@@ -1277,10 +1277,18 @@ async function openInitialPack(){
     const kb   = Math.max(1, Math.round((j.size || 0) / 1024));
     const n    = Array.isArray(lastResults) ? lastResults.length : 0;
 
-    /* 共有はブラウザが対応しているときだけ出す。
-       出しておいて押したら何も起きない、が一番よくない。
-       中身は共有を押したときに取りに行く（先に落とすと無駄になる）。 */
-    const canShare = !!(navigator.canShare && navigator.share);
+    /* ★iOSに「ダウンロード」は無い。ファイルを残す正規の道は共有シートの
+       「ファイルに保存」で、そこから iCloud Drive や端末内に置く。
+       ダウンロードのリンクを踏ませると、確認が挟まったり行方が分からなくなる。
+       共有が使える端末では、保存ボタンを出さずに共有へ寄せる。
+
+       PC など共有にファイルを渡せない環境では、逆に共有が無意味なので
+       ダウンロードだけ出す。押しても何も起きないボタンを置かない。 */
+    let canShare = false;
+    try {
+      canShare = !!(navigator.canShare && navigator.share && navigator.canShare({
+        files: [new File([new Blob(['x'])], 'x.pdf', { type:'application/pdf' })] }));
+    } catch(_) { canShare = false; }
 
     const card = addAi(`<b>初動パックができました。</b>
       <div style="font-size:12.5px;color:var(--sub);margin-top:6px;line-height:1.75">
@@ -1291,10 +1299,12 @@ async function openInitialPack(){
       </div>
       <div class="fc-acts">
         <button class="fc-b prime" data-pack="open">開く</button>
-        <button class="fc-b" data-pack="save">保存</button>
-        ${canShare ? '<button class="fc-b" data-pack="share">共有</button>' : ''}
+        ${canShare
+          ? '<button class="fc-b" data-pack="share">保存・共有</button>'
+          : '<button class="fc-b" data-pack="save">保存</button>'}
       </div>
       <div style="font-size:11.5px;color:var(--sub);margin-top:8px;line-height:1.7">
+      ${canShare ? '「保存・共有」から<b>ファイルに保存</b>、メールやLINEで送ることもできます。<br>' : ''}
       印刷して警察や弁護士にそのままお渡しいただけます。空欄はご自身で書き込んでください。</div>`, { rich:true });
 
     card.querySelectorAll('[data-pack]').forEach(b => b.addEventListener('click', async () => {
@@ -1302,17 +1312,17 @@ async function openInitialPack(){
       // 普通のURLに遷移させる。iOSでもそのままPDFが開く
       if (act === 'open'){ window.open(packUrl, '_blank'); return; }
       if (act === 'save'){ window.location.href = packUrl + '?dl=1'; return; }
+      // 共有シートを開く。iOSはここの「ファイルに保存」が保存の正規ルート
+      b.disabled = true;
       try{
         const f = await fetch(packUrl);
         const blob = await f.blob();
-        const file = new File([blob], name, { type:'application/pdf' });
-        if (navigator.canShare && !navigator.canShare({ files:[file] })){
-          // ファイルを渡せない端末では、代わりに開く
-          window.open(packUrl, '_blank');
-          return;
-        }
-        await navigator.share({ files:[file], title:'BitTo 初動パック' });
+        await navigator.share({
+          files:[new File([blob], name, { type:'application/pdf' })],
+          title:'BitTo 初動パック',
+        });
       }catch(_){ /* 利用者が閉じただけのこともあるので何も言わない */ }
+      finally { b.disabled = false; }
     }));
   }catch(e){
     typing.remove();
