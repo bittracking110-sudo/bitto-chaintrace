@@ -57,7 +57,12 @@
     background:var(--panel);border:1px solid var(--line);white-space:pre-wrap;word-break:break-word}
   .bubble.wide{max-width:100%}   /* 結果カードを含む吹き出しは列幅いっぱいに */
   .row.me .bubble{background:var(--blue);border-color:transparent;color:#fff;border-bottom-right-radius:5px}
-  .row.ai .bubble{border-bottom-left-radius:5px}
+  /* AI側は吹き出しをやめて全幅の地の文にする。
+     画面が広く見えるのは余白のせいではなく、枠が無いから。
+     枠を外すと1行あたりの文字数が増え、長い説明も読み下せる。
+     自分の発言だけ吹き出しを残すことで、どちらの発言かは分かる。 */
+  .row.ai .bubble{background:none;border:none;padding:2px 0 0;max-width:100%;border-radius:0}
+  .bubble.rich{white-space:normal}   /* HTMLで組んだ吹き出しは改行を描画しない */
   .who{font-size:11px;color:var(--sub);margin-bottom:4px}
   /* 初動ナビへのカテゴリーカード（挨拶の下・控えめ） */
   .navicard{display:flex;align-items:center;gap:11px;margin:-2px 0 16px 39px;width:min(78%,560px);
@@ -195,6 +200,19 @@
   .ocr-hit .m{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;word-break:break-all;color:var(--teal)}
   .ocr-hit .c{font-size:11px;color:var(--sub);margin-top:3px}
   .ocr-warn{font-size:11.5px;color:#fbbf24;margin-top:6px;line-height:1.6}
+  /* チャットの中で渡すファイル。何が届いたのか一目で分かる形にする */
+  .filecard{display:flex;align-items:center;gap:11px;margin-top:10px;padding:11px 12px;
+    background:var(--panel2);border:1px solid var(--line);border-radius:11px}
+  .fc-ic{flex:none;width:38px;height:44px;border-radius:5px;display:grid;place-items:center;
+    background:#b3312c;color:#fff;font-size:10px;font-weight:800;letter-spacing:.3px}
+  .fc-body{min-width:0}
+  .fc-t{font-size:12.5px;font-weight:700;word-break:break-all;line-height:1.5}
+  .fc-d{font-size:11px;color:var(--sub);margin-top:2px}
+  .fc-acts{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap}
+  .fc-b{font:inherit;font-size:12.5px;padding:8px 16px;border-radius:9px;cursor:pointer;
+    background:none;border:1px solid var(--line);color:var(--text)}
+  .fc-b.prime{background:linear-gradient(135deg,var(--teal),var(--green));border-color:transparent;
+    color:#04231F;font-weight:700}
   .disc{font-size:10px;color:var(--sub);text-align:center;margin-top:7px;line-height:1.5}
 
   /* ── 下部ナビ ── */
@@ -497,10 +515,15 @@ function addMe(text){
   chat.appendChild(d); scrollDown();
 }
 const hasCard = html => /class="card"/.test(String(html));
-function addAi(html, {typing=false} = {}){
+/* rich: HTMLで組んだ吹き出し。
+   .bubble は既定で white-space:pre-wrap（素の文章の改行をそのまま出すため）だが、
+   HTMLで組むとテンプレート文字列の改行とインデントまで描画され、
+   間延びして文頭が字下げされる。組み立て側が分かっているので明示で切り替える。 */
+function addAi(html, {typing=false, rich=false} = {}){
   const d = document.createElement('div'); d.className = 'row ai';
+  const cls = 'bubble' + (!typing && hasCard(html) ? ' wide' : '') + (rich ? ' rich' : '');
   d.innerHTML = `${AI_AVATAR}<div style="flex:1;min-width:0"><div class="who">BitTo AI</div>
-    <div class="bubble${!typing && hasCard(html) ? ' wide' : ''}">${typing ? '<div class="dots"><i></i><i></i><i></i></div>' : html}</div></div>`;
+    <div class="${cls}">${typing ? '<div class="dots"><i></i><i></i><i></i></div>' : html}</div></div>`;
   chat.appendChild(d); scrollDown(); return d;
 }
 /* 資金フローの横スクロールに、現在地・端のぼかし・送りボタンを連動させる。
@@ -538,6 +561,10 @@ function initFlowScroll(root){
 const setBubble = (row, html) => {
   const b = row.querySelector('.bubble');
   b.classList.toggle('wide', hasCard(html));
+  /* 結果カードはHTMLで組む。素の文章と違い、テンプレート文字列の改行まで
+     描画されると間延びするので、カードを含むときは pre-wrap を切る。
+     エラー文（\n で改行している）はカードを含まないので影響しない。 */
+  b.classList.toggle('rich', hasCard(html));
   b.innerHTML = html; initFlowScroll(b); scrollDown();
 };
 
@@ -1020,7 +1047,7 @@ ocrFile.addEventListener('change', async () => {
         addAi(`<b>画像の読み取りが続いたため、少しお休みをいただいています。</b>
           <div style="margin-top:8px;font-size:12.5px;line-height:1.75">
           しばらく経ってから、もう一度お試しください。<br>
-          お急ぎの場合は、<b>TXIDの文字をそのまま貼り付けて</b>いただければすぐに調査できます。</div>`);
+          お急ぎの場合は、<b>TXIDの文字をそのまま貼り付けて</b>いただければすぐに調査できます。</div>`, { rich:true });
         return;
       }
       const again = (j && j.reason === 'gemini_failed');
@@ -1029,13 +1056,13 @@ ocrFile.addEventListener('change', async () => {
            <div style="margin-top:8px;font-size:12.5px;line-height:1.75">
            画像に問題があったわけではありません。少し時間をおいて、もう一度お試しください。<br>
            お急ぎの場合は、<b>TXIDの文字をそのまま貼り付けて</b>いただければすぐに調査できます。</div>`
-        : `<b>画像を読み取れませんでした。</b>${OCR_HELP}`);
+        : `<b>画像を読み取れませんでした。</b>${OCR_HELP}`, { rich:true });
       return;
     }
 
     const hits = j.txids || [];
     if (!hits.length) {
-      addAi(`<b>この画像からはトランザクションID（TXID）が見つかりませんでした。</b>${OCR_HELP}`);
+      addAi(`<b>この画像からはトランザクションID（TXID）が見つかりませんでした。</b>${OCR_HELP}`, { rich:true });
       return;
     }
 
@@ -1048,7 +1075,7 @@ ocrFile.addEventListener('change', async () => {
         <div class="c">${chainName(h.chain)}${h.corrected ? ' ／ 読み取りにくい文字を補正しました' : ''}</div>
       </button>`).join('')}
       ${corrected ? `<div class="ocr-warn">⚠ 読み取りにくい文字があったため、一部を補正しています。
-        <b>元の画面のTXIDと見比べて</b>から調査を始めてください。</div>` : ''}`);
+        <b>元の画面のTXIDと見比べて</b>から調査を始めてください。</div>` : ''}`, { rich:true });
 
     // 押したら入力欄に入れて、そのまま調査を始める。
     // chat 全体ではなく今作った吹き出しの中だけを見る（前の候補に二重に付くため）
@@ -1061,7 +1088,7 @@ ocrFile.addEventListener('change', async () => {
     });
   } catch (e) {
     typing.remove();
-    addAi(`<b>画像を読み取れませんでした。</b>${OCR_HELP}`);
+    addAi(`<b>画像を読み取れませんでした。</b>${OCR_HELP}`, { rich:true });
   } finally {
     busy = false; sendBtn.disabled = false; attachBtn.disabled = false;
   }
@@ -1160,114 +1187,8 @@ function renderMenu(){
 
 /* ── 無料の初動パック（印刷・PDF保存できる書類を生成） ── */
 let lastResults = null;
-function packRowsHTML(){
-  const rs = Array.isArray(lastResults) ? lastResults : [];
-  if (!rs.length){
-    return `<tr><td colspan="5" style="color:#777">（TXIDの解析結果がまだありません。「AI調査チャット」でTXIDを送信すると、ここに自動で入ります）</td></tr>`;
-  }
-  return rs.map(r => {
-    const path = r.path || [];
-    const dest = path.length ? path[path.length - 1] : null;
-    const ex = [...new Set(path.filter(n => n.isExchange && n.label).map(n => n.label))];
-    const amt = r.tokenSymbol ? `${r.tokenAmount} ${r.tokenSymbol}` : `${r.amount != null ? r.amount : ''} ${r.chain || ''}`;
-    return `<tr><td>${esc(r.chain || '')}</td><td class="mono">${esc(r.txid || '')}</td><td>${esc(amt)}</td><td class="mono">${esc((dest && dest.address) || '')}</td><td>${ex.length ? esc(ex.join('、')) + '（推定）' : '未特定'}</td></tr>`;
-  }).join('');
-}
-function buildPackHTML(){
-  const now = new Date().toLocaleString('ja-JP');
-  const blankRow = '<tr><td><span class="fill">&nbsp;</span></td><td><span class="fill" style="min-width:420px">&nbsp;</span></td></tr>';
-  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BitTo 初動パック</title><style>
-body{font-family:-apple-system,'Hiragino Kaku Gothic ProN','Noto Sans JP',Meiryo,sans-serif;color:#111;line-height:1.8;max-width:820px;margin:0 auto;padding:28px 22px;font-size:14px}
-h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:26px 0 8px;padding-bottom:5px;border-bottom:2px solid #111}
-.meta{color:#666;font-size:12px;margin-bottom:6px}
-.note{background:#f5f5f5;border-left:3px solid #999;padding:10px 12px;font-size:12px;color:#444;margin:10px 0}
-table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12.5px}
-th,td{border:1px solid #ccc;padding:7px 8px;text-align:left;vertical-align:top}
-th{background:#f0f0f0}
-.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;word-break:break-all}
-.fill{border-bottom:1px solid #999;display:inline-block;min-width:180px}
-ul{margin:6px 0 6px 20px;padding:0}li{margin:4px 0}
-.warn{background:#fff3f3;border:1px solid #e0a0a0;padding:12px 14px;border-radius:6px}
-.warn b{color:#b32}
-pre{background:#f7f7f7;border:1px solid #ddd;padding:12px;white-space:pre-wrap;font-family:inherit;font-size:12.5px;border-radius:5px}
-.btns{margin:18px 0}
-button{font:inherit;padding:9px 16px;border:1px solid #333;background:#111;color:#fff;border-radius:6px;cursor:pointer}
-@media print{.btns{display:none}body{padding:0}}
-</style></head><body>
-<h1>BitTo 初動パック（無料）</h1>
-<div class="meta">作成日時：${esc(now)}　／　作成：BitTo（公開ブロックチェーン解析ツール）</div>
-<div class="note">本資料は、公開ブロックチェーン情報にもとづく<b>解析結果と初動の整理用テンプレート</b>です。到達取引所等は<b>推定を含みます</b>。資産の回収・返還を保証するものではありません。</div>
-<div class="btns"><button onclick="window.print()">印刷 / PDFで保存</button></div>
-<h2>1. 調査対象の記録</h2>
-<table><tr><th>チェーン</th><th>TXID</th><th>数量</th><th>最終確認アドレス</th><th>到達取引所（推定）</th></tr>${packRowsHTML()}</table>
-<table>
-<tr><th style="width:32%">送金日時</th><td><span class="fill">&nbsp;</span></td></tr>
-<tr><th>送金元（取引所・ウォレット）</th><td><span class="fill">&nbsp;</span></td></tr>
-<tr><th>被害額（日本円換算・概算）</th><td><span class="fill">&nbsp;</span></td></tr>
-<tr><th>相手との接触経路</th><td><span class="fill">&nbsp;</span>（SNS／マッチング／広告／電話 等）</td></tr>
-</table>
-<h2>2. 証拠保全チェックリスト</h2>
-<ul>
-<li>☐ TXID（取引ID）を控えた（途中で切れていないか確認）</li>
-<li>☐ 送金日時・数量・通貨（BTC／ETH／XRP／USDT等）を控えた</li>
-<li>☐ 送金元の取引所の出金履歴のスクリーンショット</li>
-<li>☐ 相手とのやり取り（SNS・チャット・メール）のスクリーンショット</li>
-<li>☐ 相手のサイトURL・アプリ名・口座／ウォレット情報</li>
-<li>☐ 銀行振込がある場合は振込明細（銀行・日時・金額・口座）</li>
-<li>☐ 本資料（初動パック）を保存・印刷</li>
-</ul>
-<div class="note">※ パスワード・2段階認証コード・秘密鍵・シードフレーズは<b>誰にも渡さないでください</b>。調査・確認に一切不要です。</div>
-<h2>3. 時系列メモ（警察・取引所への説明用）</h2>
-<table><tr><th style="width:22%">日時</th><th>出来事（誰から・どこで・何を言われ・いくら送ったか）</th></tr>${blankRow.repeat(6)}</table>
-<h2>4. 取引所への連絡文（テンプレート）</h2>
-<div class="note">送金元の取引所、および（判明していれば）到達先の取引所のサポート窓口へ提出してください。<b>凍結の可否は取引所の判断です。</b></div>
-<pre>件名：不正利用（詐欺被害）に関するご報告と記録保全のお願い
-
-お世話になっております。以下の送金について、詐欺被害に遭ったため報告いたします。
-可能な範囲での記録の保全と、必要なご案内をお願いいたします。
-
-■ 送金情報
-・TXID：
-・チェーン／通貨：
-・送金日時：
-・数量：
-・送金元（当方）アカウント：
-・送金先アドレス：
-
-■ 被害の経緯（概要）
-
-
-■ 依頼事項
-・上記取引に関する記録の保全
-・貴社所定の手続きのご案内
-・警察への相談を予定しており、必要書類があればご教示ください
-
-■ 連絡先
-・氏名：
-・メールアドレス：
-・電話番号：
-</pre>
-<h2>5. ⚠️ 二次被害（回収詐欺）への注意</h2>
-<div class="warn">被害後に接触してくる「回収業者」による<b>二次被害</b>が多発しています。以下は詐欺の典型的なサインです。
-<ul>
-<li><b>「返金の可能性が高い」と期待を持たせる</b></li>
-<li><b>調査に高額な費用を提示する</b></li>
-<li>電話をかけてきて、契約を急かす</li>
-<li>遠隔操作アプリの導入を求める</li>
-<li>シードフレーズ・秘密鍵・2段階認証コードを聞いてくる</li>
-<li>警察・政府機関との「特別な関係」を主張する</li>
-<li>「凍結済みだが解除費用が必要」と言う</li>
-<li>追加の費用を請求する</li>
-</ul>
-FBI・CFTCも、前払いを求める暗号資産回収サービスについて注意を呼びかけています。</div>
-<h2>6. BitToができること／できないこと</h2>
-<table><tr><th style="width:50%">できること</th><th>できないこと</th></tr>
-<tr><td>公開チェーンの資金経路の解析<br>着金先取引所・サービスの推定<br>警察・取引所への提出資料の整理<br>不正利用申告文の作成<br>資金移動の継続監視<br>相談先・必要書類の案内</td>
-<td>取引所へ凍結を命令する<br>KYC情報を強制的に取得する<br>資金の残存を保証する<br>被害資金の返還を保証する<br>強制処分を行う<br>秘密鍵で資金を取り戻す</td></tr></table>
-<div class="note">緊急・進行中の犯罪は110。緊急でない警察相談は#9110、被害届は最寄りの警察署、消費者トラブルは188、詐欺的投資・無登録業者は金融庁の相談窓口が候補です。</div>
-</body></html>`;
-}
+/* 書類の組み立てはサーバー側（buildInitialPackHTML）へ移した。
+   画面とサーバーで同じ紙面を二重に持たないため。 */
 document.getElementById('packGo').addEventListener('click', openInitialPack);
 function openPackEntry(){
   showTab('navi');
@@ -1275,20 +1196,78 @@ function openPackEntry(){
   box.classList.add('hi');
   setTimeout(() => box.scrollIntoView({behavior:'smooth', block:'center'}), 60);
 }
-function openInitialPack(){
-  const html = buildPackHTML();
-  let w = null;
-  try { w = window.open('', '_blank'); } catch(_) {}
-  if (w && w.document){
-    w.document.open(); w.document.write(html); w.document.close();
-  } else {
-    const blob = new Blob([html], {type:'text/html;charset=utf-8'});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `BitTo_初動パック_${new Date().toISOString().slice(0,10)}.html`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
-    toast('初動パックをダウンロードしました');
+/* 初動パックはPDFにしてチャットの中で渡す。
+   以前は window.open でHTMLを開いていたが、スマホではポップアップが塞がれて
+   HTMLファイルのダウンロードに落ちていた。端末に降りたHTMLは開きにくく、
+   弁護士や警察に渡す形にもならない。PDFなら、そのまま送れて、そのまま印刷できる。
+
+   組み立てはサーバー側。画面から送るのは解析結果のデータだけで、HTMLは送らない。 */
+let packBlobUrl = null;
+
+async function openInitialPack(){
+  if (busy) return;
+  busy = true;
+  const typing = addAi('', { typing: true });
+  try{
+    const r = await fetch(API + '/api/pack/pdf', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ results: Array.isArray(lastResults) ? lastResults : [] }),
+    });
+    typing.remove();
+    if (!r.ok){
+      addAi(r.status === 429
+        ? '<b>作成が続いたため、少しお休みをいただいています。</b><div style="margin-top:8px;font-size:12.5px;line-height:1.75">しばらく経ってから、もう一度お試しください。</div>'
+        : '<b>初動パックを作成できませんでした。</b><div style="margin-top:8px;font-size:12.5px;line-height:1.75">時間をおいて、もう一度お試しください。</div>', { rich:true });
+      return;
+    }
+    const blob = await r.blob();
+    if (packBlobUrl) URL.revokeObjectURL(packBlobUrl);
+    packBlobUrl = URL.createObjectURL(blob);
+    const name = `BitTo_初動パック_${new Date().toISOString().slice(0,10)}.pdf`;
+    const kb   = Math.max(1, Math.round(blob.size / 1024));
+    const n    = Array.isArray(lastResults) ? lastResults.length : 0;
+
+    /* 共有はブラウザが対応しているときだけ出す。
+       出しておいて押したら何も起きない、が一番よくない。 */
+    const canShare = !!(navigator.canShare && navigator.canShare({
+      files: [new File([blob], name, { type:'application/pdf' })] }));
+
+    const card = addAi(`<b>初動パックができました。</b>
+      <div style="font-size:12.5px;color:var(--sub);margin-top:6px;line-height:1.75">
+      ${n ? `解析した${n}件のTXIDを差し込んであります。` : ''}証拠保全チェックリスト・時系列メモ・取引所への連絡文が入っています。</div>
+      <div class="filecard">
+        <div class="fc-ic">PDF</div>
+        <div class="fc-body"><div class="fc-t">${esc(name)}</div><div class="fc-d">PDF ・ ${kb} KB</div></div>
+      </div>
+      <div class="fc-acts">
+        <button class="fc-b prime" data-pack="open">開く</button>
+        <button class="fc-b" data-pack="save">保存</button>
+        ${canShare ? '<button class="fc-b" data-pack="share">共有</button>' : ''}
+      </div>
+      <div style="font-size:11.5px;color:var(--sub);margin-top:8px;line-height:1.7">
+      印刷して警察や弁護士にそのままお渡しいただけます。空欄はご自身で書き込んでください。</div>`, { rich:true });
+
+    card.querySelectorAll('[data-pack]').forEach(b => b.addEventListener('click', async () => {
+      const act = b.dataset.pack;
+      if (act === 'open'){ window.open(packBlobUrl, '_blank'); return; }
+      if (act === 'save'){
+        const a = document.createElement('a');
+        a.href = packBlobUrl; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        toast('保存しました');
+        return;
+      }
+      try{
+        await navigator.share({ files:[new File([blob], name, { type:'application/pdf' })],
+                                title:'BitTo 初動パック' });
+      }catch(_){ /* 利用者が閉じただけのこともあるので何も言わない */ }
+    }));
+  }catch(e){
+    typing.remove();
+    addAi('<b>初動パックを作成できませんでした。</b><div style="margin-top:8px;font-size:12.5px;line-height:1.75">通信を確認して、もう一度お試しください。</div>', { rich:true });
+  }finally{
+    busy = false;
+    showTab('chat');
   }
 }
 

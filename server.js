@@ -477,6 +477,171 @@ async function generatePackPdf(hearingId, outPath) {
   }
 }
 
+/* ── 初動パック（無料）のPDF化 ──────────────────────────────
+   これまでは画面側で組んだHTMLを window.open で開いていたが、
+   スマホではポップアップが塞がれてHTMLファイルのダウンロードに落ちる。
+   端末に降りたHTMLは開きにくく、弁護士や警察に渡す形にもならない。
+   「PDFで苦戦する利用者」を助けるのが目的なので、PDFで渡す（第4-N節）。
+
+   ★画面から渡すのは【データだけ】。HTMLは受け取らない。
+     利用者が送ったHTMLをサーバーのChromeで開くと、file:// や内部アドレスを
+     読ませる攻撃が成立する。組み立ては必ずこちら側で行う。
+
+   ★できたPDFは保存しない。 TXID・アドレス・被害内容が入るため、
+     その場で返して捨てる（OCRの画像と同じ考え方）。 */
+// エスケープは既存の escHtml（下方で宣言・巻き上げで使える）を使う。二重に持たない。
+
+function packRowsHTML(results) {
+  const rs = Array.isArray(results) ? results : [];
+  if (!rs.length) {
+    return `<tr><td colspan="5" style="color:#777">（TXIDの解析結果がまだありません。「AI調査チャット」でTXIDを送信すると、ここに自動で入ります）</td></tr>`;
+  }
+  return rs.map(r => {
+    const p    = Array.isArray(r.path) ? r.path : [];
+    const dest = p.length ? p[p.length - 1] : null;
+    const ex   = [...new Set(p.filter(n => n.isExchange && n.label).map(n => n.label))];
+    const amt  = r.tokenSymbol ? `${r.tokenAmount} ${r.tokenSymbol}`
+                               : `${r.amount != null ? r.amount : ''} ${r.chain || ''}`;
+    return `<tr><td>${escHtml(r.chain || '')}</td><td class="mono">${escHtml(r.txid || '')}</td>`
+         + `<td>${escHtml(amt)}</td><td class="mono">${escHtml((dest && dest.address) || '')}</td>`
+         + `<td>${ex.length ? escHtml(ex.join('、')) + '（推定）' : '未特定'}</td></tr>`;
+  }).join('');
+}
+
+function buildInitialPackHTML(results) {
+  const now = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  const blankRow = '<tr><td><span class="fill">&nbsp;</span></td><td><span class="fill" style="min-width:420px">&nbsp;</span></td></tr>';
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
+<title>BitTo 初動パック</title><style>
+body{font-family:-apple-system,'Hiragino Kaku Gothic ProN','Noto Sans JP',Meiryo,sans-serif;color:#111;line-height:1.8;max-width:820px;margin:0 auto;padding:28px 22px;font-size:14px}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:26px 0 8px;padding-bottom:5px;border-bottom:2px solid #111}
+.meta{color:#666;font-size:12px;margin-bottom:6px}
+.note{background:#f5f5f5;border-left:3px solid #999;padding:10px 12px;font-size:12px;color:#444;margin:10px 0}
+table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12.5px}
+th,td{border:1px solid #ccc;padding:7px 8px;text-align:left;vertical-align:top}
+th{background:#f0f0f0}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;word-break:break-all}
+.fill{border-bottom:1px solid #999;display:inline-block;min-width:180px}
+ul{margin:6px 0 6px 20px;padding:0}li{margin:4px 0}
+.warn{background:#fff3f3;border:1px solid #e0a0a0;padding:12px 14px;border-radius:6px}
+.warn b{color:#b32}
+pre{background:#f7f7f7;border:1px solid #ddd;padding:12px;white-space:pre-wrap;font-family:inherit;font-size:12.5px;border-radius:5px}
+</style></head><body>
+<h1>BitTo 初動パック</h1>
+<div class="meta">作成日時：${escHtml(now)}　／　作成：BitTo（公開ブロックチェーン解析ツール）</div>
+<div class="note">本資料は、公開ブロックチェーン情報にもとづく<b>解析結果と初動の整理用テンプレート</b>です。到達取引所等は<b>推定を含みます</b>。資産の回収・返還を保証するものではありません。</div>
+<h2>1. 調査対象の記録</h2>
+<table><tr><th>チェーン</th><th>TXID</th><th>数量</th><th>最終確認アドレス</th><th>到達取引所（推定）</th></tr>${packRowsHTML(results)}</table>
+<table>
+<tr><th style="width:32%">送金日時</th><td><span class="fill">&nbsp;</span></td></tr>
+<tr><th>送金元（取引所・ウォレット）</th><td><span class="fill">&nbsp;</span></td></tr>
+<tr><th>被害額（日本円換算・概算）</th><td><span class="fill">&nbsp;</span></td></tr>
+<tr><th>相手との接触経路</th><td><span class="fill">&nbsp;</span>（SNS／マッチング／広告／電話 等）</td></tr>
+</table>
+<h2>2. 証拠保全チェックリスト</h2>
+<ul>
+<li>☐ TXID（取引ID）を控えた（途中で切れていないか確認）</li>
+<li>☐ 送金日時・数量・通貨（BTC／ETH／XRP／USDT等）を控えた</li>
+<li>☐ 送金元の取引所の出金履歴のスクリーンショット</li>
+<li>☐ 相手とのやり取り（SNS・チャット・メール）のスクリーンショット</li>
+<li>☐ 相手のサイトURL・アプリ名・口座／ウォレット情報</li>
+<li>☐ 銀行振込がある場合は振込明細（銀行・日時・金額・口座）</li>
+<li>☐ 本資料（初動パック）を保存・印刷</li>
+</ul>
+<div class="note">※ パスワード・2段階認証コード・秘密鍵・シードフレーズは<b>誰にも渡さないでください</b>。調査・確認に一切不要です。</div>
+<h2>3. 時系列メモ（警察・取引所への説明用）</h2>
+<table><tr><th style="width:22%">日時</th><th>出来事（誰から・どこで・何を言われ・いくら送ったか）</th></tr>${blankRow.repeat(6)}</table>
+<h2>4. 取引所への連絡文（テンプレート）</h2>
+<div class="note">送金元の取引所、および（判明していれば）到達先の取引所のサポート窓口へ提出してください。<b>凍結の可否は取引所の判断です。</b></div>
+<pre>件名：不正利用（詐欺被害）に関するご報告と記録保全のお願い
+
+お世話になっております。以下の送金について、詐欺被害に遭ったため報告いたします。
+可能な範囲での記録の保全と、必要なご案内をお願いいたします。
+
+■ 送金情報
+・TXID：
+・チェーン／通貨：
+・送金日時：
+・数量：
+・送金元（当方）アカウント：
+・送金先アドレス：
+
+■ 被害の経緯（概要）
+
+
+■ 依頼事項
+・上記取引に関する記録の保全
+・貴社所定の手続きのご案内
+・警察への相談を予定しており、必要書類があればご教示ください
+
+■ 連絡先
+・氏名：
+・メールアドレス：
+・電話番号：
+</pre>
+<h2>5. ⚠️ 二次被害（回収詐欺）への注意</h2>
+<div class="warn">被害後に接触してくる「回収業者」による<b>二次被害</b>が多発しています。以下は詐欺の典型的なサインです。
+<ul>
+<li><b>「返金の可能性が高い」と期待を持たせる</b></li>
+<li><b>調査に高額な費用を提示する</b></li>
+<li>電話をかけてきて、契約を急かす</li>
+<li>遠隔操作アプリの導入を求める</li>
+<li>シードフレーズ・秘密鍵・2段階認証コードを聞いてくる</li>
+<li>警察・政府機関との「特別な関係」を主張する</li>
+<li>「凍結済みだが解除費用が必要」と言う</li>
+<li>追加の費用を請求する</li>
+</ul>
+FBI・CFTCも、前払いを求める暗号資産回収サービスについて注意を呼びかけています。</div>
+<h2>6. BitToができること／できないこと</h2>
+<table><tr><th style="width:50%">できること</th><th>できないこと</th></tr>
+<tr><td>公開チェーンの資金経路の解析<br>着金先取引所・サービスの推定<br>警察・取引所への提出資料の整理<br>不正利用申告文の作成<br>資金移動の継続監視<br>相談先・必要書類の案内</td>
+<td>取引所へ凍結を命令する<br>KYC情報を強制的に取得する<br>資金の残存を保証する<br>被害資金の返還を保証する<br>強制処分を行う<br>秘密鍵で資金を取り戻す</td></tr></table>
+<div class="note">緊急・進行中の犯罪は110。緊急でない警察相談は#9110、被害届は最寄りの警察署、消費者トラブルは188、詐欺的投資・無登録業者は金融庁の相談窓口が候補です。</div>
+</body></html>`;
+}
+
+/* PDFの生成は重い（Chromiumのページを1枚開く）。連打で並ぶと他の納品まで遅れるため、
+   OCRと同じ考え方で軽く絞る。 */
+const packHits = new Map();
+function packRateOk(ip) {
+  const now = Date.now();
+  const list = (packHits.get(ip) || []).filter(t => now - t < 10 * 60 * 1000);
+  if (list.length >= 10) { packHits.set(ip, list); return false; }
+  list.push(now); packHits.set(ip, list);
+  if (packHits.size > 5000) {
+    for (const [k, v] of packHits) if (!v.some(t => now - t < 10 * 60 * 1000)) packHits.delete(k);
+  }
+  return true;
+}
+
+app.post('/api/pack/pdf', express.json({ limit: '2mb' }), async (req, res) => {
+  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip || 'unknown';
+  if (!packRateOk(ip)) return res.status(429).json({ ok: false, reason: 'rate_limited' });
+
+  const results = Array.isArray(req.body?.results) ? req.body.results.slice(0, 20) : [];
+  let page;
+  try {
+    const browser = await getPdfBrowser();
+    page = await browser.newPage();
+    // setContent なので外部への通信は起きない。テンプレートも当方のもの。
+    await page.setContent(buildInitialPackHTML(results), { waitUntil: 'load', timeout: PDF_TIMEOUT_MS });
+    const pdf = await page.pdf({
+      format: 'A4', printBackground: true,
+      margin: { top: '12mm', right: '10mm', bottom: '12mm', left: '10mm' },
+    });
+    const name = `BitTo_shodo_pack_${new Date().toISOString().slice(0, 10)}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${name}"`);
+    console.log(`[Pack] 初動パックPDF ${results.length}件分`);
+    res.end(pdf);
+  } catch (e) {
+    console.error('[Pack] PDF生成失敗:', e.message);
+    res.status(500).json({ ok: false, reason: 'pdf_failed' });
+  } finally {
+    if (page) await page.close().catch(() => {});
+  }
+});
+
 async function loadReport(reportId) {
   if (reportCache.has(reportId)) return reportCache.get(reportId).html;
   try {
