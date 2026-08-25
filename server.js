@@ -2191,9 +2191,23 @@ async function getNextTxBTC(addr, afterTime) {
    同じ取引の中で複数の入金がまとまることがあるため。 */
 function pickNextHop(candidates, amountIn) {
   if (Number.isFinite(amountIn) && amountIn > 0) {
+    const ok = c => Number.isFinite(c.amount);
+    /* ★同じ資金が動くなら、手数料の分だけ減ることはあっても増えることはない。
+       増えている＝別の資金が混ざっている。まず「同額以下」から選ぶ。
+
+       実例：B地点で 2.9076808 ETH が入り、候補が2つあった。
+         2.9123（差0.0046・増えている）← 単純な近さで選ぶとこちら
+         2.9000（差0.0077・減っている）← 正解。ここからブリッジへ渡っていた
+       近さだけで選ぶと、より近い方＝別の資金を掴む。 */
+    const feeOnly = candidates
+      .filter(c => ok(c) && c.amount <= amountIn * 1.000001 && c.amount >= amountIn * 0.95)
+      .sort((a, b) => (amountIn - a.amount) - (amountIn - b.amount));
+    if (feeOnly.length) { feeOnly[0]._matched = true; return feeOnly[0]; }
+    /* 同額以下が無い場合のみ、わずかに増えている分も見る。
+       同じ取引の中で複数の入金がまとまることがあるため。 */
     const tol = Math.max(amountIn * 0.02, 1e-9);
     const near = candidates
-      .filter(c => Number.isFinite(c.amount) && Math.abs(c.amount - amountIn) <= tol)
+      .filter(c => ok(c) && Math.abs(c.amount - amountIn) <= tol)
       .sort((a, b) => Math.abs(a.amount - amountIn) - Math.abs(b.amount - amountIn));
     if (near.length) { near[0]._matched = true; return near[0]; }
   }
