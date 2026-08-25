@@ -1258,6 +1258,96 @@ async function lookupProfileAPI(addr, chain) {
    有料レポートでのみ引く（費用を売上にひもづける）。無料調査は従来どおり
    「匿名化・スワップ経由」「ブリッジ・DEX経由」の検出だけ。
    ※ このエンドポイントだけ v3。MISTTRACK_BASE は v1 なので差し替える。 */
+/* ── 対処行動（address_action）と 住所概要（address_overview） ──────
+   契約している7エンドポイントのうち、この2つを使っていなかった。
+
+   ★対処行動は「現金化されたか」に答えられる。
+     被害者が「どこへ行ったか」の次に知りたいのがここ。
+     まだ換金されていなければ凍結に意味があり、済んでいれば別の手を打つ。
+   ★住所概要は残高と累計の受払い。「その口座に今も残っているか」を示せる。
+     凍結要請の緊急度を伝える材料になる。
+
+   どちらも有料レポートのみ。無料に付けると有料との差が無くなる。 */
+const MISTTRACK_ACTION_FREE = Number(process.env.MISTTRACK_ACTION_FREE ?? 0);
+const MISTTRACK_ACTION_PAID = Number(process.env.MISTTRACK_ACTION_PAID ?? 1);
+const MISTTRACK_OVERVIEW_FREE = Number(process.env.MISTTRACK_OVERVIEW_FREE ?? 0);
+const MISTTRACK_OVERVIEW_PAID = Number(process.env.MISTTRACK_OVERVIEW_PAID ?? 1);
+const ACTION_CACHE_FILE   = path.join(DATA_DIR, 'action-cache.json');
+const OVERVIEW_CACHE_FILE = path.join(DATA_DIR, 'overview-cache.json');
+const actionCache   = new Map();
+const overviewCache = new Map();
+for (const [file, map, name] of [[ACTION_CACHE_FILE, actionCache, 'Action'],
+                                 [OVERVIEW_CACHE_FILE, overviewCache, 'Overview']]) {
+  try {
+    for (const [k, v] of Object.entries(JSON.parse(fs.readFileSync(file, 'utf8')))) map.set(k, v);
+    console.log(`[${name}] キャッシュ ${map.size}件を読み込み`);
+  } catch { /* 初回は無い */ }
+}
+const saveActionCache   = () => fsp.writeFile(ACTION_CACHE_FILE,   JSON.stringify(Object.fromEntries(actionCache)),   'utf8').catch(() => {});
+const saveOverviewCache = () => fsp.writeFile(OVERVIEW_CACHE_FILE, JSON.stringify(Object.fromEntries(overviewCache)), 'utf8').catch(() => {});
+
+/* 応答の形はドキュメントと実データで揺れることがあるので、
+   在りそうな名前を順に見て、無ければ黙って諦める（落とさない）。 */
+const num = v => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+function pickActionFromResponse(j) {
+  const d = (j && (j.data || j.result)) || j || {};
+  const out = {};
+  // 現金化・入出金の傾向。名前の候補を広めに拾う
+  const dep = num(d.deposit_amount ?? d.total_deposit ?? d.deposit);
+  const wdr = num(d.withdraw_amount ?? d.total_withdraw ?? d.withdraw);
+  if (dep != null) out.入金額 = dep;
+  if (wdr != null) out.出金額 = wdr;
+  const plat = d.platform || d.platforms || d.exchange || d.cashout;
+  if (Array.isArray(plat) && plat.length) out.利用先 = plat.map(p => (typeof p === 'string' ? p : p.name || p.platform)).filter(Boolean).slice(0, 8);
+  const first = d.first_seen || d.first_tx_time || d.first_time;
+  const last  = d.last_seen  || d.last_tx_time  || d.last_time;
+  if (first) out.最初の活動 = String(first);
+  if (last)  out.最後の活動 = String(last);
+  return Object.keys(out).length ? out : null;
+}
+function pickOverviewFromResponse(j) {
+  const d = (j && (j.data || j.result)) || j || {};
+  const out = {};
+  const bal = num(d.balance);
+  const rec = num(d.received_amount ?? d.total_received ?? d.received);
+  const snt = num(d.spent_amount ?? d.total_spent ?? d.sent_amount ?? d.sent);
+  const cnt = num(d.txs_count ?? d.tx_count ?? d.transaction_count);
+  if (bal != null) out.残高 = bal;
+  if (rec != null) out.累計受取 = rec;
+  if (snt != null) out.累計送金 = snt;
+  if (cnt != null) out.取引回数 = cnt;
+  const first = d.first_seen || d.first_tx_time;
+  const last  = d.last_seen  || d.last_tx_time;
+  if (first) out.最初の活動 = String(first);
+  if (last)  out.最後の活動 = String(last);
+  return Object.keys(out).length ? out : null;
+}
+async function lookupMistTrackSimple(kind, addr, chain) {
+  const conf = kind === 'action'
+    ? { path: 'address_action',   cache: actionCache,   save: saveActionCache,   pick: pickActionFromResponse,   tag: 'Action' }
+    : { path: 'address_overview', cache: overviewCache, save: saveOverviewCache, pick: pickOverviewFromResponse, tag: 'Overview' };
+  if (!MISTTRACK_KEY || !misttrackSupports(chain)) return null;
+  const lo = addr.toLowerCase();
+  if (conf.cache.has(lo)) return conf.cache.get(lo);
+  try {
+    const coin = MISTTRACK_COIN[chain] || String(chain).toUpperCase();
+    const res = await fetchT(`${MISTTRACK_BASE}/${conf.path}?coin=${coin}&address=${encodeURIComponent(addr)}&api_key=${MISTTRACK_KEY}`);
+    const j = await res.json();
+    if (j && j.success === false) {
+      console.warn(`[${conf.tag}] 失敗応答:`, scrubKey(JSON.stringify(j).slice(0, 160)));
+      return null;   // キーの誤りや上限。キャッシュしない
+    }
+    const picked = conf.pick(j);
+    conf.cache.set(lo, picked);
+    conf.save();
+    console.log(`[${conf.tag}] ${addr.slice(0, 10)}... → ${picked ? Object.keys(picked).join('・') : '該当なし'}`);
+    return picked;
+  } catch (e) {
+    console.error(`[${conf.tag}] 照会失敗:`, addr.slice(0, 12), scrubKey(e.message));
+    return null;
+  }
+}
+
 const MISTTRACK_RISK_FREE = Number(process.env.MISTTRACK_RISK_FREE ?? 0);
 const MISTTRACK_RISK_PAID = Number(process.env.MISTTRACK_RISK_PAID ?? 1);
 const RISK_CACHE_FILE = path.join(DATA_DIR, 'risk-cache.json');
@@ -2000,6 +2090,23 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
       const rk = await lookupRiskAPI(target.address, chain).catch(() => null);
       if (rk) target.risk = rk;
     }
+  }
+
+  /* 「現金化されたか」と「今も残っているか」。
+     どちらも犯人が指定してきたアドレス（最初の送金先）について引く。
+     被害者が最も知りたい2点で、報告書の価値に直結する。 */
+  for (const [kind, budget, field] of [
+    ['action',   opts.paid ? MISTTRACK_ACTION_PAID   : MISTTRACK_ACTION_FREE,   'action'],
+    ['overview', opts.paid ? MISTTRACK_OVERVIEW_PAID : MISTTRACK_OVERVIEW_FREE, 'overview'],
+  ]) {
+    if (!(budget > 0) || !MISTTRACK_KEY || !misttrackSupports(chain)) continue;
+    if (!target || !target.address || knownExchange || target.isVia || target.isToken) continue;
+    const cache = kind === 'action' ? actionCache : overviewCache;
+    const known = cache.has(target.address.toLowerCase());
+    if (!known && !labelQuotaOk(opts.paid, opts.device)) continue;
+    if (!known) labelQuotaUse(opts.device);
+    const v = await lookupMistTrackSimple(kind, target.address, chain).catch(() => null);
+    if (v) target[field] = v;
   }
 
   // しきい値を決め直すための材料を残す（外部APIは使わない）
@@ -4008,6 +4115,39 @@ ${r.txid}
             ${(pf.relation.ens || []).length || (pf.relation.twitter || []).length ? 'ENS名やSNSアカウントは、捜査機関が発信者情報開示を検討する際の手がかりになり得ます。' : ''}</p>
           </div>`;
         })()}
+        ${(() => {
+          /* 「現金化されたか」と「今も残っているか」。
+             被害者が最も知りたい2点。凍結要請を出す意味があるかの判断材料になる。 */
+          const an = (r.path || []).find(p => p && (p.action || p.overview));
+          if (!an) return '';
+          const ac = an.action || {}, ov = an.overview || {};
+          const rows = [];
+          if (ov.残高      != null) rows.push(['現在の残高', `${ov.残高} ${escHtml(r.chain || '')}`]);
+          if (ov.累計受取  != null) rows.push(['これまでに受け取った合計', `${ov.累計受取} ${escHtml(r.chain || '')}`]);
+          if (ov.累計送金  != null) rows.push(['これまでに送り出した合計', `${ov.累計送金} ${escHtml(r.chain || '')}`]);
+          if (ov.取引回数  != null) rows.push(['取引回数', `${ov.取引回数} 回`]);
+          if (ac.入金額    != null) rows.push(['取引所等への入金額', String(ac.入金額)]);
+          if (ac.出金額    != null) rows.push(['取引所等からの出金額', String(ac.出金額)]);
+          if (Array.isArray(ac.利用先) && ac.利用先.length) rows.push(['利用が確認されたサービス', escHtml(ac.利用先.join('、'))]);
+          const 活動 = ov.最後の活動 || ac.最後の活動;
+          if (活動) rows.push(['最後に動いた日時', escHtml(String(活動))]);
+          if (!rows.length) return '';
+          const 残っている = ov.残高 != null && ov.残高 > 0;
+          return `<div class="ref-box">
+            <div class="ref-h">送金先アドレスの状況（資金は動かされたか）</div>
+            <p class="ref-p">お客様が最初に送金されたアドレス（<span class="mono">${escHtml(an.address || '')}</span>）の
+            現在の状況です。<strong>資金がまだ残っているかどうかは、凍結を要請する意味があるかの判断材料になります。</strong></p>
+            <table class="info-table">
+              ${rows.map(([k, v]) => `<tr><th style="width:44%">${k}</th><td>${v}</td></tr>`).join('')}
+            </table>
+            <p class="ref-p" style="margin-top:10px">${残っている
+              ? '<strong>このアドレスには残高が残っています。</strong>取引所の管理下にあるアドレスであれば、凍結が間に合う可能性があります。'
+              : '<strong>このアドレスの残高はほぼ残っていません。</strong>資金は既に別のアドレスへ移されたか、換金された可能性があります。ただし移動先の追跡は本資料の経路に記載しています。'}</p>
+            <p class="ref-warn">これらは外部の解析事業者が公開情報から集計した数値です。
+            取引所の内部記録とは一致しない場合があります。</p>
+          </div>`;
+        })()}
+
         ${(() => {
           /* AMLリスクスコア。数値だけを大きく出すと独り歩きするので、
              必ず「何がスコアの理由か」と「何を意味しないか」を添える。 */
