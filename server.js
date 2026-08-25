@@ -2225,6 +2225,44 @@ async function tronTxInfo(txid) {
 
 const labelFetchCache = new Map(); // addr → label（二重取得防止）
 
+/* バイトコードに埋まった契約名を拾う。
+   `revert("TransitAggregateBridgeV5: xxx")` のような書き方をしている契約から、
+   コロンの前の識別子を取る。
+
+   ★誤検出を避けるため、条件を厳しくする。
+     ・英字で始まり、英数字だけ
+     ・6文字以上、40文字以内
+     ・大文字を含む（Solidityの契約名の慣習）
+     ・よくあるエラーメッセージの語（Ownable, SafeMath 等）は除く
+   拾えなければ黙って null。無いものを名乗らせない。 */
+/* ★ライブラリ名を除外しないと、そちらばかり拾う。実データで確認した例：
+     TransitSwapRouterV5   TransferHelper×6 / Ownable×2 / SafeCast×2 / ReentrancyGuard×1
+     未公開のブリッジ       TransferHelper×3 / Ownable×2 / TransitAggregateBridgeV5×1
+   本名は1回しか出てこないことがあるので、回数で選んではいけない。
+   ライブラリを除いて残ったものを採り、残らなければ null（無いものを名乗らせない）。 */
+const BYTECODE_NAME_SKIP = /^(ownable|safemath|safecast|safeerc20|safetransfer|transferhelper|address|strings|context|initializable|pausable|reentrancyguard|erc20|erc721|erc1155|erc1967|proxy|uups|beacon|eip712|ecdsa|merkle|counters|math|signedmath|clones|create2|multicall|accesscontrol|governor|votes|nonces|permit|pair|library|helper|util|utils)/i;
+function nameFromBytecode(codeHex) {
+  const hex = String(codeHex || '').replace(/^0x/, '');
+  if (hex.length < 200) return null;                 // コントラクトでない
+  let s = '';
+  for (let i = 0; i + 1 < hex.length; i += 2) {
+    const c = parseInt(hex.substr(i, 2), 16);
+    s += (c >= 32 && c < 127) ? String.fromCharCode(c) : '\n';
+  }
+  // 「名前:」の形を優先して探す（Solidityのrevert文の慣習）
+  const cands = [];
+  /* 直前が識別子の一部なら、名前の途中を拾っている（"Has-Hyphen" から "Hyphen" 等）。
+     そういう断片を名前として出すと、実在しないサービス名になる。 */
+  for (const m of s.matchAll(/(?<![A-Za-z0-9_\-])([A-Za-z][A-Za-z0-9]{5,39}):/g)) cands.push(m[1]);
+  for (const c of cands) {
+    if (BYTECODE_NAME_SKIP.test(c)) continue;
+    if (!/[A-Z]/.test(c)) continue;                  // 大文字を含まないものは除く
+    if (!/[a-z]/.test(c)) continue;                  // 全部大文字も除く（定数名など）
+    return c;
+  }
+  return null;
+}
+
 async function fetchAddressLabel(addr, chain) {
   const key = addr.toLowerCase();
   if (labelFetchCache.has(key)) return labelFetchCache.get(key);
@@ -2248,6 +2286,29 @@ async function fetchAddressLabel(addr, chain) {
       if (name && name.length > 2 && !['Vyper_contract','0x','_'].some(s => name.startsWith(s))) {
         label = name;
         console.log(`[ExLabel] Etherscan契約名: ${addr.slice(0,10)}... → "${name}"`);
+      }
+    } catch {}
+  }
+
+  /* ②-b ソースが未公開でも、バイトコードに名前が埋まっていることがある。
+     Solidity は文字列リテラルをそのまま持つため、`revert("Xxx: ...")` のような
+     書き方をしている契約は名前が読める。
+
+     実例：TransitSwap のブリッジ本体2つはソース未公開で②も③も名前を返さず、
+     経路に「未特定」と出ていた。バイトコードには
+     "TransitAggregateBridgeV5:" が埋まっていた。
+     ブリッジやルーターは自分の名前をエラーメッセージに入れる作りが多く、
+     この一段で拾える範囲が広がる。
+
+     Etherscanの無料APIで、MistTrackの回数を使わずに済むのも大きい。 */
+  if (!label && chain === 'eth' && ETHERSCAN_KEY) {
+    try {
+      const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=proxy`
+        + `&action=eth_getCode&address=${addr}&tag=latest&apikey=${ETHERSCAN_KEY}`);
+      const found = nameFromBytecode(j.result || '');
+      if (found) {
+        label = found;
+        console.log(`[ExLabel] バイトコードから契約名: ${addr.slice(0, 10)}... → "${found}"`);
       }
     } catch {}
   }
