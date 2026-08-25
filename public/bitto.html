@@ -616,6 +616,9 @@ function nodeBadge(n){
   if (n.cpInferred)                   return `<span class="badge b-guess">取引先から推定${n.cpPercent != null ? "（" + Math.round(n.cpPercent) + "%）" : ""}</span>`;
   if (n.isExchange && n.label)        return `<span class="badge b-known">判明</span>`;
   if (n.isExchange)                   return `<span class="badge b-guess">推定</span>`;
+  /* このアドレスでトークンに換えられた場合。ここから先は通貨が変わるので、
+     「別の資金では」と誤解されないよう、換わった地点を出す。 */
+  if (n.swapTo)                       return `<span class="badge b-via">🔁 ここで ${esc(n.swapTo)} に交換</span>`;
   return `<span class="badge b-unk">未特定</span>`;
 }
 /* 取引所ノードの強調クラス／アイコン（到達先を目立たせる） */

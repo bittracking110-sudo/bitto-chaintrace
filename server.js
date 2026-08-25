@@ -2344,6 +2344,73 @@ async function listNextCandidatesETH(addr, afterTime, limit = 3) {
   }
 }
 
+/* ── トークン（ERC-20）になった資金を追う ──────────────────────
+   ETHをUSDTにスワップされると、これまでは追跡がそこで止まっていた。
+   USDTの「コントラクト」を経路の一点として扱い、取引数が桁違いに多いため
+   truncateAfterVia で打ち切られていた（実機で「USDTで止まる」と報告あり）。
+
+   ★これは実態の取り違えだった。
+     USDTのコントラクトに資金が入るわけではない。スワップで起きるのは
+     「あるアドレスがUSDTを持つようになった」ことだけで、
+     そのアドレスのERC-20送金を追えば、資金はそのまま辿れる。
+     ミキサーと違って匿名化されていない。
+
+   暗号資産詐欺の資金は最終的にUSDTへ化けることが多いので、ここが切れると
+   肝心の到達先（＝凍結を頼む相手）が分からないまま終わる。 */
+
+/* スワップの取引から「どのトークンが誰にいくら渡ったか」を読む。 */
+async function getSwapTokenOutETH(txHash, holderAddr) {
+  try {
+    const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx`
+      + `&address=${holderAddr}&page=1&offset=100&sort=desc&apikey=${ETHERSCAN_KEY}`);
+    const list = Array.isArray(j.result) ? j.result : [];
+    const hit = list.find(t => t.hash?.toLowerCase() === String(txHash).toLowerCase()
+                            && t.to?.toLowerCase() === String(holderAddr).toLowerCase());
+    if (!hit) return null;
+    return {
+      contract: hit.contractAddress,
+      symbol:   hit.tokenSymbol || 'TOKEN',
+      decimals: parseInt(hit.tokenDecimal) || 18,
+      amount:   parseFloat(hit.value) / Math.pow(10, parseInt(hit.tokenDecimal) || 18),
+    };
+  } catch (e) { console.error('[TokenOut] 取得失敗:', e.message); return null; }
+}
+
+/* トークンを持っているアドレスから、次にそのトークンが出ていった先を探す。
+   選び方はETHのときと同じ（取引所優先 → 次に金額最大）。 */
+async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18) {
+  try {
+    const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
+    const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx`
+      + `&contractaddress=${contract}&address=${addr}&page=1&offset=200&sort=asc&apikey=${ETHERSCAN_KEY}`);
+    const list = Array.isArray(j.result) ? j.result : [];
+    const candidates = [];
+    for (const t of list) {
+      const txMs = parseInt(t.timeStamp) * 1000;
+      if (txMs < refMs) continue;                                    // 入金より前は対象外
+      if (String(t.from).toLowerCase() !== String(addr).toLowerCase()) continue;  // 出ていく分だけ
+      if (!t.to) continue;
+      const db  = getLabel(t.to);
+      const lbl = db.label || '';
+      const isTok = db.type === 'token' || isTokenContract(lbl);
+      const isVia = isViaService(lbl);
+      candidates.push({
+        addr: t.to, amount: parseFloat(t.value) / Math.pow(10, decimals),
+        time: new Date(txMs).toISOString(), txHash: t.hash, label: lbl,
+        isExchange: !isTok && !isVia && (db.type === 'exchange' || isExchange(lbl)),
+        token: t.tokenSymbol || '', txMs,
+      });
+    }
+    if (!candidates.length) return null;
+    const exCand  = candidates.find(c => c.isExchange);
+    const byAmount = [...candidates].sort((a, b) => b.amount - a.amount);
+    const chosen = exCand || byAmount[0];
+    chosen._siblings = candidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
+    console.log(`[HOP] トークン送金先: ${chosen.addr} ${chosen.amount} ${chosen.token} candidates=${candidates.length}`);
+    return chosen;
+  } catch (e) { console.error('[HOP] tokentx:', e.message); return null; }
+}
+
 async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = Date.now() + TRACE_BUDGET_MS) {
   const hops = [];
   let currentAddr = startAddr;
@@ -2353,12 +2420,19 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
   let incomingHash = null;               // いま居る住所へ資金を運んできた取引
   let prevAddr = null;                   // その1つ前の住所
   let currentIsVia = false;              // いま居るのが交換・橋渡しのコントラクトか
+  let token = null;                      // 資金がトークンに化けたら {contract,symbol,decimals}
   for (let i = 0; i < maxHops; i++) {
     if (Date.now() > deadline) { console.log(`[traceHops] 時間予算に達したため打ち切り（${i}ホップで部分結果を返す）`); break; }
     let next = null;
+    /* 資金がトークンになっている間は、そのトークンの送金だけを追う。
+       ETHの送金を見ても、もうそこに資金は流れていない。 */
+    if (chain === 'eth' && token) {
+      next = await getNextTokenTxETH(currentAddr, currentTime, token.contract, token.decimals);
+      if (!next) { console.log(`[traceHops] ${token.symbol} はこのアドレスから動いていない`); break; }
+    }
     /* 交換・橋渡しの中に居るときは、次の送金を探しに行かない。
        同じ取引の中の出金を読む方が確実で、他人の資金を拾わない。 */
-    if (chain === 'eth' && currentIsVia && incomingHash) {
+    if (!next && chain === 'eth' && currentIsVia && incomingHash) {
       next = await getSwapOutputETH(currentAddr, incomingHash, prevAddr);
     }
     if (!next) {
@@ -2373,16 +2447,38 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
     const db  = getLabel(next.addr);
     const fetchedLabel = await fetchAddressLabel(next.addr, chain);
     const lbl = fetchedLabel || db.label || next.label || '';
-    const isTok = db.type === 'token' || isTokenContract(lbl);
+    let isTok = db.type === 'token' || isTokenContract(lbl);
     const isVia = isViaService(lbl);
     const isEx = !isTok && !isVia && (db.type === 'exchange' || isExchange(lbl));
+
+    /* ★次がトークンのコントラクトなら、そこへ「入った」のではない。
+       いま居るアドレスがそのトークンを持つようになっただけなので、
+       コントラクトを経路に足さず、トークンの追跡に切り替えて同じ地点から続ける。
+       これをしないと USDT で追跡が止まる。 */
+    if (chain === 'eth' && isTok && !token) {
+      const t = await getSwapTokenOutETH(next.txHash, currentAddr);
+      if (t) {
+        token = t;
+        const holder = hops.length ? hops[hops.length - 1] : null;
+        if (holder) { holder.swapTo = t.symbol; holder.token = t.symbol; }
+        console.log(`[traceHops] ${t.symbol} に交換された（${t.amount}）。ここからは ${t.symbol} を追う`);
+        visited.delete(next.addr.toLowerCase());   // コントラクトは通過点なので訪問済みにしない
+        currentIsVia = false;
+        continue;                                   // 住所は変えず、次の周回でトークンを追う
+      }
+      // 何のトークンか読めなければ、従来どおりの扱いに落とす
+    }
+
     // 同時送金先（siblings）を保存
     const siblings = (next._siblings || []).map(s => ({
       address: s.addr, label: s.label || '', amount: s.amount, token: s.token,
       txHash: s.txHash || '',   // これを渡せば、その枝をそのまま調べられる
     }));
     console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... label="${lbl}" exchange=${isEx} siblings=${siblings.length}`);
-    hops.push({ address: next.addr, label: lbl, amount: next.amount, token: next.token, isExchange: isEx, isToken: isTok, isVia, sameTx: !!next._sameTx, time: next.time, txHash: next.txHash, siblings });
+    hops.push({ address: next.addr, label: lbl, amount: next.amount,
+      token: next.token || (token ? token.symbol : undefined),
+      isExchange: isEx, isToken: isTok, isVia, sameTx: !!next._sameTx,
+      time: next.time, txHash: next.txHash, siblings });
     if (isEx) {
       exCount++;
       console.log(`[traceHops] 取引所到達(${exCount}件目): ${lbl}`);
@@ -3343,6 +3439,9 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       else if (p.isExchange && p.inferred) { cls = 'exchange'; icon = '★'; roleLabel = `🏦 取引所候補（${i}次先・推定）`; }
       else if (p.isExchange) { cls = 'exchange'; icon = '★'; roleLabel = `🏦 取引所到達（${i}次先）`; }
       else if (p.role === 'internal') { cls = 'relay'; icon = '◆'; roleLabel = `内部コール（${i}次先）`; }
+      /* このアドレスでトークンに換えられた場合。ここから先は通貨が変わるので、
+         読み手が「別の資金では」と誤解しないよう、換わった地点を明示する。 */
+      else if (p.swapTo)     { cls = 'relay';    icon = '🔁'; roleLabel = `${i}次先：ここで ${p.swapTo} に交換`; }
       else                   { cls = 'relay';    icon = '◆'; roleLabel = `中継アドレス（${i}次先）`; }
 
       const inferredBadge = p.inferred ? `<span class="badge" style="background:#d97706">推定</span>` : '';
