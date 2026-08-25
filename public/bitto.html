@@ -618,6 +618,29 @@ const setBubble = (row, html) => {
    確定として出すと無関係の方に凍結要請が飛びかねないが、
    何も出さないと利用者はいつまでも到達先に辿り着けない。
    確定と参考を分けて両方見せ、判断は読み手に委ねる。 */
+/* ブリッジで止まった場合の説明。
+   資金が消えたのではなく、別のチェーンへ渡っている。
+   そしてブリッジ運営者は取引所と同じく記録を持つ照会先になる。
+   「他のツールで調べてください」では被害者の助けにならない。 */
+function bridgeStopHTML(path){
+  const b = (path || []).find(n => n.traceStop && isBridgeLike(n));
+  if (!b) return '';
+  return `<div class="card" style="border-color:rgba(96,165,250,.4)">
+    <h4 style="color:#93c5fd">この地点で、別のチェーンへ渡った可能性があります</h4>
+    <div class="note" style="margin-top:0">
+      <b>${esc(b.label || 'このコントラクト')}</b> は、チェーンをまたいで資産を移す仕組み（ブリッジ）です。<br>
+      ブリッジは自社の資金プールから移転先へ払い出すため、
+      <b>ブロックチェーン上に移転元と移転先を結ぶ記録が残りません。</b>
+      公開情報だけでは、この先を追うことができません。<br><br>
+      <b>ただし、資金が消えたわけではありません。</b>
+      ブリッジの運営者は「いつ・どのチェーンの・どのアドレスへ払い出したか」の記録を持っています。
+      <b>取引所と同じく、警察・弁護士を通じた照会の対象になります。</b><br>
+      初動パックにこの地点の情報が入りますので、そのままご相談にお使いください。<br><br>
+      <span style="font-size:11.5px">※ 移転先のアドレスが判明した場合は、そのアドレスを送信いただければ、その先を追跡できます。</span>
+    </div>
+  </div>`;
+}
+
 function refTraceHTML(path){
   const sn = (path || []).find(n => n.referenceTrace);
   if (!sn) return '';
@@ -841,6 +864,7 @@ function resultCard(results){
     <div class="card"><h4>資金フロー（概要）${results.length>1 ? ` ${i+1}/${results.length}` : ''} — ${esc(r.chain)}</h4>
       ${flowHTML(p)}
       ${ex.length ? `<div class="note">到達した取引所：${esc(ex.join('、'))}</div>` : ''}
+      ${bridgeStopHTML(p)}
       ${refTraceHTML(p)}
       ${profileHTML(p)}
       ${cpHTML(p)}

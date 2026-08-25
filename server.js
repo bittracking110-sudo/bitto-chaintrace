@@ -3891,7 +3891,27 @@ ${r.txid}
 
         <h3>📍 送金経路詳細</h3>
         <div class="flow-map">${flowNodes}</div>
-        ${(r.path || []).some(p => p.traceStop) ? `<p class="flow-note" style="border-left:3px solid var(--r-accent);padding-left:10px">
+        ${(() => {
+          /* ブリッジで止まった場合は、事情が違うので別に書く。
+             資金が消えたのではなく、別のチェーンへ渡っている。
+             そしてブリッジ運営者は、取引所と同じく記録を持つ照会先になる。
+             「他のツールで調べてください」では被害者の助けにならない。 */
+          const b = (r.path || []).find(p => p.traceStop && (p.isVia || isViaService(p.label)));
+          if (!b) return '';
+          return `<p class="flow-note" style="border-left:3px solid var(--r-accent);padding-left:10px">
+        <strong>■ この地点で、資金は別のチェーンへ渡った可能性があります。</strong><br>
+        <strong>${escHtml(b.label || 'このコントラクト')}</strong> は、チェーンをまたいで資産を移す仕組み（ブリッジ）です。
+        ブリッジは自社の資金プールから移転先チェーンへ払い出すため、
+        <strong>ブロックチェーン上に移転元と移転先を結ぶ記録が残りません。</strong>
+        公開情報だけでは、この先を追うことができません。<br><br>
+        <strong>ただし、資金が消えたわけではありません。</strong>
+        ブリッジの運営者は「いつ・どのチェーンの・どのアドレスへ払い出したか」の記録を保持しています。
+        <strong>取引所と同じく、警察・弁護士を通じた照会の対象になります。</strong>
+        本資料の該当箇所（送金日時・数量・当該コントラクトのアドレス）を添えてご相談ください。<br>
+        <span style="font-size:0.9em">※ 移転先のアドレスが判明した場合は、そのアドレスから改めて調査すると、その先を追跡できます。</span>
+        </p>`;
+        })()}
+        ${(r.path || []).some(p => p.traceStop && !p.isVia && !isViaService(p.label)) ? `<p class="flow-note" style="border-left:3px solid var(--r-accent);padding-left:10px">
         <strong>■ この地点から先は、同一の資金と特定できないため追跡を終了しています。</strong><br>
         交換（DEX）や橋渡し（ブリッジ）のコントラクトには、多数の利用者の資金がまとめて集まり、
         同時に多くの送金が出ていきます。そのため「次に出ていった送金」をたどっても、
