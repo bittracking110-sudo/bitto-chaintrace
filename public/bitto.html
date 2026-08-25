@@ -1206,7 +1206,14 @@ function renderHistory(){
     el.innerHTML = `<h3 class="vh">解析履歴</h3><div class="vempty">まだ解析履歴がありません。<br>「AI調査チャット」でTXIDを送信すると、ここに残ります。</div>`;
     return;
   }
-  el.innerHTML = `<h3 class="vh">解析履歴</h3>` + list.map(h => `
+  /* 履歴はこの端末のブラウザにしか無い。
+     アプリ内で開いたブラウザは閉じると中身を消すことがあり、
+     「履歴が全部消えた」という誤解につながる。先に断っておく。 */
+  el.innerHTML = `<h3 class="vh">解析履歴</h3>
+    <div class="li-d" style="margin:-4px 0 12px;line-height:1.7">
+      履歴はこの端末のブラウザに保存されます。<b>他のアプリから開いたブラウザでは、閉じると消えることがあります。</b><br>
+      残しておきたい調査は、TXIDを控えるか初動パックを保存してください。
+    </div>` + list.map(h => `
     <div class="litem" data-tx="${esc(h.txid)}">
       <div class="li-t">${esc(h.chain)}　${esc(String(h.txid).slice(0,10))}…${esc(String(h.txid).slice(-6))}</div>
       <div class="li-d">${new Date(h.at).toLocaleString('ja-JP')}${h.ex ? '　🏦 ' + esc(h.ex) : ''}</div>
