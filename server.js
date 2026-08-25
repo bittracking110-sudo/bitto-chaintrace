@@ -2411,7 +2411,7 @@ async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18) {
   } catch (e) { console.error('[HOP] tokentx:', e.message); return null; }
 }
 
-async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = Date.now() + TRACE_BUDGET_MS) {
+async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = Date.now() + TRACE_BUDGET_MS, startToken = null) {
   const hops = [];
   let currentAddr = startAddr;
   let currentTime = startTime;
@@ -2420,7 +2420,8 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
   let incomingHash = null;               // いま居る住所へ資金を運んできた取引
   let prevAddr = null;                   // その1つ前の住所
   let currentIsVia = false;              // いま居るのが交換・橋渡しのコントラクトか
-  let token = null;                      // 資金がトークンに化けたら {contract,symbol,decimals}
+  let token = startToken;                // 資金がトークンなら {contract,symbol,decimals}
+  if (token) console.log(`[traceHops] ${token.symbol} として追跡を開始する`);
   for (let i = 0; i < maxHops; i++) {
     if (Date.now() > deadline) { console.log(`[traceHops] 時間予算に達したため打ち切り（${i}ホップで部分結果を返す）`); break; }
     let next = null;
@@ -2587,7 +2588,10 @@ async function investigateETH(hash) {
   let tokenSymbol = null;
   let tokenAmount = 0;
   let tokenRecipient = null;
-  if (parseFloat(tx.value) === 0 && tx.block_id) {
+  let tokenCtx = null;              // 資金がトークンなら、その先も同じトークンで追う
+  /* ETHの送金額が0＝トークンの送金。宛先がトークンの契約でも同じ。
+     スワップ（ETHを送ってトークンを受け取る）も拾えるよう、両方を条件にする。 */
+  if ((parseFloat(tx.value) === 0 || isRecipToken) && tx.block_id) {
     try {
       const etUrl = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${tx.sender}&startblock=${tx.block_id}&endblock=${tx.block_id}&sort=asc&apikey=${ETHERSCAN_KEY}`;
       const etR = await fetchT(etUrl);
@@ -2600,14 +2604,23 @@ async function investigateETH(hash) {
         tokenAmount = parseFloat(matchTx.value) / Math.pow(10, dec);
         tokenRecipient = matchTx.to;
         console.log(`[ETH] ERC-20検出: ${tokenAmount} ${tokenSymbol} → ${tokenRecipient}`);
+        tokenCtx = { contract: matchTx.contractAddress, symbol: tokenSymbol, decimals: dec };
         // トークン受取人がpath未登録なら追加
         if (tokenRecipient && !path.some(p => p.address?.toLowerCase() === tokenRecipient.toLowerCase())) {
           const trDb  = getLabel(tokenRecipient);
           const trLbl = await fetchAddressLabel(tokenRecipient, 'eth').catch(() => '') || trDb.label || '';
           const trIsEx = trDb.type === 'exchange' || isExchange(trLbl);
           path.push({ address: tokenRecipient, label: trLbl, role: 'token_recipient', isExchange: trIsEx, amount: tokenAmount, token: tokenSymbol });
-          // トークンに変わった時点を「スワップ」として示す（ETHで送ったのにUSDTが出てくる等）
-          if (isRecipToken) { const tn = path.find(p => p.address?.toLowerCase() === tx.recipient?.toLowerCase()); if (tn) tn.swapTo = tokenSymbol; }
+          /* ★トークンのコントラクトは経路から外す。
+             USDTを送るとき、宛先はUSDTの契約になるが、そこに資金が置かれるわけではない。
+             実際の受取人が分かった以上、契約を経路に残すと
+             「Tether USD に到達した」という誤った読み方になるうえ、
+             取引数が桁違いに多いため truncateAfterVia が
+             その後ろ（＝本当の受取人）ごと切り落としてしまう。 */
+          if (isRecipToken) {
+            const ci = path.findIndex(p => p.address?.toLowerCase() === tx.recipient?.toLowerCase());
+            if (ci > 0) { path.splice(ci, 1); console.log(`[ETH] ${tokenSymbol}の契約を経路から外した（送金の手段であって到達先ではない）`); }
+          }
           if (trIsEx) exchanges.push({ name: trLbl, address: tokenRecipient, amount: tokenAmount });
         }
       }
@@ -2617,7 +2630,9 @@ async function investigateETH(hash) {
   // 直接送金先が取引所でない場合 → 送金先からホップ追跡
   const traceFrom = tokenRecipient || tx.recipient;
   if (!isRecipEx && !exchanges.length) {
-    const hops = await traceHops(traceFrom, tx.time, 'eth', 10, Date.now() + TRACE_BUDGET_MS);
+    /* 資金がトークンなら、その旨を渡す。渡さないとETHの送金を探しに行き、
+       「次TX見つからず」で止まる（USDT送金で実際に起きていた）。 */
+    const hops = await traceHops(traceFrom, tx.time, 'eth', 10, Date.now() + TRACE_BUDGET_MS, tokenCtx);
     for (const hop of hops) {
       if (!path.some(p => p.address?.toLowerCase() === hop.address?.toLowerCase())) {
         path.push(hop);
