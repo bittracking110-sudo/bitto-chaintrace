@@ -2168,7 +2168,41 @@ async function getNextTxBTC(addr, afterTime) {
   return null;
 }
 
-async function getNextTxETH(addr, afterTime) {
+/* ── 次の一手をどう選ぶか ────────────────────────────────────
+   ★これまで「金額が最大の送金」を追っていたが、これが根本的に間違っていた。
+
+   実例（利用者が提示した実際の経路）
+     起点→A  0.071152 ETH
+     A→B     0.071144 ETH  ← ほぼ同額。手数料の分だけ減っている＝同じ資金
+     B→C     7.721607 ETH  ← ここで他の被害者分と集約された
+     C→D     7.722068 ETH  ← また同額で動く
+     D→E     9.906473 ETH  → Binance
+
+   A地点で当社は 2.907681 ETH を選んでいた。正解は 0.071144 ETH で、
+   むしろ小さい方だった。「最大」を追うのは、集約された後にだけ通用する話で、
+   集約される前にやると、その時点で別人の資金に乗り換えてしまう。
+
+   そこで順序を変える。
+     ① 入ってきた額とほぼ同じ額の送金 ＝ 同じ資金が動いたと言える（最も確か）
+     ② 取引所への送金
+     ③ 金額が最大（集約後を想定した従来の推測）
+
+   手数料で少し減るのが普通なので、2%の幅を見る。増える側にも同じ幅を許すのは、
+   同じ取引の中で複数の入金がまとまることがあるため。 */
+function pickNextHop(candidates, amountIn) {
+  if (Number.isFinite(amountIn) && amountIn > 0) {
+    const tol = Math.max(amountIn * 0.02, 1e-9);
+    const near = candidates
+      .filter(c => Number.isFinite(c.amount) && Math.abs(c.amount - amountIn) <= tol)
+      .sort((a, b) => Math.abs(a.amount - amountIn) - Math.abs(b.amount - amountIn));
+    if (near.length) { near[0]._matched = true; return near[0]; }
+  }
+  const exCand = candidates.find(c => c.isExchange);
+  if (exCand) return exCand;
+  return [...candidates].sort((a, b) => b.amount - a.amount)[0];
+}
+
+async function getNextTxETH(addr, afterTime, amountIn) {
   const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
   console.log(`[HOP] ETH追跡: ${addr} / 基準: ${isNaN(refMs) ? '不明' : new Date(refMs).toISOString()}`);
 
@@ -2207,12 +2241,10 @@ async function getNextTxETH(addr, afterTime) {
       candidates.push({ addr: tx.to, amount: parseFloat(tx.value)/1e18, time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, txMs });
     }
     if (candidates.length > 0) {
-      const exCand = candidates.find(c => c.isExchange);
-      // 取引所優先 → 次に金額最大（最も多くETHが流れた先を追う）
-      const byAmount = [...candidates].sort((a, b) => b.amount - a.amount);
-      const chosen = exCand || byAmount[0];
+      const chosen = pickNextHop(candidates, amountIn);
       chosen._siblings = candidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
-      console.log(`[HOP] ETH送金先: ${chosen.addr} label="${chosen.label}" amount=${chosen.amount} candidates=${candidates.length}`);
+      console.log(`[HOP] ETH送金先: ${chosen.addr} label="${chosen.label}" amount=${chosen.amount} candidates=${candidates.length}`
+        + (chosen._matched ? ' ★入金額と一致' : ''));
       return chosen;
     }
   } catch(e) { console.error('[HOP] Etherscan ETH:', e.message); }
@@ -2242,9 +2274,7 @@ async function getNextTxETH(addr, afterTime) {
       intCandidates.push({ addr: tx.to, amount: amt, time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, txMs });
     }
     if (intCandidates.length > 0) {
-      const exCand = intCandidates.find(c => c.isExchange);
-      const byAmt  = [...intCandidates].sort((a, b) => b.amount - a.amount);
-      const chosen = exCand || byAmt[0];
+      const chosen = pickNextHop(intCandidates, amountIn);
       chosen._siblings = intCandidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
       console.log(`[HOP] 内部TX送金先: ${chosen.addr} label="${chosen.label}" amt=${chosen.amount} total=${intCandidates.length}`);
       return chosen;
@@ -2275,10 +2305,7 @@ async function getNextTxETH(addr, afterTime) {
       tokenCandidates.push({ addr: tx.to, amount: parseFloat(tx.value)/Math.pow(10,dec), time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, token: tx.tokenSymbol, txMs });
     }
     if (tokenCandidates.length > 0) {
-      const exCand = tokenCandidates.find(c => c.isExchange);
-      // 入金時刻に最も近い送金＝追っている資金である可能性が高い
-      const nearest = [...tokenCandidates].sort((a, b) => (a.txMs - refMs) - (b.txMs - refMs));
-      const chosen = exCand || nearest[0];
+      const chosen = pickNextHop(tokenCandidates, amountIn);
       console.log(`[HOP] ERC-20送金先: ${chosen.addr} token=${chosen.token} exchange=${chosen.isExchange}`);
       return chosen;
     }
@@ -2579,7 +2606,7 @@ async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18) {
   } catch (e) { console.error('[HOP] tokentx:', e.message); return null; }
 }
 
-async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = Date.now() + TRACE_BUDGET_MS, startToken = null) {
+async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = Date.now() + TRACE_BUDGET_MS, startToken = null, startAmount = null) {
   const hops = [];
   let currentAddr = startAddr;
   let currentTime = startTime;
@@ -2589,6 +2616,9 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
   let prevAddr = null;                   // その1つ前の住所
   let currentIsVia = false;              // いま居るのが交換・橋渡しのコントラクトか
   let lastCandidates = 0;                // 直前の地点に送金先がいくつあったか（混雑の目安）
+  /* いま居る地点に入ってきた額。次の一手を選ぶとき、同額の送金があれば
+     それが同じ資金である証拠になる（第4-S節）。 */
+  let currentAmount = Number.isFinite(startAmount) ? startAmount : null;
   let token = startToken;                // 資金がトークンなら {contract,symbol,decimals}
   if (token) console.log(`[traceHops] ${token.symbol} として追跡を開始する`);
   for (let i = 0; i < maxHops; i++) {
@@ -2622,7 +2652,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
     }
     if (!next) {
       if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime);
-      else if (chain === 'eth') next = await getNextTxETH(currentAddr, currentTime);
+      else if (chain === 'eth') next = await getNextTxETH(currentAddr, currentTime, currentAmount);
       else if (chain === 'xrp') next = await getNextTxXRP(currentAddr, currentTime);
       else if (chain === 'tron') next = await getNextTxTRON(currentAddr, currentTime);
     }
@@ -2675,6 +2705,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
     incomingHash = next.txHash;
     currentIsVia = isVia || isTok;
     lastCandidates = (next._siblings || []).length + 1;
+    currentAmount  = Number.isFinite(next.amount) ? next.amount : null;
   }
   return hops;
 }
@@ -2821,7 +2852,8 @@ async function investigateETH(hash) {
   if (!isRecipEx && !exchanges.length) {
     /* 資金がトークンなら、その旨を渡す。渡さないとETHの送金を探しに行き、
        「次TX見つからず」で止まる（USDT送金で実際に起きていた）。 */
-    const hops = await traceHops(traceFrom, tx.time, 'eth', 10, Date.now() + TRACE_BUDGET_MS, tokenCtx);
+    const startAmt = tokenRecipient ? tokenAmount : (parseFloat(tx.value) / 1e18);
+    const hops = await traceHops(traceFrom, tx.time, 'eth', 10, Date.now() + TRACE_BUDGET_MS, tokenCtx, startAmt);
     for (const hop of hops) {
       if (!path.some(p => p.address?.toLowerCase() === hop.address?.toLowerCase())) {
         path.push(hop);
