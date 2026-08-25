@@ -132,27 +132,43 @@ async function geminiGenerate(prompt, { temperature = 0.4, maxOutputTokens = 100
 
 /* 画像から文字を読む用。geminiGenerate はテキスト専用で、有料レポートの生成に
    使われている。そこへ画像対応を混ぜると納品物の経路を壊しかねないので分けた。
-   モデルの選び方は geminiGenerate と同じ考え方（提供終了に備えて複数試す）。 */
+
+   ★モデルは実測で選んだ（2026-08-25・同じEtherscan画面を各3回）。
+
+     gemini-3.5-flash-lite      3/3 成功  1.9秒
+     gemini-flash-lite-latest   3/3 成功  1.3秒
+     gemini-2.5-flash           0/3      （混雑で返らず）
+     gemini-flash-latest        1/1 成功  32.8秒 ← レポート用の既定。画像には遅すぎる
+
+   ★thinkingConfig は付けないこと。
+     lite系のモデルは「Request contains an invalid argument」で即座に落ちる。
+     付けずに投げると同じモデルが1〜2秒で正しく返す。ここで丸一日溶かしかねない。
+
+   ★先頭は別名（latest）ではなく版を固定したものにしている。
+     別名は中身が入れ替わるので、遅い版に差し替わっても気づけない。 */
+const VISION_MODELS   = ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest', GEMINI_MODEL];
+const VISION_TIMEOUT_MS = 20000;   // 待たせるより次のモデルへ移る方がよい
 async function geminiVision(prompt, base64, mimeType = 'image/jpeg') {
   if (!GEMINI_KEY) return null;
   const deadline = Date.now() + GEMINI_TOTAL_TIMEOUT_MS;
   const tried = [];
   /* 実測で「This model is currently experiencing high demand」が返ることがある。
-     一時的なもので、少し待って投げ直すと通る。利用者に画像を撮り直させる前に
-     こちらで数回試す（画像を選び直させるのは体験として重い）。 */
+     一時的なもので、別のモデルか少し後なら通る。利用者に撮り直させる前にこちらで粘る。 */
   const attempts = [];
-  for (const model of [...new Set(GEMINI_FALLBACK_MODELS)]) attempts.push(model, model, model);
+  for (const model of [...new Set(VISION_MODELS)]) attempts.push(model, model);
   for (const model of attempts) {
     if (Date.now() >= deadline) { tried.push('総時間の上限に到達'); break; }
-    if (tried.length) await new Promise(r => setTimeout(r, 1200));
+    if (tried.length) await new Promise(r => setTimeout(r, 600));
     try {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      // キーはURLに載せずヘッダーで渡す（URLはログや中継に残るため）
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data: base64 } }] }],
-          generationConfig: { temperature: 0, maxOutputTokens: 800, thinkingConfig: { thinkingBudget: 0 } },
+          generationConfig: { temperature: 0, maxOutputTokens: 800 },
         }),
-        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+        signal: AbortSignal.timeout(VISION_TIMEOUT_MS),
       });
       const j = await r.json();
       const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
