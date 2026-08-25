@@ -130,6 +130,156 @@ async function geminiGenerate(prompt, { temperature = 0.4, maxOutputTokens = 100
   return null;
 }
 
+/* 画像から文字を読む用。geminiGenerate はテキスト専用で、有料レポートの生成に
+   使われている。そこへ画像対応を混ぜると納品物の経路を壊しかねないので分けた。
+   モデルの選び方は geminiGenerate と同じ考え方（提供終了に備えて複数試す）。 */
+async function geminiVision(prompt, base64, mimeType = 'image/jpeg') {
+  if (!GEMINI_KEY) return null;
+  const deadline = Date.now() + GEMINI_TOTAL_TIMEOUT_MS;
+  const tried = [];
+  /* 実測で「This model is currently experiencing high demand」が返ることがある。
+     一時的なもので、少し待って投げ直すと通る。利用者に画像を撮り直させる前に
+     こちらで数回試す（画像を選び直させるのは体験として重い）。 */
+  const attempts = [];
+  for (const model of [...new Set(GEMINI_FALLBACK_MODELS)]) attempts.push(model, model, model);
+  for (const model of attempts) {
+    if (Date.now() >= deadline) { tried.push('総時間の上限に到達'); break; }
+    if (tried.length) await new Promise(r => setTimeout(r, 1200));
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data: base64 } }] }],
+          generationConfig: { temperature: 0, maxOutputTokens: 800, thinkingConfig: { thinkingBudget: 0 } },
+        }),
+        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+      });
+      const j = await r.json();
+      const text = j.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        if (tried.length) console.warn(`[GeminiVision] 復旧 model=${model} ／ 失敗: ${tried.join(' | ')}`);
+        return text.trim();
+      }
+      tried.push(`${model}: ${j.error?.message || j.candidates?.[0]?.finishReason || 'empty'}`);
+    } catch (e) {
+      tried.push(`${model}: ${e.message}`);
+    }
+  }
+  console.error('[GeminiVision] 全て失敗:', tried.join(' | '));
+  return null;
+}
+
+/* OCRの読み違いを直す。
+   TXIDは16進数（0-9 a-f）しか取らないので、「16進数に無い文字」だけを
+   置き換える表を持てば、正しい文字を壊す心配がない。
+   ⚠️ b・c・d・e・f は16進数として正しい。B→8 のような変換は入れないこと。 */
+const OCR_FIX = {
+  O:'0', o:'0', Q:'0', D:'0', U:'0', u:'0',
+  I:'1', i:'1', l:'1', L:'1', J:'1', '|':'1', '!':'1',
+  Z:'2', z:'2',
+  S:'5', s:'5',
+  G:'6', g:'6',
+  T:'7', t:'7',
+  q:'9', y:'9',
+};
+function fixHex(raw) {
+  return String(raw || '').split('')
+    .map(ch => (/[0-9a-fA-F]/.test(ch) ? ch : (OCR_FIX[ch] || ch)))
+    .join('');
+}
+
+/* 読み取った文字列からTXIDを拾う。
+   直した版でしか見つからなければ corrected を立て、画面側で断りを出す。
+
+   ★補正は「行まるごとが64桁になるか」で判定する。文章の途中を部分一致で拾うと、
+     周りの文字まで16進数に変えてしまい、実在しないTXIDを作る。
+     例：「zzz<TXID>zzz」→ zzz が 222 になって前後が繋がり、別の64桁が生まれる。 */
+function pickTxidsFromText(text) {
+  const out   = [];
+  const seen  = new Set();
+  const exact = /^(0x)?[0-9a-fA-F]{64}$/;
+  const add = (t, corrected) => {
+    const key = t.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const chain = /^0x/.test(t) ? 'eth' : (t === t.toUpperCase() ? 'xrp' : 'btc');
+    out.push({ txid: t, chain, corrected });
+  };
+
+  // Geminiには「1行に1件」と指示してある。行ごとに丸ごと見るのが一番正確。
+  for (const line of String(text || '').split('\n')) {
+    const t = line.replace(/\s+/g, '');
+    if (!t) continue;
+    if (exact.test(t)) { add(t, false); continue; }
+    const fixed = fixHex(t);
+    if (exact.test(fixed)) add(fixed, true);
+  }
+
+  // 指示に従わず説明文を混ぜてきた場合と、途中で折り返された場合の保険。
+  // ここでは補正をかけない（上記の理由でありもしないTXIDを作るため）。
+  const flat = String(text || '').replace(/\s+/g, '');
+  for (const t of flat.match(/0x[0-9a-fA-F]{64}|[0-9a-fA-F]{64}/g) || []) add(t, false);
+
+  return out;
+}
+
+/* 画像からTXIDを読み取る。
+   「画像からTXIDを取り出せない」利用者のための入口（PROJECT-LOG 第4-N節）。
+   高齢の方を想定しているが、そもそもTXIDのコピーはこの製品で最初につまずく場所。
+
+   ★画像は保存しない。
+     被害者のスクリーンショットには取引所の残高や個人情報が写っていることが多い。
+     Geminiへ渡すだけで、こちらのディスクには一切書かない。 */
+/* 認証のない入口からGeminiを呼ぶので、連打されると課金がそのまま増える。
+   被害者が撮り直しながら数回試すのは普通なので、そこは通す。
+   メモリ上だけの簡易な制限（再起動で消えてよい。厳密さより事故防止が目的）。 */
+const ocrHits = new Map();   // IP → 直近の呼び出し時刻の配列
+const OCR_WINDOW_MS = 10 * 60 * 1000;
+const OCR_MAX       = 20;    // 10分で20回。撮り直しには十分で、機械的な連打は止まる
+function ocrRateOk(ip) {
+  const now = Date.now();
+  const list = (ocrHits.get(ip) || []).filter(t => now - t < OCR_WINDOW_MS);
+  if (list.length >= OCR_MAX) { ocrHits.set(ip, list); return false; }
+  list.push(now);
+  ocrHits.set(ip, list);
+  if (ocrHits.size > 5000) {   // 放置すると増え続けるので、たまに古いものを捨てる
+    for (const [k, v] of ocrHits) if (!v.some(t => now - t < OCR_WINDOW_MS)) ocrHits.delete(k);
+  }
+  return true;
+}
+
+app.post('/api/ocr-txid', express.json({ limit: '12mb' }), async (req, res) => {
+  try {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip || 'unknown';
+    if (!ocrRateOk(ip)) return res.json({ ok: false, reason: 'rate_limited' });
+    const raw = String(req.body?.image || '');
+    const m = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!m) return res.json({ ok: false, reason: 'bad_image' });
+    const [, mimeType, base64] = m;
+    if (!GEMINI_KEY) return res.json({ ok: false, reason: 'no_key' });
+
+    const prompt = [
+      'この画像に写っている「トランザクションID（TXID／取引ハッシュ）」を、',
+      '1つ残らずすべて抜き出してください。複数写っている場合は全部です。',
+      'TXIDは 16進数（0-9 と a-f）だけでできた64文字の文字列です。先頭に 0x が付くこともあります。',
+      '1行に1件、そのまま出力してください。説明・見出し・記号・番号は付けないでください。',
+      '改行や折り返しで途中に空白が入っている場合は、繋げて1件として出力してください。',
+      '確信が持てない文字があっても、見えたとおりに出力してください（こちらで検算します）。',
+      'TXIDが見つからない場合は NONE とだけ出力してください。',
+    ].join('\n');
+
+    const text = await geminiVision(prompt, base64, mimeType);
+    if (!text) return res.json({ ok: false, reason: 'gemini_failed' });
+
+    const found = pickTxidsFromText(text);
+    console.log(`[OCR] ${found.length}件 検出${found.some(f => f.corrected) ? '（読み違いの補正あり）' : ''}`);
+    return res.json({ ok: true, txids: found });
+  } catch (e) {
+    console.error('[OCR] 失敗:', e.message);
+    return res.json({ ok: false, reason: 'error' });
+  }
+});
+
 const pendingSessions = new Map(); // sessionId → { userId, txidCount, stripeId }
 const reportCache     = new Map(); // reportId  → { html }（メモリキャッシュ）
 const txidFormTokens  = new Map();
