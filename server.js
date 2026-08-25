@@ -3574,6 +3574,16 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       /* このアドレスでトークンに換えられた場合。ここから先は通貨が変わるので、
          読み手が「別の資金では」と誤解しないよう、換わった地点を明示する。 */
       else if (p.swapTo)     { cls = 'relay';    icon = '🔁'; roleLabel = `${i}次先：ここで ${p.swapTo} に交換`; }
+      /* ★取引回数が桁違いに多いアドレスは、個人の財布ではなく共有のコントラクト。
+         「未特定」と書くと「誰の財布か分からない」と読まれるが、実際は
+         何なのか分かっている（数百万人が通る通り道）。
+         名前を1つずつ登録するのではなく回数で判定するので、
+         知らないコントラクトでも同じように扱える。
+         警察や弁護士に説明するときも、通り道だと分かる方が伝わる。 */
+      else if (p.txCount != null && p.txCount >= VIA_TRAFFIC_STOP) {
+        cls = 'relay'; icon = '🔀';
+        roleLabel = `経由（利用者の多いコントラクト・取引${p.txCount.toLocaleString()}回）（${i}次先）`;
+      }
       else                   { cls = 'relay';    icon = '◆'; roleLabel = `中継アドレス（${i}次先）`; }
 
       const inferredBadge = p.inferred ? `<span class="badge" style="background:#d97706">推定</span>` : '';

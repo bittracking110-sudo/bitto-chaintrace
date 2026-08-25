@@ -619,6 +619,10 @@ function nodeBadge(n){
   /* このアドレスでトークンに換えられた場合。ここから先は通貨が変わるので、
      「別の資金では」と誤解されないよう、換わった地点を出す。 */
   if (n.swapTo)                       return `<span class="badge b-via">🔁 ここで ${esc(n.swapTo)} に交換</span>`;
+  /* 取引回数が桁違いに多いアドレスは、個人の財布ではなく共有のコントラクト。
+     「未特定」だと「誰の財布か分からない」と読まれるが、実際は通り道と分かっている。 */
+  if (n.txCount != null && n.txCount >= 10000)
+    return `<span class="badge b-via">🔀 経由（利用者の多いコントラクト）</span>`;
   return `<span class="badge b-unk">未特定</span>`;
 }
 /* 取引所ノードの強調クラス／アイコン（到達先を目立たせる） */
