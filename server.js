@@ -86,7 +86,20 @@ const lineClient = new line.Client(lineConfig);
 // ══ セッション管理 ════════════════════════════════════════════
 // state: idle → waiting_txid → investigating → done
 const userSessions    = new Map(); // userId → session
-const txidCache       = new Map(); // txid（小文字）→ { result, investigatedAt }
+const txidCache       = new Map();
+/* ★有料レポートで無料の結果を使い回さない。
+   無料調査は外部ラベルを1回しか引かず、素性もAMLスコアも付けない。
+   それをそのまま納品すると、代金をいただいた方に無料品質を渡すことになる。
+   有料が要るときは、無料で作った結果を捨てて調べ直す。 */
+function cachedResult(key, wantPaid) {
+  const c = txidCache.get(key);
+  if (!c) return null;
+  if (wantPaid && !c.paid) {
+    console.log('[Cache] 無料で調べた結果のため、有料レポート用に調べ直します');
+    return null;
+  }
+  return c.result;
+} // txid（小文字）→ { result, investigatedAt }
 // ── Gemini 呼び出し（モデル終了・パラメータ非対応に強い版）──────────────
 // thinkingConfig 非対応やモデルの提供終了で全AI機能が止まらないよう、
 // 「モデル × thinkingConfigあり/なし」を順に試し、最初に成功したものを返す。
@@ -4710,12 +4723,13 @@ async function runInvestigation(userId, txid, chain) {
   const cacheKey = txid.toLowerCase();
 
   try {
-    let result = txidCache.get(cacheKey)?.result;
+    const paidRun = false;
+    let result = cachedResult(cacheKey, paidRun);
     if (result) {
       console.log(`[CACHE] キャッシュ利用: ${txid}`);
     } else {
       result = await investigate(txid, chain);
-      txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
+      txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
     }
 
     // 調査結果をリストに追加（重複除外）
@@ -5207,10 +5221,11 @@ app.post('/api/admin/generate-report', requireAdmin, express.json(), async (req,
       try {
         console.log(`[Admin] 調査開始: ${txid} (${chain})`);
         const cacheKey = txid.toLowerCase();
-        let result = txidCache.get(cacheKey)?.result;
+        const paidRun = true;
+        let result = cachedResult(cacheKey, paidRun);
         if (!result) {
           result = await investigate(txid, chain, { paid: true });
-          txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
+          txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
         }
         list.push({ txid, chain, result });
         console.log(`[Admin] 調査完了: ${txid}`);
@@ -5889,10 +5904,11 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
         try {
           console.log(`[Submit] 調査中: ${item.txid} (${item.chain})`);
           const cacheKey = item.txid.toLowerCase();
-          let result = txidCache.get(cacheKey)?.result;
+          const paidRun = true;
+          let result = cachedResult(cacheKey, paidRun);
           if (!result) {
             result = await investigate(item.txid, item.chain, { paid: true });
-            txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
+            txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
           }
           list.push({ txid: item.txid, chain: item.chain, result });
         } catch (e) {
@@ -6233,10 +6249,11 @@ async function fulfillConnectionOrder({ txid, customerName, email, count = 1 }) 
   if (!chain) throw new Error('TXIDの形式が不正です');
 
   const cacheKey = txid.toLowerCase();
-  let result = txidCache.get(cacheKey)?.result;
+  const paidRun = true;
+  let result = cachedResult(cacheKey, paidRun);
   if (!result) {
     result = await investigate(txid, chain, { paid: true });
-    txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
+    txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
   }
 
   const list     = [{ txid, chain, result }];
@@ -6416,7 +6433,8 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
   (async () => {
     try {
       const cacheKey = txid.toLowerCase();
-      let result = txidCache.get(cacheKey)?.result;
+      const paidRun = false;
+      let result = cachedResult(cacheKey, paidRun);
       if (!result) {
         // 内部の時間予算をすり抜けて investigate() が固まると、ジョブが running のまま残り
         // クライアントは永久に「解析中」になる。最後の砦として全体に上限時間を課し、
@@ -6428,7 +6446,7 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
             INVESTIGATE_HARD_TIMEOUT_MS
           )),
         ]);
-        txidCache.set(cacheKey, { result, investigatedAt: Date.now() });
+        txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
       }
       const job = connectionJobs.get(jobId);
       if (job) { job.status = 'done'; job.result = result; }
