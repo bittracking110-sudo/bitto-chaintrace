@@ -1801,6 +1801,37 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
      何も見えないまま終わるより、状況を判断する材料にはなる。
      確定ではないことは報告書側で明示する。 */
   const stopNode = (path || []).find(p => p.traceStop);
+
+  /* ★打ち切った先を、そのまま最後まで追った経路も「参考」として出す。
+     出さないと、混雑した地点で止まるたびに利用者は到達先に辿り着けない。
+     被害者が知りたいのは「どこへ換金されたか」なので、
+     何も出さないより、確度を明記して出す方が役に立つ。
+
+     確定（＝同じ取引で追えた範囲）と参考（＝最大の送金を追った場合）を
+     分けて両方見せる。凍結要請を出す判断は読み手がする。 */
+  /* 送金元（index 0）は到達先ではないので数えない。
+     「取引所・サービス系ウォレット（推定）」のような振る舞いからの推定も数えない。
+     名前が無ければ凍結要請の宛先にならず、利用者にとって到達したことにならない。 */
+  const alreadyReached = path.some((p, i) =>
+    i > 0 && p.isExchange && !p.inferred && !p.isVia && !p.isToken);
+  if (stopNode && chain === 'eth' && stopNode.address && !alreadyReached) {
+    const refDeadline = Date.now() + 14000;
+    try {
+      const refHops = await traceHops(stopNode.address, stopNode.time || Date.now(), 'eth', 8, refDeadline);
+      const ex = refHops.find(h => h.isExchange && !h.isVia && !h.isToken);
+      if (refHops.length) {
+        stopNode.referenceTrace = {
+          hops: refHops.map(h => ({ address: h.address, label: h.label || '', amount: h.amount, token: h.token })),
+          reachedExchange: ex ? (ex.label || '取引所（名称未判明）') : null,
+          reachedAddress:  ex ? ex.address : null,
+          reachedHops:     ex ? refHops.indexOf(ex) + 1 : null,
+        };
+        console.log(`[参考経路] 打ち切り地点から${refHops.length}ホップ追跡`
+          + (ex ? ` → ${stopNode.referenceTrace.reachedExchange}（${stopNode.referenceTrace.reachedHops}ホップ先）` : '（取引所には未到達）'));
+      }
+    } catch (e) { console.error('[参考経路] 失敗:', e.message); }
+  }
+
   if (stopNode && chain === 'eth' && stopNode.address) {
     const cands = await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 3);
     /* それぞれの枝を短く追い、取引所に着いたものだけを残す。

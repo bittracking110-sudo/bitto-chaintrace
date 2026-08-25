@@ -230,6 +230,12 @@
   .ocr-hit .m{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;word-break:break-all;color:var(--teal)}
   .ocr-hit .c{font-size:11px;color:var(--sub);margin-top:3px}
   .ocr-warn{font-size:11.5px;color:#fbbf24;margin-top:6px;line-height:1.6}
+  /* 参考経路。確定した経路と見分けが付くよう、行の作りを変える */
+  .rt-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--line);font-size:12px;flex-wrap:wrap}
+  .rt-n{flex:none;width:19px;height:19px;border-radius:50%;display:grid;place-items:center;
+    background:rgba(251,191,36,.16);color:var(--amber);font-size:10.5px;font-weight:700}
+  .rt-l{color:var(--teal)}
+  .rt-a{margin-left:auto;color:var(--sub)}
   /* チャットの中で渡すファイル。何が届いたのか一目で分かる形にする */
   /* カード自体もタップで開ける。ボタンだけだと、ファイルを押しても
      何も起きず「開けない」と受け取られる */
@@ -608,6 +614,38 @@ const setBubble = (row, html) => {
   b.innerHTML = html; initFlowScroll(b); scrollDown();
 };
 
+/* 打ち切った先を「最後まで追った場合」として出す。
+   確定として出すと無関係の方に凍結要請が飛びかねないが、
+   何も出さないと利用者はいつまでも到達先に辿り着けない。
+   確定と参考を分けて両方見せ、判断は読み手に委ねる。 */
+function refTraceHTML(path){
+  const sn = (path || []).find(n => n.referenceTrace);
+  if (!sn) return '';
+  const t = sn.referenceTrace;
+  const chain = (t.hops || []).map((h, i) =>
+    `<div class="rt-row"><span class="rt-n">${i + 1}</span>
+      <span class="mono">${esc(shortAddr(h.address))}</span>
+      ${h.label ? `<span class="rt-l">${esc(h.label)}</span>` : ''}
+      <span class="rt-a">${h.amount != null ? esc(String(h.amount).slice(0, 12)) : ''} ${esc(h.token || '')}</span></div>`).join('');
+  return `<div class="card" style="border-color:rgba(251,191,36,.35)">
+    <h4 style="color:var(--amber)">参考情報（未確定）：この先を最後まで追った場合</h4>
+    <div class="note" style="margin-top:0">
+      上の経路は<b>ここまでが確実に追える範囲</b>です。この先は
+      <b style="color:var(--amber)">利用者の多いアドレス</b>を通っており、
+      そこから先は「最も金額の大きい送金」を追った結果です。<br>
+      <b style="color:var(--amber)">同じ資金である保証はありません。</b>
+      詐欺の資金は複数の被害者分をまとめて送られることが多く、その場合はこの経路が実態に合いますが、
+      無関係の資金に乗り換えている可能性も残ります。
+    </div>
+    ${chain}
+    ${t.reachedExchange
+      ? `<div class="note" style="color:var(--amber);margin-bottom:0">
+           👉 この追い方では <b>${esc(t.reachedExchange)}</b> に到達しました（${t.reachedHops}ホップ先）。<br>
+           <b>凍結を要請する前に、必ず取引所へ照会し、該当の入金があるか確認してください。</b></div>`
+      : `<div class="note" style="margin-bottom:0">この範囲では取引所に到達しませんでした。</div>`}
+  </div>`;
+}
+
 /* ── 結果カードの組み立て ── */
 function nodeBadge(n){
   if (n.isDeposit)                    return `<span class="badge b-known">🏧 入金用アドレス（推定）</span>`;
@@ -797,6 +835,7 @@ function resultCard(results){
     <div class="card"><h4>資金フロー（概要）${results.length>1 ? ` ${i+1}/${results.length}` : ''} — ${esc(r.chain)}</h4>
       ${flowHTML(p)}
       ${ex.length ? `<div class="note">到達した取引所：${esc(ex.join('、'))}</div>` : ''}
+      ${refTraceHTML(p)}
       ${profileHTML(p)}
       ${cpHTML(p)}
       ${splitHTML(p)}
