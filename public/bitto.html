@@ -1250,7 +1250,7 @@ function openPackEntry(){
    弁護士や警察に渡す形にもならない。PDFなら、そのまま送れて、そのまま印刷できる。
 
    組み立てはサーバー側。画面から送るのは解析結果のデータだけで、HTMLは送らない。 */
-let packBlobUrl = null;
+let packUrl = null;
 
 async function openInitialPack(){
   if (busy) return;
@@ -1268,17 +1268,19 @@ async function openInitialPack(){
         : '<b>初動パックを作成できませんでした。</b><div style="margin-top:8px;font-size:12.5px;line-height:1.75">時間をおいて、もう一度お試しください。</div>', { rich:true });
       return;
     }
-    const blob = await r.blob();
-    if (packBlobUrl) URL.revokeObjectURL(packBlobUrl);
-    packBlobUrl = URL.createObjectURL(blob);
+    const j = await r.json();
+    if (!j.ok || !j.url) { addAi('<b>初動パックを作成できませんでした。</b>', { rich:true }); return; }
+    /* ★blob: のURLは使わない。iOSのブラウザが「外部アプリを開こうとしている」と
+       扱ってしまい、開くことも保存もできない（実機で確認）。普通のURLで渡す。 */
+    packUrl = j.url;
     const name = `BitTo_初動パック_${new Date().toISOString().slice(0,10)}.pdf`;
-    const kb   = Math.max(1, Math.round(blob.size / 1024));
+    const kb   = Math.max(1, Math.round((j.size || 0) / 1024));
     const n    = Array.isArray(lastResults) ? lastResults.length : 0;
 
     /* 共有はブラウザが対応しているときだけ出す。
-       出しておいて押したら何も起きない、が一番よくない。 */
-    const canShare = !!(navigator.canShare && navigator.canShare({
-      files: [new File([blob], name, { type:'application/pdf' })] }));
+       出しておいて押したら何も起きない、が一番よくない。
+       中身は共有を押したときに取りに行く（先に落とすと無駄になる）。 */
+    const canShare = !!(navigator.canShare && navigator.share);
 
     const card = addAi(`<b>初動パックができました。</b>
       <div style="font-size:12.5px;color:var(--sub);margin-top:6px;line-height:1.75">
@@ -1297,17 +1299,19 @@ async function openInitialPack(){
 
     card.querySelectorAll('[data-pack]').forEach(b => b.addEventListener('click', async () => {
       const act = b.dataset.pack;
-      if (act === 'open'){ window.open(packBlobUrl, '_blank'); return; }
-      if (act === 'save'){
-        const a = document.createElement('a');
-        a.href = packBlobUrl; a.download = name;
-        document.body.appendChild(a); a.click(); a.remove();
-        toast('保存しました');
-        return;
-      }
+      // 普通のURLに遷移させる。iOSでもそのままPDFが開く
+      if (act === 'open'){ window.open(packUrl, '_blank'); return; }
+      if (act === 'save'){ window.location.href = packUrl + '?dl=1'; return; }
       try{
-        await navigator.share({ files:[new File([blob], name, { type:'application/pdf' })],
-                                title:'BitTo 初動パック' });
+        const f = await fetch(packUrl);
+        const blob = await f.blob();
+        const file = new File([blob], name, { type:'application/pdf' });
+        if (navigator.canShare && !navigator.canShare({ files:[file] })){
+          // ファイルを渡せない端末では、代わりに開く
+          window.open(packUrl, '_blank');
+          return;
+        }
+        await navigator.share({ files:[file], title:'BitTo 初動パック' });
       }catch(_){ /* 利用者が閉じただけのこともあるので何も言わない */ }
     }));
   }catch(e){

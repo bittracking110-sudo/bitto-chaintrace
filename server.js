@@ -614,6 +614,21 @@ function packRateOk(ip) {
   return true;
 }
 
+/* できたPDFは【メモリだけ】に短時間置き、普通のURLで取りに来てもらう。
+
+   ★blob: のURLで渡してはいけない。
+     iOSのブラウザ（Chrome等）は blob: を「外部アプリを開こうとしている」と扱い、
+     確認ダイアログが出たうえ、開くことも保存もできない。実機で確認済み。
+     普通の https のURLなら、そのまま表示され、共有シートにも乗る。
+
+   ディスクには書かない。TXID・アドレス・被害内容が入るため。 */
+const packFiles = new Map();   // token → { pdf, name, at }
+const PACK_TTL_MS = 20 * 60 * 1000;
+function sweepPackFiles() {
+  const now = Date.now();
+  for (const [k, v] of packFiles) if (now - v.at > PACK_TTL_MS) packFiles.delete(k);
+}
+
 app.post('/api/pack/pdf', express.json({ limit: '2mb' }), async (req, res) => {
   const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip || 'unknown';
   if (!packRateOk(ip)) return res.status(429).json({ ok: false, reason: 'rate_limited' });
@@ -629,17 +644,31 @@ app.post('/api/pack/pdf', express.json({ limit: '2mb' }), async (req, res) => {
       format: 'A4', printBackground: true,
       margin: { top: '12mm', right: '10mm', bottom: '12mm', left: '10mm' },
     });
-    const name = `BitTo_shodo_pack_${new Date().toISOString().slice(0, 10)}.pdf`;
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${name}"`);
-    console.log(`[Pack] 初動パックPDF ${results.length}件分`);
-    res.end(pdf);
+    sweepPackFiles();
+    const token = crypto.randomBytes(16).toString('hex');
+    const name  = `BitTo_shodo_pack_${new Date().toISOString().slice(0, 10)}.pdf`;
+    packFiles.set(token, { pdf, name, at: Date.now() });
+    console.log(`[Pack] 初動パックPDF ${results.length}件分 / ${Math.round(pdf.length / 1024)}KB`);
+    res.json({ ok: true, url: `/api/pack/file/${token}`, size: pdf.length });
   } catch (e) {
     console.error('[Pack] PDF生成失敗:', e.message);
     res.status(500).json({ ok: false, reason: 'pdf_failed' });
   } finally {
     if (page) await page.close().catch(() => {});
   }
+});
+
+/* 取りに来る側。?dl=1 なら保存、無ければその場で表示。
+   トークンは推測できない長さで、20分で消える。 */
+app.get('/api/pack/file/:token', (req, res) => {
+  sweepPackFiles();
+  const f = packFiles.get(String(req.params.token || ''));
+  if (!f) return res.status(404).send('この書類は期限切れです。もう一度作成してください。');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('Content-Disposition',
+    `${req.query.dl ? 'attachment' : 'inline'}; filename="${f.name}"`);
+  res.end(f.pdf);
 });
 
 async function loadReport(reportId) {
