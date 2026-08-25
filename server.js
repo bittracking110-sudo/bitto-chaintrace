@@ -1815,45 +1815,63 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   const alreadyReached = path.some((p, i) =>
     i > 0 && p.isExchange && !p.inferred && !p.isVia && !p.isToken);
   if (stopNode && chain === 'eth' && stopNode.address && !alreadyReached) {
-    const refDeadline = Date.now() + 14000;
+    const refDeadline = Date.now() + 20000;   // 旧処理と統合したぶんを回す
     try {
-      const refHops = await traceHops(stopNode.address, stopNode.time || Date.now(), 'eth', 8, refDeadline);
-      const ex = refHops.find(h => h.isExchange && !h.isVia && !h.isToken);
-      if (refHops.length) {
-        stopNode.referenceTrace = {
-          hops: refHops.map(h => ({ address: h.address, label: h.label || '', amount: h.amount, token: h.token })),
+      /* 1本だけ追うと、混雑した地点では候補が数十件あるため当たりを引けない。
+         金額の大きい順に3本追い、取引所に着いたものを全て出す。 */
+      const starts = await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 3);
+      const branches = [];
+      for (const st of starts) {
+        if (Date.now() > refDeadline) { console.log('[参考経路] 時間切れで残りの枝を省略'); break; }
+        const hops = await traceHops(st.address, st.time, 'eth', 6, refDeadline).catch(() => []);
+        const chainHops = [{ address: st.address, label: st.label || '', amount: st.amount, token: st.token }]
+          .concat(hops.map(h => ({ address: h.address, label: h.label || '', amount: h.amount, token: h.token })));
+        const exIdx = hops.findIndex(h => h.isExchange && !h.isVia && !h.isToken);
+        const ex = exIdx >= 0 ? hops[exIdx] : null;
+        branches.push({
+          hops: chainHops,
           reachedExchange: ex ? (ex.label || '取引所（名称未判明）') : null,
           reachedAddress:  ex ? ex.address : null,
-          reachedHops:     ex ? refHops.indexOf(ex) + 1 : null,
-        };
-        console.log(`[参考経路] 打ち切り地点から${refHops.length}ホップ追跡`
-          + (ex ? ` → ${stopNode.referenceTrace.reachedExchange}（${stopNode.referenceTrace.reachedHops}ホップ先）` : '（取引所には未到達）'));
+          reachedHops:     ex ? exIdx + 2 : null,   // 起点の1件を足す
+          exchangeUnnamed: !!(ex && !ex.label),
+        });
+        console.log(`[参考経路] ${st.address.slice(0, 10)}… から${hops.length}ホップ`
+          + (ex ? ` → ${ex.label || '名称未判明の取引所'}` : '（取引所には未到達）'));
       }
+      if (branches.length) stopNode.referenceTrace = { branches };
     } catch (e) { console.error('[参考経路] 失敗:', e.message); }
   }
 
-  if (stopNode && chain === 'eth' && stopNode.address) {
-    const cands = await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 3);
-    /* それぞれの枝を短く追い、取引所に着いたものだけを残す。
-       着かなかった枝は判断材料にならないので載せない。
-       時間をかけすぎると調査全体が遅くなるため、枝ごとに3ホップ・全体で12秒まで。 */
-    const branchDeadline = Date.now() + 12000;
-    const reached = [];
-    for (const c of cands) {
-      if (Date.now() > branchDeadline) break;
-      const hops = await traceHops(c.address, c.time, 'eth', 3, branchDeadline).catch(() => []);
-      const ex = hops.find(h => h.isExchange && !h.isVia && !h.isToken);
-      if (ex) {
-        c.reachedExchange = ex.label || '取引所（名称未判明）';
-        c.reachedAddress  = ex.address;
-        c.reachedHops     = hops.indexOf(ex) + 1;
-        reached.push(c);
-        console.log(`[Candidates] 参考の枝 ${c.address.slice(0, 10)}... → ${c.reachedExchange}（${c.reachedHops}ホップ先）`);
+  /* ★無料調査の外部ラベルは1件あたり1回しか引けない。
+     これまでは「最後のノード」に使っていたが、そこは打ち切り地点（ルーター等）で、
+     名前が引けても凍結要請の宛先にならない。
+     参考経路で取引所に着いていて、その名前が無いなら、そこに使う方が役に立つ。
+     被害者が本当に欲しいのは「どこへ換金されたか」の名前。 */
+  const unnamed = stopNode?.referenceTrace?.branches?.find(b => b.exchangeUnnamed);
+  if (unnamed && MISTTRACK_KEY && labelQuotaOk(opts.paid)) {
+    try {
+      labelQuotaUse();
+      const api = await lookupLabelAPI(unnamed.reachedAddress, chain);
+      if (api.name) {
+        unnamed.reachedExchange = api.name;
+        unnamed.exchangeUnnamed = false;
+        console.log(`[参考経路] 到達先の名前を取得: ${api.name}`);
       }
-    }
-    stopNode.nextCandidates = reached;
-    stopNode.candidatesChecked = cands.length;
-    console.log(`[Candidates] ${cands.length}件を追跡し、取引所に着いたのは ${reached.length}件`);
+    } catch (e) { console.error('[参考経路] 名前の取得に失敗:', e.message); }
+  }
+
+  /* 旧「候補3件を3ホップだけ追う」処理は、上の参考経路と同じことを
+     二重にやっていた（実測で77秒に達し上限超過）。統合し、
+     報告書が使う nextCandidates は参考経路の結果から作る。 */
+  if (stopNode?.referenceTrace?.branches) {
+    const bs = stopNode.referenceTrace.branches;
+    stopNode.nextCandidates = bs.filter(b => b.reachedExchange).map(b => ({
+      address: b.hops[0].address, label: b.hops[0].label || '',
+      amount: b.hops[0].amount, time: b.hops[0].time,
+      reachedExchange: b.reachedExchange, reachedAddress: b.reachedAddress, reachedHops: b.reachedHops,
+      gapMin: b.hops[0].gapMin ?? 0,
+    }));
+    stopNode.candidatesChecked = bs.length;
   }
 
   /* 時間予算で打ち切ると、名前がいちばん要る最後のノード（着金先）だけ
