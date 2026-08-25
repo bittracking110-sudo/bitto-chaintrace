@@ -2132,6 +2132,12 @@ async function getNextTxETH(addr, afterTime) {
       const txMs = parseInt(tx.timeStamp) * 1000;
       if (txMs < refMs) break; // sort=desc なので以降は全て古い → 早期終了
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
+      /* 記号を騙るトークンは追わない。実データで「ETH」を名乗る別トークンを
+         掴み、無関係の経路を追っていた（第4-R節）。 */
+      if (isImpostorToken(tx.tokenSymbol, tx.contractAddress)) {
+        console.log(`[HOP] 「${tx.tokenSymbol}」を名乗る別トークンのため追わない（${String(tx.contractAddress).slice(0, 12)}…）`);
+        continue;
+      }
       const db  = getLabel(tx.to);
       const lbl = db.label || '';
       const isTok = db.type === 'token' || isTokenContract(lbl);
@@ -2344,6 +2350,36 @@ async function listNextCandidatesETH(addr, afterTime, limit = 3) {
   }
 }
 
+/* ── トークンの正体を、記号ではなくコントラクトで確かめる ──────────
+   ★記号（tokenSymbol）は誰でも自由に付けられる。
+     実際の調査で「ETH」を名乗る別トークン（0xa491c239…）を掴み、
+     被害資金とは無関係の経路を追ってしまっていた。
+     詐欺の現場では、追跡を撹乱するためにこの種のトークンが撒かれる。
+
+   下記のアドレスは実データ（Etherscanの転送記録）で記号との一致を確認済み。
+   ここに無い記号は判断しない（知らないトークンを偽物扱いしない）。 */
+const GENUINE_TOKENS = {
+  usdt: '0xdac17f958d2ee523a2206206994597c13d831ec7',
+  usdc: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+  weth: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  dai:  '0x6b175474e89094c44da98b954eedeac495271d0f',
+  wbtc: '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599',
+};
+/* 「ETH」「BTC」はそもそもERC-20の記号として名乗る理由がない。
+   本物のETHはトークンではないので、ERC-20で ETH を名乗っている時点で別物。 */
+const RESERVED_SYMBOLS = new Set(['eth', 'btc', 'bitcoin', 'ethereum']);
+
+/* 偽装が疑われるトークンか。true なら被害資金として追わない。 */
+function isImpostorToken(symbol, contract) {
+  const s = String(symbol || '').trim().toLowerCase();
+  const c = String(contract || '').trim().toLowerCase();
+  if (!s || !c) return false;
+  if (RESERVED_SYMBOLS.has(s)) return true;              // ERC-20で ETH/BTC を名乗る＝別物
+  const genuine = GENUINE_TOKENS[s];
+  if (genuine && genuine !== c) return true;             // 有名な記号だがアドレスが違う
+  return false;                                          // 知らない記号は判断しない
+}
+
 /* ── トークン（ERC-20）になった資金を追う ──────────────────────
    ETHをUSDTにスワップされると、これまでは追跡がそこで止まっていた。
    USDTの「コントラクト」を経路の一点として扱い、取引数が桁違いに多いため
@@ -2367,6 +2403,10 @@ async function getSwapTokenOutETH(txHash, holderAddr) {
     const hit = list.find(t => t.hash?.toLowerCase() === String(txHash).toLowerCase()
                             && t.to?.toLowerCase() === String(holderAddr).toLowerCase());
     if (!hit) return null;
+    if (isImpostorToken(hit.tokenSymbol, hit.contractAddress)) {
+      console.log(`[TokenOut] 「${hit.tokenSymbol}」を名乗る別トークンのため追わない`);
+      return null;
+    }
     return {
       contract: hit.contractAddress,
       symbol:   hit.tokenSymbol || 'TOKEN',
@@ -2597,7 +2637,11 @@ async function investigateETH(hash) {
       const etR = await fetchT(etUrl);
       const etJ = await etR.json();
       const tokenTxs = Array.isArray(etJ.result) ? etJ.result : [];
-      const matchTx = tokenTxs.find(t => t.hash.toLowerCase() === h.toLowerCase());
+      let matchTx = tokenTxs.find(t => t.hash.toLowerCase() === h.toLowerCase());
+      if (matchTx && isImpostorToken(matchTx.tokenSymbol, matchTx.contractAddress)) {
+        console.log(`[ETH] 「${matchTx.tokenSymbol}」を名乗る別トークン。被害資金として扱わない`);
+        matchTx = null;
+      }
       if (matchTx) {
         const dec = parseInt(matchTx.tokenDecimal) || 18;
         tokenSymbol = matchTx.tokenSymbol;
