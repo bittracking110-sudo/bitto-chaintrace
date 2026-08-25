@@ -1482,6 +1482,16 @@ function isExchange(label) {
   // トークンコントラクトは取引所ではない（「Binance: BNB Token」のように
   // 取引所名を含む名前もあるため、先に弾く）
   if (isTokenContract(label)) return false;
+  /* ★DEX・ブリッジ・ルーターも取引所ではない。
+     EX_KEYWORDS には歴史的に VIA_KEYWORDS の語が丸ごと入っており
+     （41語が重複）、`uniswap` を含む名前まで取引所と判定していた。
+     たとえば UniswapV2Pair が「到達した取引所」として報告書に載ると、
+     利用者は Uniswap に凍結を依頼しようとする。
+     しかし DEX は運営者が資金を止められる仕組みではないので、
+     そこは行き止まりであって、要請先ではない。
+     ホップ選択の側では !isVia で除いていたが、
+     最初の送金先とトークン受取人の判定では除いていなかった。 */
+  if (isViaService(label)) return false;
   return EX_KEYWORDS.some(k => label.toLowerCase().includes(k));
 }
 
@@ -1629,11 +1639,14 @@ async function apiJson(url) {
 const TRACE_BUDGET_MS = 27000;   // トークン契約・ブリッジを通過点として追い越すようになり、
                                  // ホップ数が増えた分だけ時間が要る（18秒では取引所の手前で切れていた）
 // アドレス情報付与(enrich)の時間予算。USDT等の巨大コントラクトが混じっても全体を止めない。
-const ENRICH_BUDGET_MS = 20000;   // 混雑したコントラクトはBlockchairの応答が遅い。ここで足りないと経路を確かめられない
+/* 予算の合計が INVESTIGATE_HARD_TIMEOUT_MS を超えると、
+   利用者には「時間内に完了しませんでした」としか出ない（実測で62秒→失敗）。
+   TRACE 27 + ENRICH 15 + CALLS 6 = 48秒に収め、上限側にも余裕を持たせる。 */
+const ENRICH_BUDGET_MS = 15000;   // 混雑したコントラクトはBlockchairの応答が遅い。ここで足りないと経路を確かめられない
 // investigateETH の内部呼び出し(calls)ラベル取得の時間予算。
 const CALLS_BUDGET_MS = 6000;
 // 上記の予算をすべてすり抜けた場合に調査ジョブを強制終了させる上限時間。
-const INVESTIGATE_HARD_TIMEOUT_MS = 60000;
+const INVESTIGATE_HARD_TIMEOUT_MS = 75000;   // 各予算の合計48秒＋外部APIの遅れを吸収する
 
 async function getAddressInfo(addr, chain) {
   try {
@@ -2315,7 +2328,7 @@ async function getSwapOutputETH(routerAddr, txHash, prevAddr) {
     if (!outs.length) return null;
     console.log(`[SwapOut] ${routerAddr.slice(0, 10)}... の同一取引内の出金: ${outs.length}件 → ${outs[0].addr.slice(0, 10)}...`);
     const chosen = outs[0];
-    chosen._siblings = outs.slice(1, 5).map(o => ({ addr: o.addr, label: o.label, amount: o.amount, txHash: txid }));
+    chosen._siblings = outs.slice(1, 5).map(o => ({ addr: o.addr, label: o.label, amount: o.amount, txHash }));
     chosen._sameTx = true;
     return chosen;
   } catch (e) {
@@ -2503,6 +2516,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
   let incomingHash = null;               // いま居る住所へ資金を運んできた取引
   let prevAddr = null;                   // その1つ前の住所
   let currentIsVia = false;              // いま居るのが交換・橋渡しのコントラクトか
+  let lastCandidates = 0;                // 直前の地点に送金先がいくつあったか（混雑の目安）
   let token = startToken;                // 資金がトークンなら {contract,symbol,decimals}
   if (token) console.log(`[traceHops] ${token.symbol} として追跡を開始する`);
   for (let i = 0; i < maxHops; i++) {
@@ -2514,10 +2528,25 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
       next = await getNextTokenTxETH(currentAddr, currentTime, token.contract, token.decimals);
       if (!next) { console.log(`[traceHops] ${token.symbol} はこのアドレスから動いていない`); break; }
     }
-    /* 交換・橋渡しの中に居るときは、次の送金を探しに行かない。
-       同じ取引の中の出金を読む方が確実で、他人の資金を拾わない。 */
-    if (!next && chain === 'eth' && currentIsVia && incomingHash) {
+    /* 同じ取引の中の出金を先に読む。
+       時刻と金額で選ぶより確実で、他人の資金を拾わない。
+
+       ★以前は「経由・トークンとラベルが付いた地点」でしか試していなかった。
+         しかし AllowanceHolder（1,104万回）や MainnetSettler（37万回）のような
+         共有の決済コントラクトはラベルが付かないため素通りし、
+         そこから「金額が最大の送金」を選んでいた。
+         結果、同じ取引を2回調べると行き先が変わり、
+         2回目は被害額より大きい額（＝他人の資金）を掴んでいた。
+
+         同じ取引の中で追える限りは、混雑した地点でも先へ進んでよい。
+         「大きく動いた先を追う」こと自体は正しい方法で、
+         問題は【どこで】それを使うか。共有コントラクトの中では使えない。 */
+    /* 毎回やると1ホップにつき1回の問い合わせが増え、調査が時間切れになる（実測）。
+       混雑した地点だけに絞る。直前の候補が多いほど、そこは混雑している。 */
+    const crowdedHere = currentIsVia || lastCandidates >= 3;
+    if (!next && chain === 'eth' && incomingHash && crowdedHere) {
       next = await getSwapOutputETH(currentAddr, incomingHash, prevAddr);
+      if (next) console.log(`[traceHops] 同じ取引の中で次の送金先を特定（推測ではない）`);
     }
     if (!next) {
       if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime);
@@ -2573,6 +2602,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
     currentTime  = next.time;
     incomingHash = next.txHash;
     currentIsVia = isVia || isTok;
+    lastCandidates = (next._siblings || []).length + 1;
   }
   return hops;
 }
