@@ -1080,7 +1080,7 @@ function labelMonthKey() { return labelDayKey().slice(0, 7); }   // 2026/8/20 �
 
 /* 日・月・総量のどれかに当たったら照会しない。
    当たっても調査自体は続く（名前が付かないだけ）。 */
-function labelQuotaOk(paid = false) {
+function labelQuotaOk(paid = false, device = null) {
   const d = labelDayKey(), m = labelMonthKey();
   if (labelUsage.day !== d)   { labelUsage.day = d; labelUsage.count = 0; }
   if (labelUsage.month !== m) { labelUsage.month = m; labelUsage.monthCount = 0; }
@@ -1098,11 +1098,52 @@ function labelQuotaOk(paid = false) {
   }
   if (labelUsage.monthCount >= MISTTRACK_MONTH_CAP) { console.warn('[LabelAPI] 今月の上限に達しました（無料分）'); return false; }
   if (labelUsage.count >= MISTTRACK_DAILY_CAP)      { console.warn('[LabelAPI] 本日の上限に達しました（無料分）'); return false; }
+  // 1人が使い占めるのを防ぐ。全体の枠が残っていても、この人はここまで
+  if (!deviceQuotaOk(device)) return false;
   return true;
 }
-function labelQuotaUse() {
+function labelQuotaUse(device) {
   labelUsage.count++; labelUsage.monthCount++; labelUsage.total++;
+  if (device) {
+    const u = deviceUsageOf(device);
+    u.count++; u.monthCount++;
+    saveDeviceUsage();
+  }
   saveLabelUsage();
+}
+
+/* ── 1利用者あたりの上限 ────────────────────────────────────
+   全体の上限だけだと、1人が繰り返し調べただけで全員分を使い切ってしまう。
+   逆に利用者ごとの上限だけでは、人数が増えた分だけ購入分が減るので守れない。
+   ★両方が要る。全体＝買った分を守る。利用者ごと＝1人の使い占めを防ぐ。 */
+const DEVICE_USAGE_FILE = path.join(REPORTS_DIR, 'label-usage-device.json');
+const MISTTRACK_USER_DAILY = Number(process.env.MISTTRACK_USER_DAILY ?? 5);
+const MISTTRACK_USER_MONTH = Number(process.env.MISTTRACK_USER_MONTH ?? 15);
+let deviceUsage = {};   // 端末ID → { day, count, month, monthCount }
+try {
+  if (fs.existsSync(DEVICE_USAGE_FILE)) {
+    deviceUsage = JSON.parse(fs.readFileSync(DEVICE_USAGE_FILE, 'utf8')) || {};
+    console.log(`[LabelAPI] 利用者ごとの記録 ${Object.keys(deviceUsage).length}件を復元`);
+  }
+} catch (e) { console.error('[LabelAPI] 利用者記録の読み込み失敗:', e.message); }
+function saveDeviceUsage() {
+  fsp.writeFile(DEVICE_USAGE_FILE, JSON.stringify(deviceUsage), 'utf8')
+    .catch(e => console.error('[LabelAPI] 利用者記録の保存失敗:', e.message));
+}
+function deviceUsageOf(device) {
+  const d = labelDayKey(), m = labelMonthKey();
+  let u = deviceUsage[device];
+  if (!u) u = deviceUsage[device] = { day: d, count: 0, month: m, monthCount: 0 };
+  if (u.day !== d)   { u.day = d; u.count = 0; }
+  if (u.month !== m) { u.month = m; u.monthCount = 0; }
+  return u;
+}
+function deviceQuotaOk(device) {
+  if (!device) return true;                      // 端末IDが無い経路は全体の上限だけで守る
+  const u = deviceUsageOf(device);
+  if (u.monthCount >= MISTTRACK_USER_MONTH) { console.warn(`[LabelAPI] この利用者の今月分が上限（${device}）`); return false; }
+  if (u.count      >= MISTTRACK_USER_DAILY) { console.warn(`[LabelAPI] この利用者の本日分が上限（${device}）`); return false; }
+  return true;
 }
 const MISTTRACK_COIN = { btc: 'BTC', eth: 'ETH', tron: 'USDT-TRC20' };
 /* 対象外のチェーンに投げても名前は返らず、回数だけ減る。
@@ -1750,8 +1791,8 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
         && (isLastNode || inferExchangeByBehavior(node))) {
       const known = labelCache.has(node.address.toLowerCase());
       const budgetOk = isLastNode ? apiLookups < lookupBudget : apiLookups < lookupBudget - 1;
-      if (known || (budgetOk && labelQuotaOk(opts.paid))) {
-        if (!known) { apiLookups++; labelQuotaUse(); }
+      if (known || (budgetOk && labelQuotaOk(opts.paid, opts.device))) {
+        if (!known) { apiLookups++; labelQuotaUse(opts.device); }
         const api = await lookupLabelAPI(node.address, chain);
         if (api.name) {
           node.label = api.name;
@@ -1848,9 +1889,9 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
      参考経路で取引所に着いていて、その名前が無いなら、そこに使う方が役に立つ。
      被害者が本当に欲しいのは「どこへ換金されたか」の名前。 */
   const unnamed = stopNode?.referenceTrace?.branches?.find(b => b.exchangeUnnamed);
-  if (unnamed && MISTTRACK_KEY && labelQuotaOk(opts.paid)) {
+  if (unnamed && MISTTRACK_KEY && labelQuotaOk(opts.paid, opts.device)) {
     try {
-      labelQuotaUse();
+      labelQuotaUse(opts.device);
       const api = await lookupLabelAPI(unnamed.reachedAddress, chain);
       if (api.name) {
         unnamed.reachedExchange = api.name;
@@ -1889,8 +1930,8 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
       }
       if (!last.label && MISTTRACK_KEY) {
         const known = labelCache.has(last.address.toLowerCase());
-        if (known || (apiLookups < lookupBudget && labelQuotaOk(opts.paid))) {
-          if (!known) { apiLookups++; labelQuotaUse(); }
+        if (known || (apiLookups < lookupBudget && labelQuotaOk(opts.paid, opts.device))) {
+          if (!known) { apiLookups++; labelQuotaUse(opts.device); }
           const api = await lookupLabelAPI(last.address, chain);
           if (api.name) {
             last.label = api.name;
@@ -1922,8 +1963,8 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   if (pfBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
       && target && target.address && !knownExchange && !target.isVia && !target.isToken) {
     const known = profileCache.has(target.address.toLowerCase());
-    if (known || labelQuotaOk(opts.paid)) {
-      if (!known) labelQuotaUse();
+    if (known || labelQuotaOk(opts.paid, opts.device)) {
+      if (!known) labelQuotaUse(opts.device);
       const pf = await lookupProfileAPI(target.address, chain).catch(() => null);
       if (pf) {
         target.profile = pf;
@@ -1941,8 +1982,8 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   if (rkBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
       && target && target.address && !knownExchange && !target.isVia && !target.isToken) {
     const known = riskCache.has(target.address.toLowerCase());
-    if (known || labelQuotaOk(opts.paid)) {
-      if (!known) labelQuotaUse();
+    if (known || labelQuotaOk(opts.paid, opts.device)) {
+      if (!known) labelQuotaUse(opts.device);
       const rk = await lookupRiskAPI(target.address, chain).catch(() => null);
       if (rk) target.risk = rk;
     }
@@ -1957,8 +1998,8 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   if (cpBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
       && last && last.address && !named && !last.isVia && !last.isToken) {
     const known = cpCache.has(last.address.toLowerCase());
-    if (known || labelQuotaOk(opts.paid)) {
-      if (!known) labelQuotaUse();
+    if (known || labelQuotaOk(opts.paid, opts.device)) {
+      if (!known) labelQuotaUse(opts.device);
       const cp = await lookupCounterpartyAPI(last.address, chain).catch(() => []);
       if (cp.length) {
         last.counterparty = cp;
@@ -5686,8 +5727,11 @@ app.get('/api/admin/label-usage', requireAdmin, (_req, res) => {
       '1日の上限': MISTTRACK_DAILY_CAP,
       '1か月の上限': MISTTRACK_MONTH_CAP,
       '購入した総回数': MISTTRACK_TOTAL_CAP,
+      '1利用者あたり1日': MISTTRACK_USER_DAILY,
+      '1利用者あたり1か月': MISTTRACK_USER_MONTH,
       キー: MISTTRACK_KEY ? '設定済み' : '未設定',
     },
+    '利用者ごとの記録件数': Object.keys(deviceUsage).length,
     '本日': labelUsage.day === d ? labelUsage.count : 0,
     '今月': labelUsage.month === m ? labelUsage.monthCount : 0,
     'これまでの合計': labelUsage.total,
@@ -6378,7 +6422,7 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
         // クライアントは永久に「解析中」になる。最後の砦として全体に上限時間を課し、
         // 必ず done か error のどちらかで終わらせる。
         result = await Promise.race([
-          investigate(txid, chain),
+          investigate(txid, chain, { device }),
           new Promise((_, reject) => setTimeout(
             () => reject(new Error('調査が時間内に完了しませんでした。時間をおいてもう一度お試しください。')),
             INVESTIGATE_HARD_TIMEOUT_MS
