@@ -2172,9 +2172,23 @@ async function getNextTxETH(addr, afterTime) {
   const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
   console.log(`[HOP] ETH追跡: ${addr} / 基準: ${isNaN(refMs) ? '不明' : new Date(refMs).toISOString()}`);
 
+  /* ★取得は「入金時刻のブロックから」。1件あたり1000件しか取れないため、
+     startblock=0 だと**最も古い1000件**（通常TXは昇順）または
+     **最新の1000件**（内部・トークンは降順）しか見えない。
+     どちらも入金直後の窓から外れる。
+
+     実測：取引49,763回のアドレスで、入金直後の送金が候補に入らず、
+     まったく別の枝へ流れていた。手作業で追った経路（Binanceに到達）とは
+     4ホップ目で分岐していた。
+
+     入金のブロックから取れば、何件あっても「入金の直後」を確実に拾える。
+     以前 listNextCandidatesETH で同じ誤りを直している（第4-H節）。 */
+  const startBlock = Number.isFinite(refMs) && refMs > 0
+    ? await blockNoByTime(Math.floor(refMs / 1000)) : 0;
+
   // ① 通常TX（EOAからの送金）
   try {
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=${startBlock}&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const j = await apiJson(url);
     const txs = Array.isArray(j.result) ? j.result : [];
     console.log(`[HOP] Etherscan TX: ${txs.length}件`);
@@ -2206,14 +2220,14 @@ async function getNextTxETH(addr, afterTime) {
   // ② 内部TX（スマートコントラクト・プロキシ経由の資金移動）
   // ※ sort=desc で最新TX から取得（古いコントラクトはascだと過去TXしか取れない問題を修正）
   try {
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlistinternal&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=desc&apikey=${ETHERSCAN_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlistinternal&address=${addr}&startblock=${startBlock}&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const j = await apiJson(url);
     const txs = Array.isArray(j.result) ? j.result : [];
     console.log(`[HOP] Internal TX: ${txs.length}件`);
     const intCandidates = [];
     for (const tx of txs) {
       const txMs = parseInt(tx.timeStamp) * 1000;
-      if (txMs < refMs) break; // sort=desc なので以降は全て古い → 早期終了
+      if (txMs < refMs) continue; // 昇順に変えたため、入金より前は読み飛ばす
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       if (tx.isError === '1') continue;
       if (!tx.to) continue;
@@ -2238,13 +2252,13 @@ async function getNextTxETH(addr, afterTime) {
   } catch(e) { console.error('[HOP] Internal TX:', e.message); }
 
   try {
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=0&endblock=latest&page=1&offset=1000&sort=desc&apikey=${ETHERSCAN_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=${startBlock}&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const j = await apiJson(url);
     const txs = Array.isArray(j.result) ? j.result : [];
     const tokenCandidates = [];
     for (const tx of txs) {
       const txMs = parseInt(tx.timeStamp) * 1000;
-      if (txMs < refMs) break; // sort=desc なので以降は全て古い → 早期終了
+      if (txMs < refMs) continue; // 昇順に変えたため、入金より前は読み飛ばす
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       /* 記号を騙るトークンは追わない。実データで「ETH」を名乗る別トークンを
          掴み、無関係の経路を追っていた（第4-R節）。 */
