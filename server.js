@@ -1887,6 +1887,75 @@ async function getAddressInfo(addr, chain) {
   return null;
 }
 
+/* ══ ブリッジの渡り先を、取引そのものから読む ══════════════════
+   ★これまで「チェーンをまたいだ先は公開情報では繋がらない」と判定していた
+     （第4-T節・第4-W節）。Dune・Allium・Bitquery・unbridge・Bridgers自社APIを
+     すべて実測で落とした。しかし前提が誤っていた。
+
+   ブリッジは「どのチェーンの、どのアドレスへ渡すか」を引数として受け取る。
+   ★つまり渡り先は、こちら側の取引の呼び出しデータに最初から書かれている。
+     外部サービスも、追加費用も要らない。
+
+   実データで確認（利用者提供の正解経路）：
+     0x54129a57… の cross(...) 呼び出し
+       4番目のアドレス 0x5486532d51dd715157358d99e44d5e1af47d44f0
+       3番目の数値     728126428（TRONのチェーンID）
+     → THg8gEMorrryNJSCaTsbJJnGBw7q2bF68Y
+       利用者が OKLink で手作業確認した渡り先と完全に一致。
+     同じブリッジの他4件でも成立（TRON3件・Arbitrum1件）。
+
+   ★対応していない呼び出しは黙って何も返さない。
+     ブリッジごとに引数の形が違うので、確かめた形だけを読む。 */
+const BRIDGE_CHAINS = {
+  1: 'Ethereum', 10: 'Optimism', 56: 'BNB Chain', 137: 'Polygon', 250: 'Fantom',
+  8453: 'Base', 42161: 'Arbitrum', 43114: 'Avalanche', 59144: 'Linea',
+  728126428: 'TRON',
+};
+const TRON_CHAIN_ID = 728126428;
+const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+/* 20バイトのアドレスをTRONの表記に直す。
+   TRONは 0x41 を頭に付け、二重SHA-256の先頭4バイトを検査用に足して base58 で書く。 */
+function toTronAddress(hex20) {
+  const h = String(hex20 || '').replace(/^0x/, '');
+  if (!/^[0-9a-fA-F]{40}$/.test(h)) return null;
+  const body = Buffer.from('41' + h, 'hex');
+  const sum = crypto.createHash('sha256')
+    .update(crypto.createHash('sha256').update(body).digest()).digest();
+  const full = Buffer.concat([body, sum.subarray(0, 4)]);
+  let n = BigInt('0x' + full.toString('hex')), out = '';
+  while (n > 0n) { out = B58[Number(n % 58n)] + out; n /= 58n; }
+  for (const b of full) { if (b === 0) out = '1' + out; else break; }
+  return out;
+}
+
+/* Bridgers／TransitSwap の cross(...)。実データで引数の位置を確かめた形だけ読む。 */
+const BRIDGE_METHODS = {
+  '0x6b3ec416': { addrIdx: 3, chainIdx: 7, amountIdx: 5, name: 'Bridgers／TransitSwap' },
+};
+
+function decodeBridgeCall(input) {
+  const s = String(input || '').toLowerCase();
+  const spec = BRIDGE_METHODS[s.slice(0, 10)];
+  if (!spec) return null;
+  const w = i => s.slice(10 + i * 64, 10 + (i + 1) * 64);
+  if (w(0).length < 64) return null;
+  const base = parseInt(w(0), 16) / 32;
+  if (!Number.isFinite(base)) return null;
+  const rawAddr = w(base + spec.addrIdx);
+  const rawChain = w(base + spec.chainIdx);
+  if (rawAddr.length < 64 || rawChain.length < 64) return null;
+  const hex20 = rawAddr.slice(24);
+  if (!/^[0-9a-f]{40}$/.test(hex20) || /^0+$/.test(hex20)) return null;
+  const chainId = Number(BigInt('0x' + rawChain));
+  if (!BRIDGE_CHAINS[chainId]) return null;          // 知らないチェーンは名乗らない
+  const amount = Number(BigInt('0x' + w(base + spec.amountIdx))) / 1e18;
+  const address = chainId === TRON_CHAIN_ID ? toTronAddress(hex20) : '0x' + hex20;
+  if (!address) return null;
+  return { bridge: spec.name, chainId, chainName: BRIDGE_CHAINS[chainId], address,
+           amount: Number.isFinite(amount) && amount > 0 ? amount : null };
+}
+
 async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   let exchangeCount = 0;                 // 判明＋推定を合わせた取引所ノード数
   let apiLookups    = 0;                 // 外部ラベルAPIを引いた回数（1調査あたりの上限あり）
@@ -1980,6 +2049,42 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
 
   markDepositAddresses(path);
   truncateAfterVia(path);
+
+  /* ★ブリッジで別のチェーンへ渡っていたら、その渡り先を取引から読む。
+     読めたら、そのチェーンで追跡を続ける。
+     これまでは「ここから先は追えません」で終わっていた地点（第5-C節）。 */
+  if (chain === 'eth') {
+    for (const n of path) {
+      if (!n.txHash || n.bridgeTo) continue;
+      if (!(n.isVia || n.traceStop)) continue;     // ブリッジらしい地点だけ見る
+      try {
+        const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=proxy`
+          + `&action=eth_getTransactionByHash&txhash=${n.txHash}&apikey=${ETHERSCAN_KEY}`);
+        const info = decodeBridgeCall(j.result?.input);
+        if (!info) continue;
+        n.bridgeTo = info;
+        console.log(`[ブリッジ] ${info.bridge} → ${info.chainName} の ${info.address}`);
+        /* 渡り先がTRONなら、そのまま追い続ける。
+           ★被害者が知りたいのは換金先であって、ブリッジの名前ではない。 */
+        if (info.chainId === TRON_CHAIN_ID) {
+          const tHops = await traceHops(info.address, n.time || new Date().toISOString(),
+            'tron', 6, Date.now() + 20000, null, info.amount).catch(() => []);
+          if (tHops.length) {
+            n.crossChainHops = tHops.map(h => ({
+              address: h.address, label: h.label || '', amount: h.amount, token: h.token,
+              isExchange: h.isExchange, isVia: h.isVia, time: h.time, txHash: h.txHash,
+            }));
+            const ex = tHops.find(h => h.isExchange && !h.isVia && !h.isToken);
+            if (ex) {
+              n.crossChainExchange = { name: ex.label || '取引所（名称未判明）', address: ex.address };
+              console.log(`[ブリッジ] 渡った先で取引所に到達: ${ex.label || '名称未判明'}`);
+            }
+          }
+        }
+        break;                                     // ブリッジは1件読めれば足りる
+      } catch (e) { console.error('[ブリッジ] 読み取り失敗:', e.message); }
+    }
+  }
 
   /* 打ち切った地点から先を、参考として3件だけ添える。
      何も見えないまま終わるより、状況を判断する材料にはなる。
@@ -3459,6 +3564,17 @@ async function investigate(txid, chain, opts = {}) {
     result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address, amount: n.amount });
   }
 
+  /* ★ブリッジを渡った先で取引所に着いた場合も、凍結要請の宛先に載せる。
+     被害者が知りたいのは換金先であって、ブリッジの名前ではない。
+     どのチェーンのアドレスかを添えないと、要請文が書けない。 */
+  for (const n of (result.path || [])) {
+    const ex = n.crossChainExchange;
+    if (!ex || !ex.address) continue;
+    if (result.exchanges.some(e => String(e.address || '').toLowerCase() === ex.address.toLowerCase())) continue;
+    result.exchanges.push({ name: ex.name, address: ex.address,
+      amount: n.bridgeTo?.amount ?? null, chain: n.bridgeTo?.chainName || null, viaBridge: true });
+  }
+
   /* ★取引所が出なかったとき、「見つからなかった」で終わらせない。
      詐欺の資金が現金化のため取引所へ届くまでは1週間以内のことが多い
      （運営の実感・記録：第4-Z節）。送金からまだ日が浅いなら、
@@ -4452,6 +4568,27 @@ ${r.txid}
              資金が消えたのではなく、別のチェーンへ渡っている。
              そしてブリッジ運営者は、取引所と同じく記録を持つ照会先になる。
              「他のツールで調べてください」では被害者の助けにならない。 */
+          /* ★渡り先が読めた場合は、こちらを出す。「追えません」ではない。 */
+          const cb = (r.path || []).find(p => p.bridgeTo);
+          if (cb) {
+            const t = cb.bridgeTo, hops = cb.crossChainHops || [], ex = cb.crossChainExchange;
+            return `<p class="flow-note" style="border-left:3px solid #10b981;padding-left:10px">
+        <strong>■ 別のチェーンへ渡った先が判明しました。</strong><br>
+        <strong>${escHtml(cb.label || 'このコントラクト')}</strong>（${escHtml(t.bridge)}）から
+        <strong>${escHtml(t.chainName)}</strong> へ渡っています。<br>
+        渡った先のアドレス：<strong class="mono">${escHtml(t.address)}</strong>
+        ${t.amount != null ? `／ 渡した額：<strong>${escHtml(String(t.amount).slice(0, 12))} ETH</strong>` : ''}
+        ${hops.length ? `<br><br><strong>${escHtml(t.chainName)} 側で ${hops.length} 段階たどりました。</strong><br>
+        ${hops.map((h, i) => `${i + 1}. <span class="mono">${escHtml(h.address)}</span>`
+            + `${h.label ? ' ' + escHtml(h.label) : ''}`
+            + `${h.amount != null ? ' ' + escHtml(String(h.amount).slice(0, 10)) + (h.token ? ' ' + escHtml(h.token) : '') : ''}`
+            + `${h.isExchange ? ' 🏦' : ''}`).join('<br>')}` : ''}
+        ${ex ? `<br><br><strong>🏦 到達した取引所：${escHtml(ex.name)}</strong><br>
+        <span class="mono">${escHtml(ex.address)}</span>` : ''}
+        <br><br><span style="font-size:0.9em">※ 渡り先は、ブリッジへの送金に含まれる指定内容から復元しています。
+        ${ex ? '' : `${escHtml(t.chainName)} 側の追跡はここまでです。`}</span>
+        </p>`;
+          }
           const b = (r.path || []).find(p => p.traceStop && (p.isVia || isViaService(p.label)));
           if (!b) return '';
           return `<p class="flow-note" style="border-left:3px solid var(--r-accent);padding-left:10px">

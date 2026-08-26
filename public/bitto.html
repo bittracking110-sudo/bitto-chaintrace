@@ -633,7 +633,39 @@ const setBubble = (row, html) => {
    資金が消えたのではなく、別のチェーンへ渡っている。
    そしてブリッジ運営者は取引所と同じく記録を持つ照会先になる。
    「他のツールで調べてください」では被害者の助けにならない。 */
+/* ★渡り先が読めた場合。ブリッジの引数に「どのチェーンの、どのアドレスへ」が
+   書かれているので、そこから復元している（第5-C節）。
+   これまで「ここから先は追えません」で終わっていた地点。 */
+function bridgeCrossHTML(path){
+  const b = (path || []).find(n => n.bridgeTo);
+  if (!b) return '';
+  const t = b.bridgeTo;
+  const hops = b.crossChainHops || [];
+  const ex = b.crossChainExchange;
+  return `<div class="card" style="border-color:rgba(61,220,151,.45)">
+    <h4 style="color:#3DDC97">別のチェーンへ渡った先が判明しました</h4>
+    <div class="note" style="margin-top:0">
+      <b>${esc(b.label || 'このコントラクト')}</b>（${esc(t.bridge)}）から
+      <b>${esc(t.chainName)}</b> へ渡っています。<br>
+      渡った先のアドレス：<b class="mono">${esc(t.address)}</b>
+      ${t.amount != null ? `<br>渡した額：<b>${esc(String(t.amount).slice(0,12))} ETH</b>` : ''}
+      ${hops.length ? `<br><br><b>${esc(t.chainName)} 側で ${hops.length} 段階たどりました。</b>` : ''}
+      ${ex ? `<br><b style="color:#3DDC97">🏦 到達した取引所：${esc(ex.name)}</b><br>
+        <span class="mono" style="font-size:11px">${esc(ex.address)}</span>` : ''}
+      ${hops.length ? `<div style="margin-top:8px;font-size:11.5px;line-height:1.9">
+        ${hops.map((h,i) => `${i+1}. <span class="mono">${esc(shortAddr(h.address))}</span>`
+          + `${h.label ? ' ' + esc(h.label) : ''}`
+          + `${h.amount != null ? ' ' + esc(String(h.amount).slice(0,10)) + (h.token ? ' ' + esc(h.token) : '') : ''}`
+          + `${h.isExchange ? ' 🏦' : ''}`).join('<br>')}
+      </div>` : ''}
+      <br><span style="font-size:11.5px">※ 渡り先は、ブリッジへの送金に含まれる指定内容から復元しています。
+      ${ex ? '' : `${esc(t.chainName)} 側の追跡はここまでです。`}</span>
+    </div>
+  </div>`;
+}
 function bridgeStopHTML(path){
+  /* 渡り先が読めた場合は、上の案内で足りる。二重に出さない。 */
+  if ((path || []).some(n => n.bridgeTo)) return '';
   const b = (path || []).find(n => n.traceStop && isBridgeLike(n));
   if (!b) return '';
   return `<div class="card" style="border-color:rgba(96,165,250,.4)">
@@ -908,6 +940,7 @@ function resultCard(results){
     <div class="card"><h4>資金フロー（概要）${results.length>1 ? ` ${i+1}/${results.length}` : ''} — ${esc(r.chain)}</h4>
       ${flowHTML(p)}
       ${ex.length ? `<div class="note">到達した取引所：${esc(ex.join('、'))}</div>` : ''}
+      ${bridgeCrossHTML(p)}
       ${bridgeStopHTML(p)}
       ${refTraceHTML(p)}
       ${profileHTML(p)}
