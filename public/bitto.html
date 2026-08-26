@@ -183,6 +183,13 @@
   .pool-note{margin-top:6px;font-size:9.5px;line-height:1.45;font-weight:700;color:var(--amber);
              background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.34);border-radius:4px;padding:3px 6px}
   .pool-note span{font-weight:400;color:var(--sub)}
+  /* 確度が下がる区間。消さずに、薄くして区別する */
+  .node.after-stop{opacity:.62;border-style:dashed}
+  .caveat{margin-top:10px;font-size:11.5px;line-height:1.75;color:var(--sub);
+          background:rgba(125,180,255,.07);border:1px solid rgba(125,180,255,.24);
+          border-radius:8px;padding:10px 12px}
+  .caveat strong{color:var(--txt);font-size:12px}
+  .caveat b{color:var(--txt)}
   .b-known{background:rgba(61,220,151,.18);color:var(--green);border:1px solid rgba(61,220,151,.42)}
   .b-guess{background:rgba(251,191,36,.16);color:var(--amber);border:1px solid rgba(251,191,36,.42)}
   .b-via{background:rgba(125,180,255,.16);color:#A9CBFF;border:1px solid rgba(125,180,255,.42)}
@@ -696,6 +703,24 @@ function nodeBadge(n){
     return `<span class="badge b-via">🔀 経由（利用者の多いコントラクト）</span>`;
   return `<span class="badge b-unk">未特定</span>`;
 }
+/* ★経路を見せる以上、その読み方を必ず添える。
+   暗号資産に印は無く、複数の資金が同じアドレスを通れば区別できない。
+   「同じ資金である保証が無い」のは経路全体の前提であって、
+   どこか特定の地点から急に始まる話ではない。
+   前提を書かずに線だけ見せると、確定した事実として読まれる。 */
+function traceCaveatHTML(nodes){
+  const stop = (nodes || []).find(n => n.traceStop);
+  const crowd = stop && (stop.stopReason === 'crowded' || stop.stopReason === 'via');
+  return `<div class="caveat">
+    <strong>この経路の読み方</strong><br>
+    経路はブロックチェーン上の記録でつながっていますが、<b>最初に送金されたものと
+    同じ資金である保証はありません</b>。暗号資産には印が無く、複数の資金が同じ
+    アドレスを通ると区別できないためです。これは調査全体の前提です。
+    ${crowd ? `<br><br>とくに <b>${esc(stop.label || '利用者の多いアドレス')}</b> から先は、
+    多くの人の資金が通る地点を経由しているため、確度が下がります（薄く表示しています）。
+    それでも<b>つながり自体は記録に残っている</b>ので、判断材料として省かずに出しています。` : ''}
+  </div>`;
+}
 /* ★ここで他人の資金と混ざった、という事実は隠さない。
    合流した先は「同じ資金を追えた」とは言えず、確度が一段落ちる。
    黙って1本の線に見せると、読み手は確定した経路だと受け取ってしまう。 */
@@ -793,7 +818,7 @@ function flowHTML(path){
     <div class="flow-view">
     <div class="flow">` + nodes.map((n,i) => `
     ${i ? '<div class="arrow">→</div>' : ''}
-    <div class="node ${nodeCls(n)}">
+    <div class="node ${nodeCls(n)}${n.afterStop ? ' after-stop' : ''}">
       <div class="hop">${esc(hopName(i, nodes.length))}</div>
       <div class="nm">${exIcon(n)}${esc(n.label || (n.isExchange ? '取引所系ウォレット' : 'ウォレット'))}</div>
       <div class="ad">${esc(shortAddr(n.address))}</div>
@@ -810,7 +835,8 @@ function flowHTML(path){
       <span><i style="background:#FBBF24"></i>推定（振る舞いから）</span>
       <span><i style="background:#7DB4FF"></i>経由（DEX/ブリッジ）</span>
       <span><i style="background:#7C8FA8"></i>未特定</span>
-    </div>`;
+    </div>
+    ${traceCaveatHTML(nodes)}`;
 }
 function resultCard(results){
   const paths   = results.map(r => r.path || []);
@@ -903,7 +929,20 @@ function resultCard(results){
           ? `経路上のアドレスに<b>既知のラベル情報が見つからず、取引所を特定できませんでした</b>。資金の移動経路は下記のとおり追跡できています。`
           : '現時点で既知の取引所には到達していません。';
 
-  return `調査が完了しました。以下が結果の概要です。\n\n${summaryLine}${stats}${risk}${flows}
+  /* 取引所が出ないまま終わらせない。送金から日が浅ければ、
+     資金がまだ動いている最中の可能性が高い（記録：第4-Z節）。
+     被害者が最も焦っている時期に「見つかりません」だけ返さない。 */
+  const sm = results.map(r => r.stillMoving).find(Boolean);
+  const movingHTML = (!exNames.length && sm) ? `<div class="card" style="border-color:rgba(251,191,36,.4)">
+    <div style="font-weight:700;color:var(--amber);font-size:13px">⏳ まだ資金が動いている最中かもしれません</div>
+    <div style="font-size:12.5px;line-height:1.9;color:var(--sub);margin-top:6px">
+      送金は${sm.days === 0 ? '本日' : esc(sm.days + '日前')}です。詐欺被害の資金が現金化のため取引所へ届くまでは
+      <b>1週間以内のことが多く</b>、いま取引所が出ないのは資金がまだ移動している最中である可能性があります。
+      <b>数日後にもう一度、同じTXIDで調べてみてください。</b>取引所が判明することがあります。
+    </div>
+  </div>` : '';
+
+  return `調査が完了しました。以下が結果の概要です。\n\n${summaryLine}${stats}${risk}${flows}${movingHTML}
     <div class="note">本結果は公開ブロックチェーン情報に基づく情報提供です。資産の回復・犯人の特定を保証するものではありません。</div>
     <div class="card" style="text-align:center">
       <div style="font-size:13px;color:var(--sub2);line-height:1.9">警察・取引所への連絡にそのまま使える<b>初動パック</b>（無料）</div>

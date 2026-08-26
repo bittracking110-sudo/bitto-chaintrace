@@ -1723,26 +1723,32 @@ const VIA_TRAFFIC_STOP = 10000;
    ★取引所は打ち切らない。そこが到達先＝要請先そのものなので、
      取引回数が多いのは当たり前。
 
-   短く正確に終える方を選ぶ。行き先を1つ余計に見せるより、
-   無関係の方の口座に凍結要請が飛ぶ事故の方が重い。
-   打ち切った先は「参考情報（未確定）」の仕組みで控えめに出る。 */
+   ★2026-08-26 方針変更：経路を切り落とすのをやめ、印を付けて全部見せる。
+     利用者の指摘（記録：第4-Z節）——
+       「利用者が多いからといって、その先が同じ資金でないと断言もできない」
+     そのとおりで、切る側にも根拠は無い。暗号資産に名前は書かれておらず、
+     ★「同じ資金である保証が無い」のは経路全体の前提であって、
+       混雑した地点から急に始まる話ではない。
+     切り落とすと、被害者は行き先を知る手段そのものを失う。
+     見せたうえで「同一資金の保証は無い」と添える方が、判断材料が多い。
+     判断するのは読み手（被害者・弁護士・警察）。 */
 function truncateAfterVia(path) {
+  /* 印を付けた地点より先を「確度が下がる区間」として記す。切り落とさない。 */
+  const markAfter = (i, reason) => {
+    path[i].traceStop  = true;
+    path[i].stopReason = reason;
+    for (let k = i + 1; k < path.length; k++) path[k].afterStop = true;
+    if (i < path.length - 1) {
+      console.log(`[trace] index ${i}（${reason}）以降は確度が下がる区間として表示`);
+    }
+  };
   for (let i = 1; i < path.length; i++) {
     const n = path[i];
     // 到達先の取引所は打ち切らない（そこが目的地）
     if (n.isExchange) continue;
     const crowded = n.txCount != null && n.txCount >= VIA_TRAFFIC_STOP;
-    /* 情報を取れなかった区間は「混雑していないと確かめられていない」。
-       確かめられないまま先を見せない。 */
-    if (n.unverified) {
-      if (i < path.length - 1) {
-        console.log(`[trace] index ${i} 以降は取引回数を確認できなかったため打ち切る`);
-        path.splice(i + 1);
-      }
-      n.traceStop = true;
-      n.stopReason = 'unverified';
-      return;
-    }
+    /* 情報を取れなかった区間は「混雑していないと確かめられていない」。 */
+    if (n.unverified) { markAfter(i, 'unverified'); return; }
     if (!n.isVia && !n.isToken && !crowded) continue;
     // 取引が少ない小規模なサービスは、まだ追える見込みがあるので続ける
     // 取引回数が取れないことがある（WETHは0で返ってきた）。その場合は打ち切る側に倒す。
@@ -1750,13 +1756,8 @@ function truncateAfterVia(path) {
         && n.txCount != null && n.txCount > 0) continue;
     // 次のノードを同じ取引の中から特定できているなら、推測ではないので続ける
     if (path[i + 1] && path[i + 1].sameTx) continue;
-    if (i < path.length - 1) {
-      console.log(`[trace] ${n.label || 'このアドレス'}（取引${n.txCount ?? '不明'}回）で追跡を終了`
-        + `（利用者が多く、以降は同一資金と言えないため）`);
-      path.splice(i + 1);
-    }
-    n.traceStop = true;
-    n.stopReason = crowded ? 'crowded' : 'via';
+    console.log(`[trace] ${n.label || 'このアドレス'}（取引${n.txCount ?? '不明'}回）から先は確度が下がる`);
+    markAfter(i, crowded ? 'crowded' : 'via');
     return;
   }
 }
@@ -2013,12 +2014,16 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
 
          合流地点の場合は、選ばなかった宛先がすでに金額順で手元にある。
          取り直さずにそれを使う（API呼出しを増やさない）。 */
-      const starts = stopNode
-        ? await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 3)
-        : poolNode.siblings.slice(0, 3).map(s => ({
+      /* 経路を切り落とさなくなったので、本線がすでに通った宛先は枝から外す。
+         同じものを2度見せても判断材料は増えない。 */
+      const onPath = new Set((path || []).map(p => String(p.address || '').toLowerCase()));
+      const raw = stopNode
+        ? await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 4)
+        : poolNode.siblings.slice(0, 4).map(s => ({
             address: s.address, label: s.label || '', amount: s.amount,
             time: s.time || poolNode.time, token: s.token, gapMin: 0,
           }));
+      const starts = raw.filter(s => !onPath.has(String(s.address || '').toLowerCase())).slice(0, 3);
       const branches = [];
       for (const st of starts) {
         if (Date.now() > refDeadline) { console.log('[参考経路] 時間切れで残りの枝を省略'); break; }
@@ -3361,7 +3366,33 @@ async function investigate(txid, chain, opts = {}) {
     if (result.exchanges.some(e => (e.address || '').toLowerCase() === n.address.toLowerCase())) continue;
     result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address, amount: n.amount });
   }
+
+  /* ★取引所が出なかったとき、「見つからなかった」で終わらせない。
+     詐欺の資金が現金化のため取引所へ届くまでは1週間以内のことが多い
+     （運営の実感・記録：第4-Z節）。送金からまだ日が浅いなら、
+     追跡が途中で止まるのは資金がまだ動いている最中である可能性が高い。
+     ★ここは被害者が最も焦っている時期で、
+       「見つかりません」だけ返すのは事実としても不親切であり、
+       数日後の再調査という次の行動を示せる場面。 */
+  const t0 = new Date(normalizeTimeStr(result.blockTime)).getTime();
+  if (!result.exchanges.length && Number.isFinite(t0) && t0 > 0) {
+    const days = Math.floor((Date.now() - t0) / 86400000);
+    if (days >= 0 && days <= STILL_MOVING_DAYS) result.stillMoving = { days };
+  }
   return result;
+}
+
+/* 詐欺資金が取引所に届くまでの日数の目安。これを過ぎても出ない場合は
+   「移動中」ではなく、追跡の限界（ブリッジ等）を疑う。 */
+const STILL_MOVING_DAYS = 7;
+
+function stillMovingText(sm) {
+  if (!sm) return '';
+  const d = sm.days === 0 ? '本日' : `${sm.days}日前`;
+  return `送金は${d}です。詐欺被害の資金が現金化のため取引所へ届くまでは`
+    + `1週間以内のことが多く、いま取引所が出ないのは`
+    + `資金がまだ移動している最中である可能性があります。`
+    + `数日後にもう一度同じTXIDで調べると、取引所が判明することがあります。`;
 }
 
 // ══ レポート生成 ══════════════════════════════════════════════
@@ -3422,13 +3453,19 @@ function buildReport(result) {
     const lastNode = (result.path || []).filter(p => p.role !== 'sender').slice(-1)[0];
     const lastLabel = lastNode?.label ? `\n最終到達先：${lastNode.label}` : '';
     const lastAddr  = lastNode?.address ? `\nアドレス：${lastNode.address.slice(0,12)}...${lastNode.address.slice(-6)}` : '';
-    exSection = `\n⚠️ 取引所判定\n━━━━━━━━━━━━━━━━━\n送金先は既知の取引所DBに一致しませんでした。${lastLabel}${lastAddr}\n追加追跡が必要な場合はご連絡ください。`;
+    const moving = result.stillMoving ? `\n\n⏳ ${stillMovingText(result.stillMoving)}` : '';
+    exSection = `\n⚠️ 取引所判定\n━━━━━━━━━━━━━━━━━\n送金先は既知の取引所DBに一致しませんでした。${lastLabel}${lastAddr}${moving}\n追加追跡が必要な場合はご連絡ください。`;
   }
 
   const amountDisplay = (result.tokenSymbol && result.tokenAmount > 0)
     ? `${result.tokenAmount.toFixed(6)} ${result.tokenSymbol}（ERC-20トークン）`
     : `${(result.amount != null && !isNaN(result.amount)) ? result.amount.toFixed(8) : '不明'} ${result.chain}`;
-  return `📊 BitTo 調査レポート\n━━━━━━━━━━━━━━━━━\n${em} チェーン：${result.chain}\n🔗 TXID：${txShort}\n📅 送金日時：${fmtDate(result.blockTime)}\n💰 送金額：${amountDisplay}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}\n\n📍 送金経路\n━━━━━━━━━━━━━━━━━\n${pathLines.join('\n　↓\n')}\n${exSection}${tplSection}\n\n🔒 BitTo が自動生成したレポートです`;
+  /* 経路を見せる以上、読み方を必ず添える（記録：第4-Z節）。 */
+  const caveat = `\n\n📖 この経路の読み方\n━━━━━━━━━━━━━━━━━\n`
+    + `経路はブロックチェーン上の記録でつながっていますが、最初に送金されたものと\n`
+    + `同じ資金である保証はありません。暗号資産には印が無く、複数の資金が同じ\n`
+    + `アドレスを通ると区別できないためです。追跡全体の前提としてご承知ください。`;
+  return `📊 BitTo 調査レポート\n━━━━━━━━━━━━━━━━━\n${em} チェーン：${result.chain}\n🔗 TXID：${txShort}\n📅 送金日時：${fmtDate(result.blockTime)}\n💰 送金額：${amountDisplay}${(result.fee != null && !isNaN(result.fee)) ? `\n⛽ 手数料：${result.fee.toFixed(8)} ${result.chain}` : ''}${result.destTag != null ? `\n🏷 宛先タグ：${result.destTag}` : ''}\n\n📍 送金経路\n━━━━━━━━━━━━━━━━━\n${pathLines.join('\n　↓\n')}${caveat}\n${exSection}${tplSection}\n\n🔒 BitTo が自動生成したレポートです`;
 }
 
 /* ══ 管理用エンドポイントの関門 ═══════════════════════════════
@@ -3977,6 +4014,29 @@ const SERVICE_NOTES = [
   ['tether',       '米ドルに連動する通貨（USDT）を発行する仕組み'],
   ['usdc',         '米ドルに連動する通貨（USDC）を発行する仕組み'],
 ];
+/* ★経路を見せる以上、その読み方を必ず添える。
+   暗号資産に印は無く、複数の資金が同じアドレスを通れば区別できない。
+   「同じ資金である保証が無い」のは経路全体の前提であって、
+   どこか特定の地点から急に始まる話ではない（記録：第4-Z節）。
+   前提を書かずに線だけ見せると、確定した事実として読まれる。
+   読むのは被害者・弁護士・警察で、これをもとに動く人たち。 */
+function traceCaveatHTML(path) {
+  const stop  = (path || []).find(p => p.traceStop);
+  const crowd = stop && (stop.stopReason === 'crowded' || stop.stopReason === 'via');
+  const name  = stop && stop.label ? stop.label : '利用者の多いアドレス';
+  return `<div class="caveat-box">
+    <p style="margin:0 0 6px"><strong>この経路の読み方</strong></p>
+    <p style="margin:0">経路はブロックチェーン上の記録でつながっていますが、
+    <strong>最初に送金されたものと同じ資金である保証はありません。</strong>
+    暗号資産には印が無く、複数の資金が同じアドレスを通ると区別できないためです。
+    これは本調査に限らず、ブロックチェーン追跡全体の前提です。</p>
+    ${crowd ? `<p style="margin:8px 0 0">とくに <strong>${escHtml(name)}</strong> から先は、
+    多くの人の資金が通る地点を経由しているため確度が下がります（薄い枠で示しています）。
+    ただし<strong>つながり自体は記録に残っています。</strong>
+    判断材料として省かず記載しています。</p>` : ''}
+  </div>`;
+}
+
 function serviceNote(label) {
   if (!label) return '';
   const lo = String(label).toLowerCase();
@@ -4121,7 +4181,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       </div>` : '';
 
       return `
-        <div class="flow-node ${cls}">
+        <div class="flow-node ${cls}${p.afterStop ? ' after-stop' : ''}">
           <div class="node-role"><span class="node-icon">${icon}</span>${roleLabel}${exBadge}</div>
           <div class="node-address">${p.address}</div>
           ${balTd}${txCntTd}${timeTd}${amtTd}${svcTd}${poolTd}
@@ -4148,7 +4208,13 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
           <p style="font-size:0.85em;color:#aaa;margin:10px 0 0">※ 取引所名（運営元）は公開情報からは特定できていません。凍結要請を行うには、弁護士・警察を通じた発信者情報開示請求や取引所への照会により運営元を特定する必要があります。本資料はその手続きの証拠資料としてご利用ください。</p>
         </div>`;
     } else {
-      exHTML = `<p class="no-ex">送金先は既知の取引所DBに一致しませんでした。${lastLabelHtml}</p>`;
+      /* 「見つかりません」で終わらせない。送金から日が浅いなら
+         まだ移動中の可能性が高く、数日後の再調査という次の行動がある。 */
+      exHTML = `<p class="no-ex">送金先は既知の取引所DBに一致しませんでした。${lastLabelHtml}</p>`
+        + (r.stillMoving ? `<div class="note-box" style="margin-top:12px">
+            <p style="margin:0"><strong>⏳ まだ資金が動いている最中かもしれません。</strong></p>
+            <p style="margin:6px 0 0">${escHtml(stillMovingText(r.stillMoving))}</p>
+          </div>` : '');
     }
     let tplHTML = '';
     if (r.exchanges && r.exchanges.length > 0) {
@@ -4288,6 +4354,7 @@ ${r.txid}
 
         <h3>📍 送金経路詳細</h3>
         <div class="flow-map">${flowNodes}</div>
+        ${traceCaveatHTML(r.path)}
         ${(() => {
           /* ブリッジで止まった場合は、事情が違うので別に書く。
              資金が消えたのではなく、別のチェーンへ渡っている。
@@ -4578,6 +4645,10 @@ ${r.txid}
     /* フローマップ */
     .flow-map{display:flex;flex-direction:column;align-items:center;gap:0;margin:12px 0}
     .flow-node{width:100%;border-radius:10px;padding:14px 16px;border:2px solid}
+    /* 確度が下がる区間。消さずに、点線で区別する */
+    .flow-node.after-stop{border-style:dashed;opacity:.72}
+    .caveat-box{margin:12px 0 4px;padding:12px 14px;border-radius:8px;font-size:0.86em;line-height:1.85;
+                background:rgba(125,180,255,.07);border:1px solid rgba(125,180,255,.26)}
     .flow-node.victim  {background:var(--r-vbg);border-color:var(--r-vborder)}
     .flow-node.relay   {background:var(--r-rbg);border-color:var(--r-rborder)}
     .flow-node.exchange{background:var(--r-ebg);border-color:var(--r-eborder)}
