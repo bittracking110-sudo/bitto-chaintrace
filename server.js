@@ -1834,7 +1834,7 @@ const ENRICH_BUDGET_MS = 15000;   // 混雑したコントラクトはBlockchair
 const CALLS_BUDGET_MS = 6000;
 /* ブリッジを渡った先（TRON）を追う時間。参考経路と同時には使わない。
    両方に満額を与えると持ち時間75秒を超え、実測で時間切れになった。 */
-const CROSSCHAIN_BUDGET_MS = 14000;
+const CROSSCHAIN_BUDGET_MS = 20000;
 // 上記の予算をすべてすり抜けた場合に調査ジョブを強制終了させる上限時間。
 const INVESTIGATE_HARD_TIMEOUT_MS = 75000;   // 各予算の合計48秒＋外部APIの遅れを吸収する
 
@@ -1936,6 +1936,30 @@ function toTronAddress(hex20) {
 const BRIDGE_METHODS = {
   '0x6b3ec416': { addrIdx: 3, chainIdx: 7, amountIdx: 5, name: 'Bridgers／TransitSwap' },
 };
+
+/* ★渡り先に「実際にいくら届いたか」を、TRON側の受取記録から読む。
+   ブリッジに渡した額（ETH）をそのまま金額照合に使ってはいけない。
+   実測：2.9 ETH を渡し、TRON側には 12,409.6 USDT が届いていた。
+   ETHの数字で USDT を照合しても一致するはずがなく、
+   毎回「合流」と判定されて送金先ごとの合計で選ぶことになる。 */
+async function getBridgeArrivalTRON(addr, fromMs) {
+  const win = 6 * 3600 * 1000;                       // 払い出しは数分〜数時間遅れる
+  try {
+    const url = `${TRONGRID}/v1/accounts/${addr}/transactions/trc20`
+      + `?limit=50&order_by=block_timestamp,asc&min_timestamp=${Math.max(0, fromMs - 60000)}`;
+    const j = await (await fetchT(url, { headers: tronHeaders() })).json();
+    for (const t of (j.data || [])) {
+      if (t.to !== addr) continue;                   // 受け取りだけ
+      if (t.block_timestamp - fromMs > win) break;   // 昇順なので、離れたら打ち切り
+      const dec = Number(t.token_info?.decimals != null ? t.token_info.decimals : 6);
+      const amount = Number(t.value || 0) / Math.pow(10, dec);
+      if (!(amount > 0)) continue;
+      return { amount, token: t.token_info?.symbol || 'TRC20',
+               time: new Date(t.block_timestamp).toISOString(), txHash: t.transaction_id };
+    }
+  } catch (e) { console.error('[ブリッジ] 着金の読み取り失敗:', e.message); }
+  return null;
+}
 
 function decodeBridgeCall(input) {
   const s = String(input || '').toLowerCase();
@@ -2070,11 +2094,20 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
         /* 渡り先がTRONなら、そのまま追い続ける。
            ★被害者が知りたいのは換金先であって、ブリッジの名前ではない。 */
         if (info.chainId === TRON_CHAIN_ID) {
+          /* 渡した先に実際にいくら届いたかを読む。ここを取らないと、
+             ETHの数字でUSDTを照合することになり、金額の一致がまったく効かない。 */
+          const fromMs = new Date(normalizeTimeStr(n.time || Date.now())).getTime();
+          const arr = await getBridgeArrivalTRON(info.address, Number.isFinite(fromMs) ? fromMs : Date.now());
+          if (arr) {
+            info.arrivedAmount = arr.amount;
+            info.arrivedToken  = arr.token;
+            console.log(`[ブリッジ] 着金: ${arr.amount} ${arr.token}（${arr.time}）`);
+          }
           /* ★時間の取り合いに注意。参考経路と足すと持ち時間（75秒）を超え、
              実測で「時間内に完了しませんでした」になった。
              渡り先を追えたなら参考経路は要らないので、その分をこちらに回す。 */
-          const tHops = await traceHops(info.address, n.time || new Date().toISOString(),
-            'tron', 5, Date.now() + CROSSCHAIN_BUDGET_MS, null, info.amount).catch(() => []);
+          const tHops = await traceHops(info.address, arr?.time || n.time || new Date().toISOString(),
+            'tron', 8, Date.now() + CROSSCHAIN_BUDGET_MS, null, arr?.amount ?? null).catch(() => []);
           if (tHops.length) {
             n.crossChainHops = tHops.map(h => ({
               address: h.address, label: h.label || '', amount: h.amount, token: h.token,
@@ -4587,6 +4620,8 @@ ${r.txid}
         <strong>${escHtml(t.chainName)}</strong> へ渡っています。<br>
         渡った先のアドレス：<strong class="mono">${escHtml(t.address)}</strong>
         ${t.amount != null ? `／ 渡した額：<strong>${escHtml(String(t.amount).slice(0, 12))} ETH</strong>` : ''}
+        ${t.arrivedAmount != null ? `<br>届いた額：<strong>${escHtml(String(t.arrivedAmount).slice(0, 14))} ${escHtml(t.arrivedToken || '')}</strong>
+        <span style="font-size:0.9em">（ブリッジは通貨を換えて払い出すため、送った額と数字が変わります）</span>` : ''}
         ${hops.length ? `<br><br><strong>${escHtml(t.chainName)} 側で ${hops.length} 段階たどりました。</strong><br>
         ${hops.map((h, i) => `${i + 1}. <span class="mono">${escHtml(h.address)}</span>`
             + `${h.label ? ' ' + escHtml(h.label) : ''}`

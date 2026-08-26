@@ -649,6 +649,8 @@ function bridgeCrossHTML(path){
       <b>${esc(t.chainName)}</b> へ渡っています。<br>
       渡った先のアドレス：<b class="mono">${esc(t.address)}</b>
       ${t.amount != null ? `<br>渡した額：<b>${esc(String(t.amount).slice(0,12))} ETH</b>` : ''}
+      ${t.arrivedAmount != null ? `<br>届いた額：<b>${esc(String(t.arrivedAmount).slice(0,14))} ${esc(t.arrivedToken || '')}</b>
+        <span style="font-size:11px">（ブリッジは通貨を換えて払い出すため、数字が変わります）</span>` : ''}
       ${hops.length ? `<br><br><b>${esc(t.chainName)} 側で ${hops.length} 段階たどりました。</b>` : ''}
       ${ex ? `<br><b style="color:#3DDC97">🏦 到達した取引所：${esc(ex.name)}</b><br>
         <span class="mono" style="font-size:11px">${esc(ex.address)}</span>` : ''}
