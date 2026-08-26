@@ -660,6 +660,11 @@ function bridgeCrossHTML(path){
           + `${h.amount != null ? ' ' + esc(String(h.amount).slice(0,10)) + (h.token ? ' ' + esc(h.token) : '') : ''}`
           + `${h.isExchange ? ' 🏦' : ''}`).join('<br>')}
       </div>` : ''}
+      ${b.crossChainSpread ? `<br><br><b style="color:var(--amber)">■ この先は、多数の宛先へ分かれています</b><br>
+      たどった各地点で <b>${esc(b.crossChainSpread.join('箇所・'))}箇所</b> へ分散し、扱われている金額も被害額を大きく上回ります。
+      <b>個人の財布ではなく、資金をまとめて動かす仕組みの特徴です。</b><br>
+      ここから先を1本に絞って着金先を断定することはできませんが、
+      <b>この分散の規模そのものが、組織的な資金移動を示す資料になります。</b>` : ''}
       <br><span style="font-size:11.5px">※ 渡り先は、ブリッジへの送金に含まれる指定内容から復元しています。
       ${ex ? '' : `${esc(t.chainName)} 側の追跡はここまでです。`}</span>
     </div>

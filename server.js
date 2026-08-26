@@ -1962,6 +1962,30 @@ async function getBridgeArrivalTRON(addr, fromMs) {
   return null;
 }
 
+/* ★対応していないブリッジを、黙って見逃さないための記録。
+   実際の依頼で出会った呼び出しだけが、次に足すべきものを教えてくれる。
+   ここに残しておけば「どのブリッジを足せば何件救えるか」が数で分かる。
+   ★推測で優先順位を決めない。 */
+const UNKNOWN_BRIDGE_FILE = path.join(REPORTS_DIR, 'unknown-bridges.json');
+let unknownBridges = {};
+try {
+  if (fs.existsSync(UNKNOWN_BRIDGE_FILE))
+    unknownBridges = JSON.parse(fs.readFileSync(UNKNOWN_BRIDGE_FILE, 'utf8')) || {};
+} catch (e) { console.error('[ブリッジ] 記録の読み込みに失敗:', e.message); }
+
+function noteUnknownBridge(methodId, contract, txHash, label) {
+  if (!methodId || methodId.length !== 10) return;
+  const r = unknownBridges[methodId] || { 件数: 0, 契約: [], 例: [], 初回: new Date().toISOString() };
+  r.件数++;
+  if (contract && !r.契約.includes(contract)) r.契約 = r.契約.concat(contract).slice(0, 5);
+  if (txHash && r.例.length < 3) r.例.push(txHash);
+  if (label && !r.名前) r.名前 = label;
+  r.最終 = new Date().toISOString();
+  unknownBridges[methodId] = r;
+  fsp.writeFile(UNKNOWN_BRIDGE_FILE, JSON.stringify(unknownBridges), 'utf8').catch(() => {});
+  console.log(`[ブリッジ] 未対応の呼び出し ${methodId}（${label || contract}）通算${r.件数}件`);
+}
+
 function decodeBridgeCall(input) {
   const s = String(input || '').toLowerCase();
   const spec = BRIDGE_METHODS[s.slice(0, 10)];
@@ -2089,7 +2113,15 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
         const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=proxy`
           + `&action=eth_getTransactionByHash&txhash=${n.txHash}&apikey=${ETHERSCAN_KEY}`);
         const info = decodeBridgeCall(j.result?.input);
-        if (!info) continue;
+        if (!info) {
+          /* ★対応していないブリッジを黙って見逃さない。
+             実際の依頼で出会った呼び出しだけが、次に足すべきものを教える。 */
+          const mid = String(j.result?.input || '').slice(0, 10);
+          if (mid.length === 10 && mid !== '0x00000000') {
+            noteUnknownBridge(mid, n.address, n.txHash, n.label);
+          }
+          continue;
+        }
         n.bridgeTo = info;
         console.log(`[ブリッジ] ${info.bridge} → ${info.chainName} の ${info.address}`);
         /* 渡り先がTRONなら、そのまま追い続ける。
@@ -2113,7 +2145,15 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
             n.crossChainHops = tHops.map(h => ({
               address: h.address, label: h.label || '', amount: h.amount, token: h.token,
               isExchange: h.isExchange, isVia: h.isVia, time: h.time, txHash: h.txHash,
+              pooled: !!h.pooled, poolDests: h.poolDests ?? null,
             }));
+            /* ★渡った先が「大量に混ぜる場所」なら、それ自体が伝えるべき事実。
+               実測：この先は1段で送金先9箇所、2段で26箇所、3段で36箇所に分かれ、
+               扱う額も被害額の数百倍だった。個人の財布ではない。
+               ここから1本に絞って取引所名を出すのは、根拠のない断定になる。
+               ★出せないことを黙るより、規模を数で示す方が捜査の役に立つ。 */
+            const spread = tHops.filter(h => h.poolDests > 1).map(h => h.poolDests);
+            if (spread.length) n.crossChainSpread = spread;
             const ex = tHops.find(h => h.isExchange && !h.isVia && !h.isToken);
             if (ex) {
               n.crossChainExchange = { name: ex.label || '取引所（名称未判明）', address: ex.address };
@@ -4635,6 +4675,7 @@ ${r.txid}
             + `${h.isExchange ? ' 🏦' : ''}`).join('<br>')}` : ''}
         ${ex ? `<br><br><strong>🏦 到達した取引所：${escHtml(ex.name)}</strong><br>
         <span class="mono">${escHtml(ex.address)}</span>` : ''}
+        ${cb.crossChainSpread ? `<br><br><strong>■ この先は、多数の宛先へ分かれています。</strong><br>        たどった各地点で <strong>${cb.crossChainSpread.join('箇所・')}箇所</strong> へ分散しており、        扱われている金額も被害額を大きく上回ります。        <strong>個人の財布ではなく、資金をまとめて動かす仕組みの特徴です。</strong><br>        ここから先を1本に絞って着金先を断定することはできません。        <strong>この分散の規模そのものが、組織的な資金移動を示す資料になります。</strong>` : ''}
         <br><br><span style="font-size:0.9em">※ 渡り先は、ブリッジへの送金に含まれる指定内容から復元しています。
         ${ex ? '' : `${escHtml(t.chainName)} 側の追跡はここまでです。`}</span>
         </p>`;
