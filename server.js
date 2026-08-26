@@ -997,6 +997,10 @@ const EX_KEYWORDS = [
   'ftx','bittrex','bitstamp','upbit','bithumb','exchange','hot wallet',
   'cold wallet','bitbank','mexc','crypto.com','hot','cold',
   'hitbtc','hit btc','poloniex','gemini','bitget','lbank','whitebit',
+  /* ★実際の被害案件の到達先で、語彙に無く取引所と判定できなかったもの。
+     htx は huobi の現在の名称。coincorner は英国の取引所。
+     名前が引けていても、ここに無いと「到達した」と扱えない。 */
+  'htx','coincorner',
   'phemex','bitmart','digifinex','xt.com','latoken','probit',
   // 国内取引所
   'gmo coin','gmoコイン','sbi vc','bitpoint','dmm bitcoin','bittrade',

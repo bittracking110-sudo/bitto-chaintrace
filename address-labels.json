@@ -1,4 +1,19 @@
 {
-  "_note": "手動照会(MistTrack/Arkham等)で判明した取引所・サービス名をここに蓄積します。形式は \"小文字アドレス\": \"名前\"。確認 → ここに1行追記 → commit & push すると次回調査から自動で名前が出ます。_で始まるキーはメタ情報として無視されます。",
-  "_example": "0x28c6c06298d514db089934071355e5743bf21d60 のように小文字で記載"
+  "_note": "手動照会(MistTrack/Arkham/OKLink等)で判明した取引所・サービス名をここに蓄積します。形式は \"小文字アドレス\": \"名前\"。確認 → ここに1行追記 → commit & push すると次回調査から自動で名前が出ます。_で始まるキーはメタ情報として無視されます。読み込み時にキーは小文字化されるので、BTC・XRP・TRONのアドレスもそのまま書いて構いません。",
+  "_example": "0x28c6c06298d514db089934071355e5743bf21d60 のように小文字で記載",
+
+  "_src_ground_truth": "以下は運営が実際の被害案件で手作業で到達先まで確認した経路の終着点。2026-08-26 追加。★推測ではなく確認済み。ここに無いと『取引所に到達した』と判定できず、経路がその先へ進み続けてしまう（CoinCorner の実例で発覚）。",
+
+  "0x85dad3febd3e9deaf6ea877be9a44cde516e9010": "CoinCorner",
+  "0x790d180ffc15fd7e334255c2db3b590c22659053": "Binance（入金アドレス）",
+
+  "1kb5jnwwh9cpcgf33ofsxbqupabdrskdfu": "Binance（入金アドレス）",
+  "bc1qvs239ryercyj9zmzr9wryaw88nvmldmhuwwlzz": "Binance（入金アドレス）",
+  "bc1qdfl3dfnwwvlqa5jpckh0ccwpjczh5y566c4g76": "HitBTC",
+  "1ar9swv7zr2c2ohgsddkxipcfz3rlgynhm": "HTX",
+  "bc1qxhku4gmcunwf4aacwjf38h8eevttv63vs935fjvn2e4trhjxh9uqycur7m": "OKX",
+
+  "ruzwjkxyett8ekssxkbypqcvhpngcy6fks": "OKX",
+
+  "tyd8bfgq6cqkxxbpvpqxgwfkztja9urmmz": "OKX"
 }
