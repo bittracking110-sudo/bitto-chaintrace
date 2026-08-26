@@ -3370,10 +3370,11 @@ function buildReport(result) {
         }).join('\n')
       : '';
     /* 合流したことは文章でも必ず伝える。伏せると確定した経路と読まれる。 */
-    const poolLine = p.pooled
-      ? `\n   ⚠ ここで他の資金と合流${p.poolDests > 1 ? `（この直後 ${p.poolDests}箇所に分散` : ''}`
-        + `${p.poolShare != null ? `／最大の送金先が ${Math.round(p.poolShare * 100)}%` : ''}${p.poolDests > 1 ? '）' : ''}`
-      : '';
+    const poolLine = !p.pooled ? ''
+      : p.poolDests > 1
+        ? `\n   ⚠ ここで他の資金と合流（この直後 ${p.poolDests}箇所に分散`
+          + `${p.poolShare != null ? `／最大の送金先が ${Math.round(p.poolShare * 100)}%` : ''}）`
+        : `\n   ⚠ ここで他の資金と合流`;
     return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}${poolLine}${siblingLines}`;
   });
 
@@ -4078,10 +4079,13 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
          合流地点から先は「同じ資金を追えた」とは言えず、確度が一段落ちる。
          凍結要請を出す判断は読み手（被害者・弁護士・警察）がするので、
          材料を伏せてはいけない。 */
+      /* 送金先が1箇所しかないなら「分散」も「割合100%」も意味を成さない。
+         合流した事実だけを伝える。数字を足すほど正確になるわけではない。 */
+      const poolMany = p.poolDests > 1;
       const poolTd = p.pooled ? `<div class="node-note" style="color:#fbbf24">
-        ⚠ ここで<strong>他の資金と合流</strong>しています。${p.poolDests > 1 ? `この直後、資金は<strong>${p.poolDests}箇所</strong>に分かれています。` : ''}
-        ${p.poolShare != null ? `そのうち最も多い送金先が<strong>${Math.round(p.poolShare * 100)}%</strong>で、この先はそれを追っています。` : ''}
-        <br><span style="color:#aaa">複数の資金がまとまるため、ここから先は1本に確定できません。他の送金先は後述の「参考経路」に記載しています。</span>
+        ⚠ ここで<strong>他の資金と合流</strong>しています。${poolMany ? `この直後、資金は<strong>${p.poolDests}箇所</strong>に分かれています。` : ''}
+        ${poolMany && p.poolShare != null ? `そのうち最も多い送金先が<strong>${Math.round(p.poolShare * 100)}%</strong>で、この先はそれを追っています。` : ''}
+        <br><span style="color:#aaa">複数の資金がまとまるため、ここから先は同じ資金と言い切れません。${poolMany ? '他の送金先は後述の「参考経路」に記載しています。' : ''}</span>
       </div>` : '';
 
       return `

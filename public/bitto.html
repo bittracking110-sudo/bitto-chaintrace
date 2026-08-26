@@ -701,9 +701,12 @@ function nodeBadge(n){
    黙って1本の線に見せると、読み手は確定した経路だと受け取ってしまう。 */
 function poolBadge(n){
   if (!n.pooled) return '';
-  const pct = n.poolShare != null ? Math.round(n.poolShare * 100) + '%' : null;
-  const dst = n.poolDests > 1 ? `${n.poolDests}箇所へ分散` : null;
-  const sub = [dst, pct ? `うち最大 ${pct}` : null].filter(Boolean).join('・');
+  /* 送金先が1箇所しかないなら「分散」も「割合100%」も意味を成さない。
+     合流した事実だけを伝える。数字を足すほど正確になるわけではない。 */
+  const many = n.poolDests > 1;
+  const pct  = many && n.poolShare != null ? Math.round(n.poolShare * 100) + '%' : null;
+  const sub  = [many ? `${n.poolDests}箇所へ分散` : null, pct ? `うち最大 ${pct}` : null]
+    .filter(Boolean).join('・');
   return `<div class="pool-note">⚠ ここで他の資金と合流${sub ? `<br><span>${esc(sub)}</span>` : ''}</div>`;
 }
 /* 取引所ノードの強調クラス／アイコン（到達先を目立たせる） */
