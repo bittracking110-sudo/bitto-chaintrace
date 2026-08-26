@@ -3147,6 +3147,14 @@ async function getNextTxETH(addr, afterTime, amountIn, chain = 'eth') {
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       if (tx.isError === '1') continue;
       if (!tx.to) continue;
+      /* ★ETHが1円も動いていない取引は、ここでは候補にしない。
+         USDTを送るときの取引は「宛先＝USDTの契約・金額0」という形で記録される。
+         これを候補にすると、★USDTの契約そのものが行き先として経路に出る。
+         実測：経路の途中に「Tether USD (USDT)」が中継地点として現れていた。
+         資金はUDTの契約に入るのではなく、契約を通して誰かに渡っている。
+         本当の受取先はトークンの記録側（この関数の後半）に出るので、そちらへ回す。
+         内部でETHが動く呼び出しは、内部取引の側で拾える。 */
+      if (parseFloat(tx.value || '0') === 0) continue;
       const db = getLabel(tx.to);
       const lbl = db.label || '';
       const isTok = db.type === 'token' || isTokenContract(lbl);
