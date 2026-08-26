@@ -3619,7 +3619,13 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
        すでに持っている通貨と違うものが出てきたときだけ「交換」とみなす。 */
     const sameToken = t => token && t
       && String(t.contract).toLowerCase() === String(token.contract).toLowerCase();
-    if (isEVM(chain) && (isTok || isVia)) {
+    /* ★交換の確認は1ホップあたり最大4回の問い合わせになる。
+       持ち時間が残り少ないときにこれを始めると、1周だけで予算を超え、
+       ★調査そのものが時間切れで失敗する（実測：単純なETH送金で75秒到達）。
+       時間切れは間違った答えより悪い。利用者には何も出せない。
+       余裕があるときだけ確認する。 */
+    const roomForSwap = Date.now() < deadline - 8000;
+    if (isEVM(chain) && (isTok || isVia) && roomForSwap) {
       const t0 = await getSwapTokenOutETH(next.txHash, currentAddr, chain);
       const t = sameToken(t0) ? null : t0;
       if (t) {
@@ -3637,7 +3643,10 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
       /* ★手元に戻ってこない場合。交換後の資金が別のアドレスへ渡っている。
          ルーターは経路に残す（ブリッジの読み取りがそこを見るため）が、
          追跡は出口のアドレスから続ける。 */
-      const exit0 = await getSwapExitETH(next.txHash, currentAddr, chain);
+      /* 出口探しはトークンのコントラクト相手には不要。
+         トークン契約に送った場合、交換後は自分の手元に戻る（上で確認済み）。
+         別アドレスへ渡るのはルーター（経由）を通したときだけ。 */
+      const exit0 = isVia ? await getSwapExitETH(next.txHash, currentAddr, chain) : null;
       const exit = sameToken(exit0) ? null : exit0;      // 同じ通貨なら交換ではない
       if (exit && exit.address.toLowerCase() !== currentAddr.toLowerCase()
           && !visited.has(exit.address.toLowerCase())) {
