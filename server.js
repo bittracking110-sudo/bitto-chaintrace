@@ -2047,12 +2047,22 @@ function decodeBridgeCall(input) {
            amount: Number.isFinite(amount) && amount > 0 ? amount : null };
 }
 
+/* 全体の締切までに残っている時間。締切が渡っていなければ従来どおりの予算。
+   ★後段（参考経路・ブリッジ先）は「あれば嬉しい」情報なので、
+     ここを削ってでも本体を返し切る。何も返さないのが最悪。 */
+const INVESTIGATE_SOFT_LIMIT_MS = 64000;   // 上限75秒に対し11秒の余白
+function budgetLeft(opts, want) {
+  const d = opts && opts.hardDeadline;
+  if (!Number.isFinite(d)) return want;
+  return Math.max(0, Math.min(want, d - Date.now()));
+}
+
 async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   let exchangeCount = 0;                 // 判明＋推定を合わせた取引所ノード数
   let apiLookups    = 0;                 // 外部ラベルAPIを引いた回数（1調査あたりの上限あり）
   // 有料レポートは名前がそのまま凍結要請の宛先になるので多めに引く
   const lookupBudget = opts.paid ? MISTTRACK_PAID_LOOKUPS : MISTTRACK_FREE_LOOKUPS;
-  const deadline = Date.now() + ENRICH_BUDGET_MS;  // 巨大コントラクト混在でも全体を止めない
+  const deadline = Date.now() + budgetLeft(opts, ENRICH_BUDGET_MS);  // 巨大コントラクト混在でも全体を止めない
   let truncatedAt = -1;                            // 途中で打ち切った位置（-1＝最後まで回った）
   for (let idx = 0; idx < path.length; idx++) {
     const node = path[idx];
@@ -2148,6 +2158,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
     for (const n of path) {
       if (!n.txHash || n.bridgeTo) continue;
       if (!(n.isVia || n.traceStop)) continue;     // ブリッジらしい地点だけ見る
+      if (budgetLeft(opts, 20000) < 4000) break;   // 残り時間が無ければ諦める
       try {
         const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=proxy`
           + `&action=eth_getTransactionByHash&txhash=${n.txHash}&apikey=${ETHERSCAN_KEY}`);
@@ -2179,7 +2190,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
              実測で「時間内に完了しませんでした」になった。
              渡り先を追えたなら参考経路は要らないので、その分をこちらに回す。 */
           const tHops = await traceHops(info.address, arr?.time || n.time || new Date().toISOString(),
-            'tron', 8, Date.now() + CROSSCHAIN_BUDGET_MS, null, arr?.amount ?? null).catch(() => []);
+            'tron', 8, Date.now() + budgetLeft(opts, CROSSCHAIN_BUDGET_MS), null, arr?.amount ?? null).catch(() => []);
           if (tHops.length) {
             n.crossChainHops = tHops.map(h => ({
               address: h.address, label: h.label || '', amount: h.amount, token: h.token,
@@ -2233,8 +2244,9 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   /* ★渡り先を追えたなら、参考経路（＝追えないときの代わり）は要らない。
      時間を取り合って全体が時間切れになる（実測）。 */
   const bridgeFollowed = (path || []).some(p => p.bridgeTo && p.crossChainHops);
-  if (refNode && isEVM(chain) && refNode.address && !alreadyReached && !bridgeFollowed) {
-    const refDeadline = Date.now() + 20000;   // 旧処理と統合したぶんを回す
+  if (refNode && isEVM(chain) && refNode.address && !alreadyReached && !bridgeFollowed
+      && budgetLeft(opts, 20000) > 4000) {
+    const refDeadline = Date.now() + budgetLeft(opts, 20000);
     try {
       /* 1本だけ追うと、混雑した地点では候補が数十件あるため当たりを引けない。
          金額の大きい順に3本追い、取引所に着いたものを全て出す。
@@ -4038,6 +4050,11 @@ async function investigateTRON(txid) {
 }
 
 async function investigate(txid, chain, opts = {}) {
+  /* ★全体の締切。各段の予算を足しただけでは守れない（1周にかかる時間が
+     増えると超える。実測で2回とも時間切れになった）。
+     ★時間切れは何も出せない＝間違った答えより悪い。
+     残り時間から後段の予算を削って、必ず内側で終える。 */
+  const hardDeadline = Date.now() + INVESTIGATE_SOFT_LIMIT_MS;
   let result;
   if (chain === 'btc') {
     /* TRONのTXIDはBTCと同じ64桁の小文字16進で、形では区別できない。
@@ -4079,7 +4096,7 @@ async function investigate(txid, chain, opts = {}) {
   else throw new Error('未対応チェーン');
 
   // 各アドレスノードに残高・TX件数を付加
-  await enrichPathWithAddressInfo(result.path, chain, opts);
+  await enrichPathWithAddressInfo(result.path, chain, { ...opts, hardDeadline });
 
   /* 到達取引所の一覧は経路をたどる段階で作られるが、名前が後から
      （ラベルAPIや振る舞い推定で）付くことがある。その分をここで足す。
