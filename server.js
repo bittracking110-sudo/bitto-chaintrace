@@ -2116,17 +2116,33 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   const lookupBudget = opts.paid ? MISTTRACK_PAID_LOOKUPS : MISTTRACK_FREE_LOOKUPS;
   const deadline = Date.now() + budgetLeft(opts, ENRICH_BUDGET_MS);  // 巨大コントラクト混在でも全体を止めない
   let truncatedAt = -1;                            // 途中で打ち切った位置（-1＝最後まで回った）
-  for (let idx = 0; idx < path.length; idx++) {
+  /* ★最終到達先を最初に調べる。
+     以前は経路の順に調べていたので、時間が足りないと★一番重要な最終到達先が
+     真っ先に切り捨てられていた。取引所かどうかの推定は取引回数から行うため、
+     情報が無いと「取引所に到達していない」という報告書になる。
+     実測：到達先の取引回数が取れず、推定が消え、凍結要請先が空になった。
+     被害者が最も知りたい一点なので、時間の使い方の優先順位を逆にする。 */
+  const order = [];
+  if (path.length > 1) order.push(path.length - 1);
+  for (let i = 0; i < path.length; i++) if (i !== path.length - 1 || path.length <= 1) order.push(i);
+  for (const idx of order) {
     const node = path[idx];
     if (!node.address) continue;
+    if (node._enriched) continue;
+    node._enriched = true;
     if (Date.now() > deadline) {
-      console.log(`[enrich] 時間予算に達したため残りノードの情報付与を省略（index ${idx}）`);
-      truncatedAt = idx;
+      console.log(`[enrich] 時間予算に達したため残りノードの情報付与を省略`);
       /* ★ここから先は取引回数が分からない＝「利用者が多いアドレスか」を
          判定できない。判定できないまま経路を見せると、共有の決済
          コントラクトを素通りして他人の資金を指してしまう（実測あり）。
-         確かめられなかった区間は、確定した経路として出さない。 */
-      for (let k = idx; k < path.length; k++) path[k].unverified = true;
+         確かめられなかった区間は、確定した経路として出さない。
+         ★調べる順番を変えたので、位置ではなく「調べたか」で印を付ける。 */
+      for (let k = 0; k < path.length; k++) {
+        if (!path[k]._enriched) {
+          path[k].unverified = true;
+          if (truncatedAt < 0) truncatedAt = k;
+        }
+      }
       break;
     }
     await new Promise(res => setTimeout(res, 250)); // レート制限対策
