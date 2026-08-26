@@ -1822,8 +1822,47 @@ async function getUSDPrice(chain) {
 // 外部API（Etherscan / Blockchair 等）が応答しない場合に調査全体が停止しないよう、
 // fetch に上限時間を付ける。時間切れは例外になり、各呼び出し側の try/catch で握られる。
 const FETCH_TIMEOUT_MS = 6000;
+/* ══ どこが遅いかを後から見られるようにする ══════════════════
+   ★調査が時間切れになったとき、Railway のログを見ないと原因が分からず、
+     推測で削っては外すことを3回繰り返した（第5-G節）。
+     外側から封じ込めるだけでは、同じことがまた起きる。
+
+   ★記録は「遅かったもの」だけに絞る。全部残すと量が多すぎて読めないし、
+     速い呼び出しの記録には診断上の価値がない。
+   ★アドレスやTXIDはそのまま残さない。問い合わせ先（どのサービスの何を
+     呼んだか）が分かれば原因は追えるので、中身は削る。 */
+const SLOW_CALL_MS = 1500;
+const SLOW_KEEP    = 120;
+const slowCalls    = [];        // { at, host, what, ms, ng }
+
+/* URLから「どのサービスの何を呼んだか」だけを取り出す。鍵や住所は残さない。 */
+function callTag(url) {
+  try {
+    const u = new URL(url);
+    const q = u.searchParams;
+    const what = [q.get('module'), q.get('action'), q.get('chainid') ? 'chain' + q.get('chainid') : '']
+      .filter(Boolean).join('/');
+    return { host: u.host, what: what || u.pathname.split('/').slice(0, 4).join('/') };
+  } catch { return { host: '?', what: '?' }; }
+}
+
+function noteSlowCall(url, ms, ng) {
+  if (ms < SLOW_CALL_MS && !ng) return;
+  const { host, what } = callTag(url);
+  slowCalls.push({ at: new Date().toISOString(), host, what, ms, ng: ng || '' });
+  if (slowCalls.length > SLOW_KEEP) slowCalls.splice(0, slowCalls.length - SLOW_KEEP);
+}
+
 async function fetchT(url, opts = {}, ms = FETCH_TIMEOUT_MS) {
-  return fetch(url, { ...opts, signal: AbortSignal.timeout(ms) });
+  const t0 = Date.now();
+  try {
+    const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(ms) });
+    noteSlowCall(url, Date.now() - t0, r.ok ? '' : `HTTP ${r.status}`);
+    return r;
+  } catch (e) {
+    noteSlowCall(url, Date.now() - t0, e.name === 'TimeoutError' ? '時間切れ' : e.message);
+    throw e;
+  }
 }
 
 /* 追跡で使う外部API（Etherscan・Blockchair）の取得。
@@ -4091,12 +4130,32 @@ function collectExchanges(result) {
 
 }
 
+/* 調査1件ごとの「どの段に何秒かかったか」。直近だけ残す。
+   ★これが無いと、時間切れの原因を推測でしか追えない。 */
+const PHASE_KEEP = 40;
+const phaseLog   = [];          // { at, txid(先頭のみ), chain, total, phases: {段: ms} }
+
+function mkPhases(txid) {
+  const t0 = Date.now();
+  let last = t0;
+  const phases = {};
+  return {
+    mark(name) { phases[name] = Date.now() - last; last = Date.now(); },
+    done(chain) {
+      phaseLog.push({ at: new Date().toISOString(), txid: String(txid).slice(0, 12) + '…',
+                      chain: chain || '?', total: Date.now() - t0, phases });
+      if (phaseLog.length > PHASE_KEEP) phaseLog.splice(0, phaseLog.length - PHASE_KEEP);
+    },
+  };
+}
+
 async function investigate(txid, chain, opts = {}) {
   /* ★全体の締切。各段の予算を足しただけでは守れない（1周にかかる時間が
      増えると超える。実測で2回とも時間切れになった）。
      ★時間切れは何も出せない＝間違った答えより悪い。
      残り時間から後段の予算を削って、必ず内側で終える。 */
   const hardDeadline = Date.now() + INVESTIGATE_SOFT_LIMIT_MS;
+  const ph = mkPhases(txid);
   let result;
   if (chain === 'btc') {
     /* TRONのTXIDはBTCと同じ64桁の小文字16進で、形では区別できない。
@@ -4130,6 +4189,7 @@ async function investigate(txid, chain, opts = {}) {
          他のチェーンを試さずに調査ごと終わっていた（実測）。
        探すことと調べることを分ける。 */
     chain = await detectEVMChain(txid);
+    ph.mark('チェーンの特定');
     if (!chain) throw new Error('このTXIDは Ethereum・Polygon・Arbitrum のいずれにも見つかりませんでした');
     /* ★Ethereum の調査は Blockchair の取引明細に依存していて、
        相手が遅いと全体を巻き込む。締切内に返らなければ、
@@ -4142,6 +4202,7 @@ async function investigate(txid, chain, opts = {}) {
         investigateETH(txid),
         new Promise(res => setTimeout(() => res(null), sub)),
       ]);
+      ph.mark('本体の調査(Blockchair)');
       if (!result) {
         console.log('[investigate] Blockchair 側が締切に間に合わず、Etherscan だけで調べ直します');
         result = await investigateEVM(txid, 'eth');
@@ -4172,6 +4233,7 @@ async function investigate(txid, chain, opts = {}) {
      これをしないと、経路には「取引所」と出ているのに一覧が空になり、
      画面の見出しや報告書の凍結要請先が出てこない。
      DEX・ブリッジ・トークン契約は着金先ではないので入れない。 */
+  ph.mark('情報付け');
   collectExchanges(result);
 
   /* ★取引所が出なかったとき、「見つからなかった」で終わらせない。
@@ -4186,6 +4248,7 @@ async function investigate(txid, chain, opts = {}) {
     const days = Math.floor((Date.now() - t0) / 86400000);
     if (days >= 0 && days <= STILL_MOVING_DAYS) result.stillMoving = { days };
   }
+  ph.done(result.chain);
   return result;
 }
 
@@ -6622,6 +6685,56 @@ app.get('/api/admin/label-lookup', requireAdmin, async (req, res) => {
 /* 取引回数の分布。MistTrackを引くしきい値（いまは2万回）を決め直すために見る。
    「名前が付いたアドレスの取引回数」と「付かなかったアドレスの取引回数」が
    分かれる境目が、本来のしきい値。 */
+/* ★どこが遅いかを見る画面。時間切れの原因を推測でなく事実で追うため。
+   調査が時間切れになっても、内側の処理は最後まで走って記録を残すので、
+   ここに後から出てくる。 */
+app.get('/api/admin/timing', requireAdmin, (req, res) => {
+  const esc = x => String(x ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const byHost = {};
+  for (const c of slowCalls) {
+    const k = c.host + ' ' + c.what;
+    const b = byHost[k] || (byHost[k] = { n: 0, sum: 0, max: 0, ng: 0 });
+    b.n++; b.sum += c.ms; b.max = Math.max(b.max, c.ms); if (c.ng) b.ng++;
+  }
+  const rank = Object.entries(byHost).sort((a, b) => b[1].sum - a[1].sum);
+  res.type('html').send(`<!doctype html><meta charset="utf-8">
+<title>BitTo どこが遅いか</title>
+<style>body{font-family:system-ui;margin:20px;background:#12151c;color:#e8ecf3;font-size:14px}
+h2{font-size:16px;margin:24px 0 8px}table{border-collapse:collapse;width:100%;margin-bottom:8px}
+th,td{border:1px solid #2a3140;padding:5px 8px;text-align:left;font-size:13px}
+th{background:#1b2130}.n{text-align:right;font-variant-numeric:tabular-nums}
+.ng{color:#f87171}.hi{color:#fbbf24;font-weight:700}p{color:#9aa4b5;line-height:1.8}</style>
+<h1 style="font-size:18px">どこが遅いか</h1>
+<p>${SLOW_CALL_MS}ミリ秒以上かかった呼び出しと、失敗した呼び出しだけを残しています。<br>
+アドレスやTXIDは記録していません（どのサービスの何を呼んだかだけ）。<br>
+※ 再起動すると消えます。調査を流した直後にご覧ください。</p>
+
+<h2>遅い問い合わせ先（合計時間の多い順）</h2>
+${rank.length ? `<table><tr><th>問い合わせ先</th><th class="n">回数</th><th class="n">合計</th><th class="n">最長</th><th class="n">失敗</th></tr>
+${rank.map(([k, b]) => `<tr><td>${esc(k)}</td><td class="n">${b.n}</td>
+  <td class="n ${b.sum > 10000 ? 'hi' : ''}">${(b.sum / 1000).toFixed(1)}秒</td>
+  <td class="n ${b.max > 4000 ? 'hi' : ''}">${(b.max / 1000).toFixed(1)}秒</td>
+  <td class="n ${b.ng ? 'ng' : ''}">${b.ng}</td></tr>`).join('')}</table>`
+  : '<p>まだ記録がありません。</p>'}
+
+<h2>調査ごとの内訳（新しい順）</h2>
+${phaseLog.length ? `<table><tr><th>日時</th><th>TXID</th><th>チェーン</th><th class="n">合計</th><th>段ごと</th></tr>
+${[...phaseLog].reverse().map(p => `<tr><td>${esc(p.at.slice(5, 19).replace('T', ' '))}</td>
+  <td>${esc(p.txid)}</td><td>${esc(p.chain)}</td>
+  <td class="n ${p.total > 60000 ? 'hi' : ''}">${(p.total / 1000).toFixed(1)}秒</td>
+  <td>${Object.entries(p.phases).map(([k, v]) =>
+    `${esc(k)} <span class="${v > 20000 ? 'hi' : ''}">${(v / 1000).toFixed(1)}秒</span>`).join('／')}</td></tr>`).join('')}</table>`
+  : '<p>まだ記録がありません。</p>'}
+
+<h2>直近の遅い呼び出し（新しい順・20件）</h2>
+${slowCalls.length ? `<table><tr><th>日時</th><th>問い合わせ先</th><th class="n">所要</th><th>結果</th></tr>
+${[...slowCalls].reverse().slice(0, 20).map(c => `<tr><td>${esc(c.at.slice(11, 19))}</td>
+  <td>${esc(c.host)} ${esc(c.what)}</td>
+  <td class="n ${c.ms > 4000 ? 'hi' : ''}">${(c.ms / 1000).toFixed(1)}秒</td>
+  <td class="${c.ng ? 'ng' : ''}">${esc(c.ng || 'OK')}</td></tr>`).join('')}</table>`
+  : ''}`);
+});
+
 app.get('/api/admin/hop-stats', requireAdmin, (req, res) => {
   const chain = String(req.query.chain || '').toLowerCase();
   let rows = hopStats.filter(r => !r.via && !r.token);   // 通り道は対象外
