@@ -3647,6 +3647,21 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
           token: next.token, isExchange: false, isToken: isTok, isVia: true,
           time: next.time, txHash: next.txHash, siblings: [], swapTo: exit.symbol });
         console.log(`[traceHops] ${exit.symbol} に交換され、${exit.address.slice(0, 12)}… へ渡った（${exit.amount}）`);
+        /* ★出口のアドレスも経路に載せる。載せないと、実在する受取先が
+           報告書から抜け落ちる。★そこが取引所なら、抜けた瞬間に
+           凍結要請の宛先を失う。名前も引いて確かめる。 */
+        const exDb  = getLabel(exit.address);
+        const exLbl = (await fetchAddressLabel(exit.address, chain)) || exDb.label || '';
+        const exTok = exDb.type === 'token' || isTokenContract(exLbl);
+        const exVia = isViaService(exLbl);
+        const exIsEx = !exTok && !exVia && (exDb.type === 'exchange' || isExchange(exLbl));
+        hops.push({ address: exit.address, label: exLbl, amount: exit.amount, token: exit.symbol,
+          isExchange: exIsEx, isToken: exTok, isVia: exVia, sameTx: true,
+          time: next.time, txHash: next.txHash, siblings: [] });
+        if (exIsEx) {
+          exCount++;
+          console.log(`[traceHops] 取引所到達(${exCount}件目): ${exLbl}`);
+        }
         token         = { contract: exit.contract, symbol: exit.symbol, decimals: exit.decimals };
         currentAmount = Number.isFinite(exit.amount) ? exit.amount : null;
         prevAddr      = currentAddr;
