@@ -3240,8 +3240,12 @@ async function getNextTxETH(addr, afterTime, amountIn, chain = 'eth') {
   if (chain !== 'eth') return null;
 
   try {
+    /* ★ここも短く見切る。実測（診断画面）で最長6秒・失敗6件が続いていた。
+       Etherscan（通常・内部・トークンの3種）で候補が1件も無かったときの
+       最後の手段なので、★見つからないまま長く待つ価値がない。
+       やり直しもしない（失敗が2倍の時間になる）。 */
     const url = `https://api.blockchair.com/ethereum/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}&limit=10`;
-    const j = await apiJson(url);
+    const j = await (await fetchT(url, {}, BLOCKCHAIR_TIMEOUT_MS)).json();
     const txHashes = j.data?.[addr.toLowerCase()]?.transactions || [];
     for (const txHash of txHashes.slice(0, 4)) {
       await new Promise(res => setTimeout(res, 300));
