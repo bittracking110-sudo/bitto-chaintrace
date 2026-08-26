@@ -2808,12 +2808,20 @@ async function listNextCandidatesETH(addr, afterTime, limit = 3) {
        個人の住所だった場合に備えて、空なら通常の取引も見る。 */
     const base = `https://api.etherscan.io/v2/api?chainid=1&module=account&address=${addr}`
       + `&startblock=${startBlock}&endblock=latest&page=1&offset=100&sort=asc&apikey=${ETHERSCAN_KEY}`;
-    let j = await apiJson(base + '&action=txlistinternal');
-    let txs = Array.isArray(j.result) ? j.result : [];
-    if (!txs.length) {
-      j = await apiJson(base + '&action=txlist');
-      txs = Array.isArray(j.result) ? j.result : [];
-    }
+    /* ★以前は「内部送金が空のときだけ通常の取引も見る」としていた。
+       実測（第4-X節）：個人ウォレット 0x0280baf5… は通常取引1000件超の
+       集約ウォレットだが、内部取引が1件だけあった。そのため通常取引を
+       まったく見に行かず、枝が0本になり参考経路が出なかった。
+       Binance へ流れていたのに、利用者には何も示せていない。
+       ★どちらか一方では足りない。両方を見て合わせる。 */
+    const [ji, jn] = await Promise.all([
+      apiJson(base + '&action=txlistinternal').catch(() => ({})),
+      apiJson(base + '&action=txlist').catch(() => ({})),
+    ]);
+    const txs = [].concat(
+      Array.isArray(ji.result) ? ji.result : [],
+      Array.isArray(jn.result) ? jn.result : [],
+    ).filter(t => t.isError !== '1').sort((a, b) => a.timeStamp - b.timeStamp);
     /* ★以前は「時系列で先頭3件」を返していた。混雑した地点では外れる。
        実測（第4-X節）：合流地点Eで入金後の送出は94件・送金先63箇所。
        時系列の1〜3番目は 1.858 / 0.231 / 0.014 ETH でいずれも無関係。
