@@ -1056,7 +1056,25 @@ function getLabel(addr) {
   const lo = addr.toLowerCase();
   const found = LABEL_DB[lo] || LABEL_DB[addr];
   if (found) return { label: found, type: isTokenContract(found) ? 'token' : 'exchange' };
+  /* ★一度お金を払って引いた名前は、その場だけでなくずっと使う。
+     外部APIの結果はディスクに貯めてあるのに、この関数（＝次の一手を
+     選ぶときの判定に使う）が見ていなかった。
+     そのため「すでに取引所と分かっているアドレス」を候補として
+     優先できず、払った分を活かせていなかった。
+     空文字は「引いたが名前が無かった」印なので、名前としては扱わない。 */
+  const cached = cachedLabelName(lo);
+  if (cached) return { label: cached, type: isTokenContract(cached) ? 'token' : 'exchange' };
   return { label: '', type: 'unknown' };
+}
+
+/* labelCache はこの関数より後ろで作られる。読み込み中に呼ばれても
+   落ちないようにしておく（起動順に依存させない）。 */
+function cachedLabelName(lo) {
+  try {
+    if (!labelCache || !labelCache.has(lo)) return '';
+    const c = labelCache.get(lo);
+    return (typeof c === 'string' ? c : (c && c.name)) || '';
+  } catch { return ''; }
 }
 
 // ══ 取引所ラベルの外部API照会（APIキーがある時だけ動く） ══════
