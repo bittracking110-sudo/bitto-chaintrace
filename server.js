@@ -3221,11 +3221,25 @@ function isImpostorToken(symbol, contract) {
 /* スワップの取引から「どのトークンが誰にいくら渡ったか」を読む。 */
 async function getSwapTokenOutETH(txHash, holderAddr) {
   try {
+    const want = t => t.hash?.toLowerCase() === String(txHash).toLowerCase()
+                   && t.to?.toLowerCase() === String(holderAddr).toLowerCase();
     const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx`
       + `&address=${holderAddr}&page=1&offset=100&sort=desc&apikey=${ETHERSCAN_KEY}`);
     const list = Array.isArray(j.result) ? j.result : [];
-    const hit = list.find(t => t.hash?.toLowerCase() === String(txHash).toLowerCase()
-                            && t.to?.toLowerCase() === String(holderAddr).toLowerCase());
+    let hit = list.find(want);
+    /* ★最新100件しか見ないので、古い取引だと入っていない。
+       実測：2023年の取引で交換先を読めず、DEXのルーターを追って迷子になった。
+       見つからないときだけ、その取引のブロックに絞って取り直す。 */
+    if (!hit) {
+      const t = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=proxy`
+        + `&action=eth_getTransactionByHash&txhash=${txHash}&apikey=${ETHERSCAN_KEY}`);
+      const blk = parseInt(t.result?.blockNumber, 16);
+      if (Number.isFinite(blk)) {
+        const j2 = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx`
+          + `&address=${holderAddr}&startblock=${blk}&endblock=${blk}&page=1&offset=100&sort=asc&apikey=${ETHERSCAN_KEY}`);
+        hit = (Array.isArray(j2.result) ? j2.result : []).find(want);
+      }
+    }
     if (!hit) return null;
     if (isImpostorToken(hit.tokenSymbol, hit.contractAddress)) {
       console.log(`[TokenOut] 「${hit.tokenSymbol}」を名乗る別トークンのため追わない`);
@@ -3341,7 +3355,17 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
        いま居るアドレスがそのトークンを持つようになっただけなので、
        コントラクトを経路に足さず、トークンの追跡に切り替えて同じ地点から続ける。
        これをしないと USDT で追跡が止まる。 */
-    if (chain === 'eth' && isTok && !token) {
+    /* ★DEXのルーターに送った場合も同じこと。ルーターは通り道であって、
+       交換された資金は【いま居るアドレスに戻ってくる】。
+       ルーターを追うと、そこから先はDEXの内部配管（プール・WETH・別の
+       ルーター…）に迷い込み、被害者の資金とは無関係の経路になる。
+
+       実測（利用者提供の正解経路）：
+         経緯C 0x98e6be27… は 11:20 に 64.5 ETH を Uniswap へ送り、
+         11:22 に交換後の USDT を CoinCorner へ送っていた。
+         当社は Uniswap を追って WETH・1inch・Spender と迷走していた。
+         ★正解は「Cの手元で ETH が USDT に化けた」と読むこと。 */
+    if (chain === 'eth' && (isTok || isVia) && !token) {
       const t = await getSwapTokenOutETH(next.txHash, currentAddr);
       if (t) {
         token = t;
