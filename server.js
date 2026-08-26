@@ -2308,11 +2308,57 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
      名前が無ければ凍結要請の宛先にならず、利用者にとって到達したことにならない。 */
   const alreadyReached = path.some((p, i) =>
     i > 0 && p.isExchange && !p.inferred && !p.isVia && !p.isToken);
+
+  /* ══ 取引所に届く分岐を探して、本線に採用する ══════════════
+     ★利用者の指摘（第5-J節）：同じTXIDを3回調べて3回とも経路が違い、
+       取引所名が出たのは1回だけだった。
+       「3回調べないと分からない」では、調査として成立していない。
+
+     原因：分岐点でどちらか一方を選び、外れたらそのまま終わっていた。
+     どちらを選ぶかは、その時に取れたデータで変わる（＝毎回変わる）。
+
+     ★選び方を変えるのではなく、【確かめてから選ぶ】。
+       分岐の候補を実際に数手ずつ追い、取引所に届いた方を本線にする。
+       届く先が分かっているなら、推測で選ぶ理由がない。
+
+     直前の分岐から順に試す。分かれてすぐの方が、同じ資金である
+     確からしさが高いため。 */
+  if (!alreadyReached && isEVM(chain) && budgetLeft(opts, 20000) > 6000) {
+    const tried = [];
+    const seekDeadline = Date.now() + budgetLeft(opts, 18000);
+    outer:
+    for (let i = path.length - 1; i >= 1; i--) {
+      for (const sib of (path[i].siblings || []).slice(0, 2)) {
+        if (!sib.address || tried.length >= 6) break outer;
+        if (Date.now() > seekDeadline - 4000) break outer;
+        if (path.some(p => String(p.address).toLowerCase() === String(sib.address).toLowerCase())) continue;
+        tried.push(sib.address);
+        const hops = await traceHops(sib.address, sib.time || path[i].time, chain, 5,
+          seekDeadline, null, Number.isFinite(sib.amount) ? sib.amount : null).catch(() => []);
+        const exIdx = hops.findIndex(h => h.isExchange && h.label && !h.isVia && !h.isToken);
+        if (exIdx < 0) continue;
+        /* ★見つけた。この分岐を本線にする。
+           元の本線は捨てず、参考として控えに残す（記録は事実なので伏せない）。 */
+        const dropped = path.slice(i).map(p => ({ address: p.address, label: p.label || '', amount: p.amount }));
+        path.splice(i);
+        const db = getLabel(sib.address);
+        path.push({ address: sib.address, label: sib.label || db.label || '', amount: sib.amount,
+          token: sib.token, time: sib.time, txHash: sib.txHash,
+          isExchange: false, branchTaken: true, droppedBranch: dropped });
+        for (const h of hops.slice(0, exIdx + 1)) path.push(h);
+        console.log(`[分岐探索] ${sib.address.slice(0, 12)}… の先で ${hops[exIdx].label} に到達。この分岐を採用`);
+        break outer;
+      }
+    }
+  }
+
+  const reachedAfterSeek = path.some((p, i) =>
+    i > 0 && p.isExchange && !p.inferred && !p.isVia && !p.isToken);
   const refNode = stopNode || poolNode;
   /* ★渡り先を追えたなら、参考経路（＝追えないときの代わり）は要らない。
      時間を取り合って全体が時間切れになる（実測）。 */
   const bridgeFollowed = (path || []).some(p => p.bridgeTo && p.crossChainHops);
-  if (refNode && isEVM(chain) && refNode.address && !alreadyReached && !bridgeFollowed
+  if (refNode && isEVM(chain) && refNode.address && !reachedAfterSeek && !bridgeFollowed
       && budgetLeft(opts, 20000) > 4000) {
     const refDeadline = Date.now() + budgetLeft(opts, 20000);
     try {
@@ -5165,6 +5211,13 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
          合流した事実だけを伝える。数字を足すほど正確になるわけではない。 */
       const poolMany = p.poolDests > 1;
       /* ★どれだけ薄まったかを数字で出す。追跡は続けるが、確度は正直に示す。 */
+      /* ★分岐を確かめて採用した地点。どう選んだかを隠さない。 */
+      const brTd = p.branchTaken ? `<div class="node-note" style="color:#93c5fd">
+        ◆ この地点では複数の送金先がありました。<strong>それぞれの先を実際にたどり、
+        取引所に到達した方をこの経路として採用しています。</strong>
+        ${(p.droppedBranch||[]).length ? '<br><span style="color:#aaa">採用しなかった送金先：'
+          + p.droppedBranch.map(d => escHtml((d.label ? d.label + ' ' : '') + d.address)).join('／') + '</span>' : ''}
+      </div>` : '';
       const dilTd = p.dilutionX ? `<div class="node-note" style="color:#fbbf24">
         ⚠ ここでご依頼の資金は<strong>約${p.dilutionX}倍の流れに合流</strong>しています。
         <br><span style="color:#aaa">この先に出てくる送金先は、ご依頼の資金が届いたものとは断定できません。
@@ -5183,7 +5236,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
         <div class="flow-node ${cls}${p.afterStop ? ' after-stop' : ''}">
           <div class="node-role"><span class="node-icon">${icon}</span>${roleLabel}${exBadge}</div>
           <div class="node-address">${p.address}</div>
-          ${balTd}${txCntTd}${timeTd}${amtTd}${svcTd}${poolTd}${dilTd}
+          ${balTd}${txCntTd}${timeTd}${amtTd}${svcTd}${poolTd}${dilTd}${brTd}
         </div>
         ${i < (r.path || []).length - 1 ? '<div class="flow-arrow">▼</div>' : ''}`;
     }).join('');
