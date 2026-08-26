@@ -1945,8 +1945,9 @@ const BRIDGE_METHODS = {
 async function getBridgeArrivalTRON(addr, fromMs) {
   const win = 6 * 3600 * 1000;                       // 払い出しは数分〜数時間遅れる
   try {
+    /* 受け手として絞り込む。集約ウォレットは送出に埋もれることがあるため。 */
     const url = `${TRONGRID}/v1/accounts/${addr}/transactions/trc20`
-      + `?limit=50&order_by=block_timestamp,asc&min_timestamp=${Math.max(0, fromMs - 60000)}`;
+      + `?limit=50&order_by=block_timestamp,asc&only_to=true&min_timestamp=${Math.max(0, fromMs - 60000)}`;
     const j = await (await fetchT(url, { headers: tronHeaders() })).json();
     for (const t of (j.data || [])) {
       if (t.to !== addr) continue;                   // 受け取りだけ
@@ -2938,8 +2939,13 @@ async function getNextTxXRP(addr, afterTime, amountIn) {
 async function getNextTxTRON(addr, afterTime, amountIn) {
   const refMs = new Date(afterTime).getTime();
   try {
+    /* ★送り手として絞り込む（only_from）。
+       絞らないと受取に埋もれる。実測：ブリッジの渡り先 THg8gE… は
+       受取45件・送出5件の集約ウォレットで、50件取っても送出が
+       ほとんど入らず、追跡がその場で途切れていた。
+       絞ると同じ50件が全部「出ていった送金」になる。 */
     const url = `${TRONGRID}/v1/accounts/${addr}/transactions/trc20`
-      + `?limit=50&order_by=block_timestamp,asc&min_timestamp=${Math.max(0, refMs - 1000)}`;
+      + `?limit=50&order_by=block_timestamp,asc&only_from=true&min_timestamp=${Math.max(0, refMs - 1000)}`;
     const j = await (await fetchT(url, { headers: tronHeaders() })).json();
     /* ★以前は「最初に見つけた1件」を返していた。
        ETHで直したのと同じ誤り（第4-S節・第4-X節）が残っていた。
