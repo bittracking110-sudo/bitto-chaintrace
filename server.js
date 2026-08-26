@@ -4089,14 +4089,41 @@ async function investigate(txid, chain, opts = {}) {
        探すことと調べることを分ける。 */
     chain = await detectEVMChain(txid);
     if (!chain) throw new Error('このTXIDは Ethereum・Polygon・Arbitrum のいずれにも見つかりませんでした');
-    result = chain === 'eth' ? await investigateETH(txid) : await investigateEVM(txid, chain);
+    /* ★Ethereum の調査は Blockchair の取引明細に依存していて、
+       相手が遅いと全体を巻き込む。締切内に返らなければ、
+       Etherscan だけで組んだ軽い方に切り替える。
+       ★内部の呼び出し明細は落ちるが、経路と到達先は出る。
+         何も出せないより、出せる分を出す。 */
+    if (chain === 'eth') {
+      const sub = Math.max(5000, hardDeadline - Date.now() - 12000);
+      result = await Promise.race([
+        investigateETH(txid),
+        new Promise(res => setTimeout(() => res(null), sub)),
+      ]);
+      if (!result) {
+        console.log('[investigate] Blockchair 側が締切に間に合わず、Etherscan だけで調べ直します');
+        result = await investigateEVM(txid, 'eth');
+      }
+    } else {
+      result = await investigateEVM(txid, chain);
+    }
   }
   else if (chain === 'xrp') result = await investigateXRP(txid);
   else if (chain === 'tron') result = await investigateTRON(txid);
   else throw new Error('未対応チェーン');
 
   // 各アドレスノードに残高・TX件数を付加
-  await enrichPathWithAddressInfo(result.path, chain, { ...opts, hardDeadline });
+  /* ★情報付け（残高・ラベル・参考経路・ブリッジ先）は「あれば嬉しい」情報。
+     どれだけ遅れても、経路そのものは返し切る。
+     ★以前はここが延びると調査ごと失敗し、利用者には何も出せなかった
+       （実測で3回連続、同じTXIDが75秒の上限で失敗）。
+     締切が来たら待つのをやめて先へ進む。付いた分だけ使う。 */
+  await Promise.race([
+    enrichPathWithAddressInfo(result.path, chain, { ...opts, hardDeadline })
+      .catch(e => console.error('[investigate] 情報付けに失敗:', e.message)),
+    new Promise(res => setTimeout(res, Math.max(2000, hardDeadline - Date.now()))),
+  ]);
+  if (Date.now() > hardDeadline) console.log('[investigate] 締切のため情報付けを途中で切り上げました');
 
   /* 到達取引所の一覧は経路をたどる段階で作られるが、名前が後から
      （ラベルAPIや振る舞い推定で）付くことがある。その分をここで足す。
