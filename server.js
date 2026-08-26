@@ -1808,7 +1808,8 @@ async function getUSDPrice(chain) {
   const cached = priceCache.get(key);
   if (cached && Date.now() - cached.ts < 300000) return cached.price; // 5分キャッシュ
   try {
-    const ids = { btc: 'bitcoin', eth: 'ethereum', xrp: 'ripple' }[key];
+    const ids = { btc: 'bitcoin', eth: 'ethereum', xrp: 'ripple',
+                  tron: 'tron', polygon: 'matic-network' }[key];
     if (!ids) return 0;
     const r = await fetchT(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`);
     const j = await r.json();
@@ -1872,6 +1873,22 @@ async function getAddressInfo(addr, chain) {
       // Blockchairが持つアドレスラベル・コントラクト名を取得
       const bcLabel   = d.label || d.contract_name || '';
       return { balance: balNative, txCount: d.transaction_count || 0, balanceUSD: balNative * price, bcLabel };
+    }
+    /* ★Ethereum 以外のEVMチェーン。
+       Blockchair は Ethereum しか扱わないので、そこへ問い合わせてはいけない。
+       同じ形のアドレスが Ethereum にも存在するため、★別チェーンの残高を
+       そのアドレスのものとして表示してしまう。 */
+    if (isEVM(chain)) {
+      const j = await apiJson(esUrl(chain, `module=account&action=balance&address=${addr}&tag=latest`));
+      const wei = String(j.result ?? '');
+      if (!/^\d+$/.test(wei)) return null;
+      const balNative = Number(wei) / 1e18;
+      const price = await getUSDPrice(EVM_CHAINS[chain].priceKey);
+      /* ★取引回数は取れない。Etherscanに件数を返す口が無く、
+         nonce（自分が出した数）は受け取りを含まないので代用できない。
+         0 を入れると「取引0回＝使われていない」と読まれるので入れない。
+         数えられないものを数えたことにしない。 */
+      return { balance: balNative, txCount: null, balanceUSD: balNative * price, bcLabel: '' };
     }
     if (chain === 'btc') {
       const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
@@ -2127,12 +2144,12 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   /* ★ブリッジで別のチェーンへ渡っていたら、その渡り先を取引から読む。
      読めたら、そのチェーンで追跡を続ける。
      これまでは「ここから先は追えません」で終わっていた地点（第5-C節）。 */
-  if (chain === 'eth') {
+  if (isEVM(chain)) {
     for (const n of path) {
       if (!n.txHash || n.bridgeTo) continue;
       if (!(n.isVia || n.traceStop)) continue;     // ブリッジらしい地点だけ見る
       try {
-        const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=proxy`
+        const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=proxy`
           + `&action=eth_getTransactionByHash&txhash=${n.txHash}&apikey=${ETHERSCAN_KEY}`);
         const info = decodeBridgeCall(j.result?.input);
         if (!info) {
@@ -2216,7 +2233,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   /* ★渡り先を追えたなら、参考経路（＝追えないときの代わり）は要らない。
      時間を取り合って全体が時間切れになる（実測）。 */
   const bridgeFollowed = (path || []).some(p => p.bridgeTo && p.crossChainHops);
-  if (refNode && chain === 'eth' && refNode.address && !alreadyReached && !bridgeFollowed) {
+  if (refNode && isEVM(chain) && refNode.address && !alreadyReached && !bridgeFollowed) {
     const refDeadline = Date.now() + 20000;   // 旧処理と統合したぶんを回す
     try {
       /* 1本だけ追うと、混雑した地点では候補が数十件あるため当たりを引けない。
@@ -2228,7 +2245,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
          同じものを2度見せても判断材料は増えない。 */
       const onPath = new Set((path || []).map(p => String(p.address || '').toLowerCase()));
       const raw = stopNode
-        ? await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 4)
+        ? await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 4, chain)
         : poolNode.siblings.slice(0, 4).map(s => ({
             address: s.address, label: s.label || '', amount: s.amount,
             time: s.time || poolNode.time, token: s.token, gapMin: 0,
@@ -2409,6 +2426,39 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
 }
 
 // ══ チェーン自動判定 ══════════════════════════════════════════
+/* ══ EVM系チェーン ══════════════════════════════════════════
+   ★TXIDの形が同じなので、0x+64桁を Ethereum と決めつけていた。
+     実例（利用者の正解経路④）は Polygon の取引で、被害者には
+     「見つかりません」としか出なかった。精度以前に調査が成立しない。
+
+   Etherscan は v2 で全チェーン同じ形のAPIになっており、chainid を
+   変えるだけで同じ処理が使える。ただし★無料で使えるチェーンは限られる
+   （2026-08-26 実測）。使えないチェーンを足すと、無いものを在ると
+   言うことになるので入れない。
+
+     Ethereum  1        ✅ 無料
+     Polygon   137      ✅ 無料
+     Arbitrum  42161    ✅ 無料
+     BNB・Optimism・Base・Avalanche   ❌「Free API access is not supported」
+
+   ★同時に複数の調査が走るので、現在のチェーンを大域変数で持ってはいけない。
+     必ず引数で渡す。 */
+const EVM_CHAINS = {
+  eth:      { id: 1,     symbol: 'ETH', name: 'Ethereum', priceKey: 'eth' },
+  polygon:  { id: 137,   symbol: 'POL', name: 'Polygon',  priceKey: 'polygon' },
+  arbitrum: { id: 42161, symbol: 'ETH', name: 'Arbitrum', priceKey: 'eth' },
+};
+/* 0x+64桁のTXIDを、この順に探す。見つかった時点で確定する。 */
+const EVM_TRY_ORDER = ['eth', 'polygon', 'arbitrum'];
+
+function isEVM(chain)  { return !!EVM_CHAINS[chain]; }
+function evmId(chain)  { return (EVM_CHAINS[chain] || EVM_CHAINS.eth).id; }
+function evmSymbol(chain) { return (EVM_CHAINS[chain] || EVM_CHAINS.eth).symbol; }
+/* Etherscan v2 の入口。chain を渡し忘れても Ethereum として動く（従来どおり）。 */
+function esUrl(chain, query) {
+  return `https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&${query}&apikey=${ETHERSCAN_KEY}`;
+}
+
 function detectChain(input) {
   const s = input.trim();
   if (/^0x[0-9a-fA-F]{64}$/.test(s)) return 'eth';
@@ -2547,9 +2597,9 @@ async function fetchAddressLabel(addr, chain) {
   let label = '';
 
   // ② Etherscan コントラクト名（ETH のみ）
-  if (chain === 'eth' && ETHERSCAN_KEY) {
+  if (isEVM(chain) && ETHERSCAN_KEY) {
     try {
-      const url = `https://api.etherscan.io/v2/api?chainid=1&module=contract&action=getsourcecode&address=${addr}&apikey=${ETHERSCAN_KEY}`;
+      const url = `https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=contract&action=getsourcecode&address=${addr}&apikey=${ETHERSCAN_KEY}`;
       const j = await apiJson(url);
       const name = j.result?.[0]?.ContractName || '';
       // 意味のあるコントラクト名のみ採用（"Vyper_contract"などは除外）
@@ -2571,9 +2621,9 @@ async function fetchAddressLabel(addr, chain) {
      この一段で拾える範囲が広がる。
 
      Etherscanの無料APIで、MistTrackの回数を使わずに済むのも大きい。 */
-  if (!label && chain === 'eth' && ETHERSCAN_KEY) {
+  if (!label && isEVM(chain) && ETHERSCAN_KEY) {
     try {
-      const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=proxy`
+      const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=proxy`
         + `&action=eth_getCode&address=${addr}&tag=latest&apikey=${ETHERSCAN_KEY}`);
       const found = nameFromBytecode(j.result || '');
       if (found) {
@@ -2846,7 +2896,7 @@ function pickByDestinationVolume(candidates, pooled) {
   return chosen;
 }
 
-async function getNextTxETH(addr, afterTime, amountIn) {
+async function getNextTxETH(addr, afterTime, amountIn, chain = 'eth') {
   const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
   console.log(`[HOP] ETH追跡: ${addr} / 基準: ${isNaN(refMs) ? '不明' : new Date(refMs).toISOString()}`);
 
@@ -2862,11 +2912,11 @@ async function getNextTxETH(addr, afterTime, amountIn) {
      入金のブロックから取れば、何件あっても「入金の直後」を確実に拾える。
      以前 listNextCandidatesETH で同じ誤りを直している（第4-H節）。 */
   const startBlock = Number.isFinite(refMs) && refMs > 0
-    ? await blockNoByTime(Math.floor(refMs / 1000)) : 0;
+    ? await blockNoByTime(Math.floor(refMs / 1000), chain) : 0;
 
   // ① 通常TX（EOAからの送金）
   try {
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&startblock=${startBlock}&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=account&action=txlist&address=${addr}&startblock=${startBlock}&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const j = await apiJson(url);
     const txs = Array.isArray(j.result) ? j.result : [];
     console.log(`[HOP] Etherscan TX: ${txs.length}件`);
@@ -2896,7 +2946,7 @@ async function getNextTxETH(addr, afterTime, amountIn) {
   // ② 内部TX（スマートコントラクト・プロキシ経由の資金移動）
   // ※ sort=desc で最新TX から取得（古いコントラクトはascだと過去TXしか取れない問題を修正）
   try {
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlistinternal&address=${addr}&startblock=${startBlock}&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=account&action=txlistinternal&address=${addr}&startblock=${startBlock}&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const j = await apiJson(url);
     const txs = Array.isArray(j.result) ? j.result : [];
     console.log(`[HOP] Internal TX: ${txs.length}件`);
@@ -2926,7 +2976,7 @@ async function getNextTxETH(addr, afterTime, amountIn) {
   } catch(e) { console.error('[HOP] Internal TX:', e.message); }
 
   try {
-    const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx&address=${addr}&startblock=${startBlock}&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
+    const url = `https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=account&action=tokentx&address=${addr}&startblock=${startBlock}&endblock=latest&page=1&offset=1000&sort=asc&apikey=${ETHERSCAN_KEY}`;
     const j = await apiJson(url);
     const txs = Array.isArray(j.result) ? j.result : [];
     const tokenCandidates = [];
@@ -2936,7 +2986,7 @@ async function getNextTxETH(addr, afterTime, amountIn) {
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       /* 記号を騙るトークンは追わない。実データで「ETH」を名乗る別トークンを
          掴み、無関係の経路を追っていた（第4-R節）。 */
-      if (isImpostorToken(tx.tokenSymbol, tx.contractAddress)) {
+      if (isImpostorToken(tx.tokenSymbol, tx.contractAddress, chain)) {
         console.log(`[HOP] 「${tx.tokenSymbol}」を名乗る別トークンのため追わない（${String(tx.contractAddress).slice(0, 12)}…）`);
         continue;
       }
@@ -2954,6 +3004,12 @@ async function getNextTxETH(addr, afterTime, amountIn) {
       return chosen;
     }
   } catch(e) { console.error('[HOP] ERC20:', e.message); }
+
+  /* ★ここから先の最終手段は Blockchair で、Blockchair は Ethereum しか扱わない。
+     同じ形のアドレスは他のEVMチェーンにも存在するので、Polygon の追跡中に
+     ここへ来ると★Ethereum 側の無関係な送金を「次の送金先」として掴む。
+     Ethereum のときだけ使う。 */
+  if (chain !== 'eth') return null;
 
   try {
     const url = `https://api.blockchair.com/ethereum/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}&limit=10`;
@@ -3191,9 +3247,9 @@ const CANDIDATE_WARN_GAP_MIN = 60;
 
 /* 時刻からブロック番号を引く。ここを起点に昇順で取るために使う。
    引けなければ 0（＝最初から）。その場合は従来どおりの精度に落ちるだけで壊れない。 */
-async function blockNoByTime(sec) {
+async function blockNoByTime(sec, chain = 'eth') {
   try {
-    const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=block`
+    const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=block`
       + `&action=getblocknobytime&timestamp=${sec}&closest=before&apikey=${ETHERSCAN_KEY}`);
     const n = parseInt(j.result);
     return Number.isFinite(n) && n > 0 ? n : 0;
@@ -3212,15 +3268,15 @@ async function blockNoByTime(sec) {
      時刻で絞っていたため、混雑したアドレスでは入金直後の送金が100件の中に
      入らず、ずっと後の送金が「最も近い3件」になっていた（実例 +526分）。
      昇順なら、間が何日あいても「次に出ていった送金」を確実に拾える。 */
-async function listNextCandidatesETH(addr, afterTime, limit = 3) {
+async function listNextCandidatesETH(addr, afterTime, limit = 3, chain = 'eth') {
   try {
     const refSec = Math.floor(new Date(normalizeTimeStr(afterTime)).getTime() / 1000);
     if (!refSec) return [];
-    const startBlock = await blockNoByTime(refSec);
+    const startBlock = await blockNoByTime(refSec, chain);
     /* 打ち切り地点はコントラクト（WETH等）であることが多い。
        コントラクトは通常の取引の送信者にならないので、内部送金を見る。
        個人の住所だった場合に備えて、空なら通常の取引も見る。 */
-    const base = `https://api.etherscan.io/v2/api?chainid=1&module=account&address=${addr}`
+    const base = `https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=account&address=${addr}`
       + `&startblock=${startBlock}&endblock=latest&page=1&offset=100&sort=asc&apikey=${ETHERSCAN_KEY}`;
     /* ★以前は「内部送金が空のときだけ通常の取引も見る」としていた。
        実測（第4-X節）：個人ウォレット 0x0280baf5… は通常取引1000件超の
@@ -3283,24 +3339,50 @@ async function listNextCandidatesETH(addr, afterTime, limit = 3) {
 
    下記のアドレスは実データ（Etherscanの転送記録）で記号との一致を確認済み。
    ここに無い記号は判断しない（知らないトークンを偽物扱いしない）。 */
-const GENUINE_TOKENS = {
-  usdt: '0xdac17f958d2ee523a2206206994597c13d831ec7',
-  usdc: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
-  weth: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
-  dai:  '0x6b175474e89094c44da98b954eedeac495271d0f',
-  wbtc: '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599',
+/* ★同じ記号でも、チェーンごとにコントラクトが違う。
+   Ethereum の USDT のアドレスで Polygon の USDT を照合すると、
+   本物を偽物と判定して追跡を止めてしまう。
+   ★偽トークン対策が、そのまま「正規のチェーンを追えない」原因になる。
+   知らないチェーンでは判断しない（偽物扱いしない）のが安全側。 */
+const GENUINE_TOKENS_BY_CHAIN = {
+  eth: {
+    usdt: '0xdac17f958d2ee523a2206206994597c13d831ec7',
+    usdc: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+    weth: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+    dai:  '0x6b175474e89094c44da98b954eedeac495271d0f',
+    wbtc: '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599',
+  },
+  polygon: {
+    usdt: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+    usdc: '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',   // ネイティブUSDC
+    weth: '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619',
+    dai:  '0x8f3cf7ad23cd3cadbd9735aff958023239c6a063',
+    wbtc: '0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6',
+  },
+  arbitrum: {
+    usdt: '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
+    usdc: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',   // ネイティブUSDC
+    weth: '0x82af49447d8a07e3bd95bd0d56f35241523fbab1',
+    dai:  '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1',
+    wbtc: '0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f',
+  },
 };
+const GENUINE_TOKENS = GENUINE_TOKENS_BY_CHAIN.eth;   // 既存呼び出し用
 /* 「ETH」「BTC」はそもそもERC-20の記号として名乗る理由がない。
    本物のETHはトークンではないので、ERC-20で ETH を名乗っている時点で別物。 */
 const RESERVED_SYMBOLS = new Set(['eth', 'btc', 'bitcoin', 'ethereum']);
 
 /* 偽装が疑われるトークンか。true なら被害資金として追わない。 */
-function isImpostorToken(symbol, contract) {
+function isImpostorToken(symbol, contract, chain = 'eth') {
   const s = String(symbol || '').trim().toLowerCase();
   const c = String(contract || '').trim().toLowerCase();
   if (!s || !c) return false;
   if (RESERVED_SYMBOLS.has(s)) return true;              // ERC-20で ETH/BTC を名乗る＝別物
-  const genuine = GENUINE_TOKENS[s];
+  /* ★そのチェーンの正解を知らないなら、判断しない。
+     知らないまま「違う」と決めると、正規のトークンを追えなくなる。 */
+  const table = GENUINE_TOKENS_BY_CHAIN[chain];
+  if (!table) return false;
+  const genuine = table[s];
   if (genuine && genuine !== c) return true;             // 有名な記号だがアドレスが違う
   return false;                                          // 知らない記号は判断しない
 }
@@ -3320,11 +3402,11 @@ function isImpostorToken(symbol, contract) {
    肝心の到達先（＝凍結を頼む相手）が分からないまま終わる。 */
 
 /* スワップの取引から「どのトークンが誰にいくら渡ったか」を読む。 */
-async function getSwapTokenOutETH(txHash, holderAddr) {
+async function getSwapTokenOutETH(txHash, holderAddr, chain = 'eth') {
   try {
     const want = t => t.hash?.toLowerCase() === String(txHash).toLowerCase()
                    && t.to?.toLowerCase() === String(holderAddr).toLowerCase();
-    const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx`
+    const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=account&action=tokentx`
       + `&address=${holderAddr}&page=1&offset=100&sort=desc&apikey=${ETHERSCAN_KEY}`);
     const list = Array.isArray(j.result) ? j.result : [];
     let hit = list.find(want);
@@ -3332,17 +3414,17 @@ async function getSwapTokenOutETH(txHash, holderAddr) {
        実測：2023年の取引で交換先を読めず、DEXのルーターを追って迷子になった。
        見つからないときだけ、その取引のブロックに絞って取り直す。 */
     if (!hit) {
-      const t = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=proxy`
+      const t = await apiJson(`https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=proxy`
         + `&action=eth_getTransactionByHash&txhash=${txHash}&apikey=${ETHERSCAN_KEY}`);
       const blk = parseInt(t.result?.blockNumber, 16);
       if (Number.isFinite(blk)) {
-        const j2 = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx`
+        const j2 = await apiJson(`https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=account&action=tokentx`
           + `&address=${holderAddr}&startblock=${blk}&endblock=${blk}&page=1&offset=100&sort=asc&apikey=${ETHERSCAN_KEY}`);
         hit = (Array.isArray(j2.result) ? j2.result : []).find(want);
       }
     }
     if (!hit) return null;
-    if (isImpostorToken(hit.tokenSymbol, hit.contractAddress)) {
+    if (isImpostorToken(hit.tokenSymbol, hit.contractAddress, chain)) {
       console.log(`[TokenOut] 「${hit.tokenSymbol}」を名乗る別トークンのため追わない`);
       return null;
     }
@@ -3357,7 +3439,7 @@ async function getSwapTokenOutETH(txHash, holderAddr) {
 
 /* トークンを持っているアドレスから、次にそのトークンが出ていった先を探す。
    選び方はETHのときと同じ（取引所優先 → 次に金額最大）。 */
-async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18, amountIn = null) {
+async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18, amountIn = null, chain = 'eth') {
   try {
     const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
     /* ★開始ブロックを指定していなかったため、1件あたり200件の制限で
@@ -3366,8 +3448,8 @@ async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18, amoun
        実測：2023年12月の送金を探すのに、6月からの200件を見ていて届かず、
        交換は読めているのに、その先へ進めずに終わっていた。 */
     const startBlock = Number.isFinite(refMs) && refMs > 0
-      ? await blockNoByTime(Math.floor(refMs / 1000)) : 0;
-    const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx`
+      ? await blockNoByTime(Math.floor(refMs / 1000), chain) : 0;
+    const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=${evmId(chain)}&module=account&action=tokentx`
       + `&contractaddress=${contract}&address=${addr}&startblock=${startBlock}&endblock=latest`
       + `&page=1&offset=200&sort=asc&apikey=${ETHERSCAN_KEY}`);
     const list = Array.isArray(j.result) ? j.result : [];
@@ -3419,8 +3501,8 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
     let next = null;
     /* 資金がトークンになっている間は、そのトークンの送金だけを追う。
        ETHの送金を見ても、もうそこに資金は流れていない。 */
-    if (chain === 'eth' && token) {
-      next = await getNextTokenTxETH(currentAddr, currentTime, token.contract, token.decimals, currentAmount);
+    if (isEVM(chain) && token) {
+      next = await getNextTokenTxETH(currentAddr, currentTime, token.contract, token.decimals, currentAmount, chain);
       if (!next) { console.log(`[traceHops] ${token.symbol} はこのアドレスから動いていない`); break; }
     }
     /* 同じ取引の中の出金を先に読む。
@@ -3447,7 +3529,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
       /* ★入ってきた額は全チェーンに渡す。以前はETHにしか渡しておらず、
          BTC・XRP・TRONでは「最大の1件」「最初の1件」を選んだままだった。 */
       if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime, currentAmount);
-      else if (chain === 'eth') next = await getNextTxETH(currentAddr, currentTime, currentAmount);
+      else if (isEVM(chain)) next = await getNextTxETH(currentAddr, currentTime, currentAmount, chain);
       else if (chain === 'xrp') next = await getNextTxXRP(currentAddr, currentTime, currentAmount);
       else if (chain === 'tron') next = await getNextTxTRON(currentAddr, currentTime, currentAmount);
     }
@@ -3475,8 +3557,8 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
          11:22 に交換後の USDT を CoinCorner へ送っていた。
          当社は Uniswap を追って WETH・1inch・Spender と迷走していた。
          ★正解は「Cの手元で ETH が USDT に化けた」と読むこと。 */
-    if (chain === 'eth' && (isTok || isVia) && !token) {
-      const t = await getSwapTokenOutETH(next.txHash, currentAddr);
+    if (isEVM(chain) && (isTok || isVia) && !token) {
+      const t = await getSwapTokenOutETH(next.txHash, currentAddr, chain);
       if (t) {
         token = t;
         const holder = hops.length ? hops[hops.length - 1] : null;
@@ -3572,6 +3654,75 @@ async function investigateBTC(txid) {
   return { chain: 'BTC', txid, blockTime: tx.time, blockHeight: tx.block_id,
     amount: tx.output_total/1e8, fee: tx.fee/1e8,
     sender: senderAddr, senderLabel: getLabel(senderAddr).label, path, exchanges };
+}
+
+/* ══ Ethereum 以外のEVMチェーン（Polygon・Arbitrum）══════════
+   ★Ethereum の調査は Blockchair の取引明細に依存していて、
+     Blockchair は Ethereum しか扱わない。
+     そこで他チェーンは Etherscan だけで組む。実績のあるETHの処理には
+     触れない（せっかく正解経路で検証した部分を壊さないため）。
+
+   必要なものは3つだけ：
+     ① 取引そのもの（送金元・宛先・額・日時）
+     ② トークン送金なら、その受取先と通貨
+     ③ そこから先は traceHops（既にチェーン対応済み）に渡す */
+const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+async function investigateEVM(hash, chain) {
+  const h = hash.startsWith('0x') ? hash : '0x' + hash;
+  const meta = EVM_CHAINS[chain];
+  const tx = (await apiJson(esUrl(chain, `module=proxy&action=eth_getTransactionByHash&txhash=${h}`))).result;
+  if (!tx || !tx.from) throw new Error(`${meta.name} TXが見つかりません`);
+
+  const blk = parseInt(tx.blockNumber, 16);
+  const b = (await apiJson(esUrl(chain, `module=proxy&action=eth_getBlockByNumber&tag=0x${blk.toString(16)}&boolean=false`))).result;
+  const timeIso = new Date(parseInt(b?.timestamp || '0', 16) * 1000).toISOString();
+  const nativeAmt = parseInt(tx.value, 16) / 1e18;
+
+  /* トークンの送金なら、実際の受取先は記録（ログ）の中にある。
+     tx.to はトークンのコントラクトで、そこに資金が入るわけではない。 */
+  let recipient = tx.to, amount = nativeAmt, tokenSymbol = null, tokenAmount = null, tokenCtx = null;
+  const tk = (await apiJson(esUrl(chain,
+    `module=account&action=tokentx&address=${tx.from}&startblock=${blk}&endblock=${blk}&page=1&offset=100&sort=asc`))).result;
+  const mine = (Array.isArray(tk) ? tk : []).filter(t =>
+    String(t.hash).toLowerCase() === h.toLowerCase() && String(t.from).toLowerCase() === String(tx.from).toLowerCase());
+  const hit = mine.find(t => !isImpostorToken(t.tokenSymbol, t.contractAddress, chain)) || null;
+  if (hit) {
+    const dec = parseInt(hit.tokenDecimal) || 18;
+    recipient   = hit.to;
+    tokenSymbol = hit.tokenSymbol || 'TOKEN';
+    tokenAmount = parseFloat(hit.value) / Math.pow(10, dec);
+    amount      = tokenAmount;
+    tokenCtx    = { contract: hit.contractAddress, symbol: tokenSymbol, decimals: dec };
+  }
+
+  const senderDb = getLabel(tx.from);
+  const recipDb  = getLabel(recipient);
+  const recipLbl = (await fetchAddressLabel(recipient, chain)) || recipDb.label || '';
+  const isRecipToken = recipDb.type === 'token' || isTokenContract(recipLbl);
+  const isRecipEx = !isRecipToken && !isViaService(recipLbl)
+    && (recipDb.type === 'exchange' || isExchange(recipLbl));
+
+  const path = [
+    { address: tx.from,  label: senderDb.label || '', role: 'sender' },
+    { address: recipient, label: recipLbl, role: 'recipient',
+      isExchange: isRecipEx, isToken: isRecipToken, amount, token: tokenSymbol || undefined },
+  ];
+  const exchanges = isRecipEx ? [{ name: recipLbl, address: recipient, amount }] : [];
+  if (!isRecipEx) {
+    const hops = await traceHops(recipient, timeIso, chain, 10,
+      Date.now() + TRACE_BUDGET_MS, tokenCtx, Number.isFinite(amount) ? amount : null);
+    for (const hop of hops) {
+      if (path.some(p => String(p.address).toLowerCase() === String(hop.address).toLowerCase())) continue;
+      path.push(hop);
+      if (hop.isExchange) exchanges.push({ name: hop.label, address: hop.address, amount: hop.amount });
+    }
+  }
+  return {
+    chain: meta.name, chainKey: chain, txid: h, blockTime: timeIso, blockHeight: blk,
+    amount: nativeAmt, fee: null, tokenSymbol, tokenAmount,
+    sender: tx.from, senderLabel: senderDb.label, recipient, path, exchanges,
+  };
 }
 
 async function investigateETH(hash) {
@@ -3770,7 +3921,34 @@ async function investigate(txid, chain, opts = {}) {
       }
     }
   }
-  else if (chain === 'eth') result = await investigateETH(txid);
+  else if (chain === 'eth') {
+    /* ★0x+64桁のTXIDは、EVM系のどのチェーンでも同じ形。
+       Ethereum に無ければ、他のチェーンを順に試す。
+       試さないと、被害者には「見つかりません」としか出ない
+       （実例：利用者の正解経路④は Polygon の取引だった。第5-E節）。
+       BTC→TRON で既に使っている「見つからなければ次を試す」と同じ形。 */
+    try {
+      result = await investigateETH(txid);
+    } catch (e) {
+      if (!/見つかりません/.test(e.message)) throw e;
+      let found = null;
+      for (const c of EVM_TRY_ORDER) {
+        if (c === 'eth') continue;
+        try {
+          console.log(`[investigate] Ethereum で見つからず、${EVM_CHAINS[c].name} として試します`);
+          found = await investigateEVM(txid, c);
+          chain = c;
+          break;
+        } catch (e2) {
+          if (!/見つかりません/.test(e2.message)) throw e2;
+        }
+      }
+      if (!found) {
+        throw new Error('このTXIDは Ethereum・Polygon・Arbitrum のいずれにも見つかりませんでした');
+      }
+      result = found;
+    }
+  }
   else if (chain === 'xrp') result = await investigateXRP(txid);
   else if (chain === 'tron') result = await investigateTRON(txid);
   else throw new Error('未対応チェーン');
