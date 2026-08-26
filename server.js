@@ -3668,6 +3668,33 @@ async function investigateBTC(txid) {
      ③ そこから先は traceHops（既にチェーン対応済み）に渡す */
 const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 
+/* TXIDがどのEVMチェーンのものかを、1回ずつの軽い問い合わせで確かめる。
+   ★「見つからない」と「通信に失敗した」を混同しない。
+     失敗したチェーンは判断を保留し、他を試す。
+     すべて空振りしたときだけ「どこにも無い」と言う。 */
+async function detectEVMChain(hash) {
+  const h = hash.startsWith('0x') ? hash : '0x' + hash;
+  let anyError = false;
+  for (const c of EVM_TRY_ORDER) {
+    try {
+      const j = await apiJson(esUrl(c, `module=proxy&action=eth_getTransactionByHash&txhash=${h}`));
+      if (j.result && j.result.from) {
+        console.log(`[investigate] ${EVM_CHAINS[c].name} の取引と判明`);
+        return c;
+      }
+      /* result が null＝そのチェーンには無い。NOTOK＝そのチェーンは使えない。
+         どちらも「次を試す」でよい。 */
+      if (j.result == null && j.status !== '0') continue;
+      if (j.status === '0') { anyError = true; continue; }
+    } catch (e) {
+      anyError = true;                       // 一時的な失敗。無いとは言い切れない
+      console.error(`[investigate] ${EVM_CHAINS[c].name} の確認に失敗:`, e.message);
+    }
+  }
+  if (anyError) console.log('[investigate] 一部のチェーンを確認できませんでした');
+  return null;
+}
+
 async function investigateEVM(hash, chain) {
   const h = hash.startsWith('0x') ? hash : '0x' + hash;
   const meta = EVM_CHAINS[chain];
@@ -3927,27 +3954,15 @@ async function investigate(txid, chain, opts = {}) {
        試さないと、被害者には「見つかりません」としか出ない
        （実例：利用者の正解経路④は Polygon の取引だった。第5-E節）。
        BTC→TRON で既に使っている「見つからなければ次を試す」と同じ形。 */
-    try {
-      result = await investigateETH(txid);
-    } catch (e) {
-      if (!/見つかりません/.test(e.message)) throw e;
-      let found = null;
-      for (const c of EVM_TRY_ORDER) {
-        if (c === 'eth') continue;
-        try {
-          console.log(`[investigate] Ethereum で見つからず、${EVM_CHAINS[c].name} として試します`);
-          found = await investigateEVM(txid, c);
-          chain = c;
-          break;
-        } catch (e2) {
-          if (!/見つかりません/.test(e2.message)) throw e2;
-        }
-      }
-      if (!found) {
-        throw new Error('このTXIDは Ethereum・Polygon・Arbitrum のいずれにも見つかりませんでした');
-      }
-      result = found;
-    }
+    /* ★どのチェーンにあるかを、先に軽い問い合わせだけで確かめる。
+       以前は「Ethereum で失敗したら例外の文言を見て次を試す」形にしたが、
+       通信の一時的な失敗（時間切れ）まで「見つからない」と混同するうえ、
+       ★逆に時間切れを本物の失敗として投げ返してしまい、
+         他のチェーンを試さずに調査ごと終わっていた（実測）。
+       探すことと調べることを分ける。 */
+    chain = await detectEVMChain(txid);
+    if (!chain) throw new Error('このTXIDは Ethereum・Polygon・Arbitrum のいずれにも見つかりませんでした');
+    result = chain === 'eth' ? await investigateETH(txid) : await investigateEVM(txid, chain);
   }
   else if (chain === 'xrp') result = await investigateXRP(txid);
   else if (chain === 'tron') result = await investigateTRON(txid);
