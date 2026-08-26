@@ -3611,8 +3611,17 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
          11:22 に交換後の USDT を CoinCorner へ送っていた。
          当社は Uniswap を追って WETH・1inch・Spender と迷走していた。
          ★正解は「Cの手元で ETH が USDT に化けた」と読むこと。 */
-    if (isEVM(chain) && (isTok || isVia) && !token) {
-      const t = await getSwapTokenOutETH(next.txHash, currentAddr, chain);
+    /* ★「まだトークンを追っていないとき」に限っていたのが誤りだった。
+       被害の大半はUSDT・USDCで始まるので、その状態から別の通貨へ
+       交換される場合こそ見なければならない。
+       実測（正解経路④・Polygon）：USDCを追っている最中に USDC→USDT の
+       交換があり、条件に阻まれて検出できず、DEXの配管を延々と辿っていた。
+       すでに持っている通貨と違うものが出てきたときだけ「交換」とみなす。 */
+    const sameToken = t => token && t
+      && String(t.contract).toLowerCase() === String(token.contract).toLowerCase();
+    if (isEVM(chain) && (isTok || isVia)) {
+      const t0 = await getSwapTokenOutETH(next.txHash, currentAddr, chain);
+      const t = sameToken(t0) ? null : t0;
       if (t) {
         token = t;
         const holder = hops.length ? hops[hops.length - 1] : null;
@@ -3628,7 +3637,8 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
       /* ★手元に戻ってこない場合。交換後の資金が別のアドレスへ渡っている。
          ルーターは経路に残す（ブリッジの読み取りがそこを見るため）が、
          追跡は出口のアドレスから続ける。 */
-      const exit = await getSwapExitETH(next.txHash, currentAddr, chain);
+      const exit0 = await getSwapExitETH(next.txHash, currentAddr, chain);
+      const exit = sameToken(exit0) ? null : exit0;      // 同じ通貨なら交換ではない
       if (exit && exit.address.toLowerCase() !== currentAddr.toLowerCase()
           && !visited.has(exit.address.toLowerCase())) {
         const holder = hops.length ? hops[hops.length - 1] : null;
