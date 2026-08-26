@@ -829,6 +829,46 @@ for (const labelFile of ['exchange-labels-eth.json', 'address-labels.json']) {
   }
 }
 
+/* ══ 管理画面から足したラベル ══════════════════════════════
+   ★到達先の名前が分かっても、コードを直してデプロイするまで反映されなかった。
+     24時間動かすものなので、確認したその場で反映できるようにする。
+
+   ★置き場所が2つになるので、必ず「git用の書き出し」を用意する。
+     ここ（永続ディスク）はボリュームを作り直すと消える。
+     時々コード側（address-labels.json）へ写して、消えても困らないようにする。
+
+   ★誤って登録すると、誤った凍結要請先が出る。
+     コードと違って差分の確認も履歴も無いので、
+     一覧・削除・登録日時を必ず添える。 */
+const MANUAL_LABEL_FILE = path.join(DATA_DIR, 'manual-labels.json');
+let manualLabels = {};        // 小文字アドレス → { name, at }
+try {
+  if (fs.existsSync(MANUAL_LABEL_FILE)) {
+    manualLabels = JSON.parse(fs.readFileSync(MANUAL_LABEL_FILE, 'utf8')) || {};
+    for (const [addr, v] of Object.entries(manualLabels)) {
+      const name = typeof v === 'string' ? v : v && v.name;
+      if (name) LABEL_DB[addr.toLowerCase()] = name;
+    }
+    console.log(`[LABEL_DB] 管理画面から足した分 ${Object.keys(manualLabels).length}件を読み込み`);
+  }
+} catch (e) { console.error('[LABEL_DB] 管理分の読み込みに失敗:', e.message); }
+
+/* アドレスの形。チェーンごとに違うので、共通して言えることだけ見る。
+   ★厳しくしすぎると登録できないチェーンが出る。緩すぎると事故のもと。 */
+function looksLikeAddress(a) {
+  const s = String(a || '').trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(s)) return true;              // EVM
+  if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(s)) return true;      // TRON
+  if (/^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(s)) return true;   // XRP
+  if (/^(bc1|[13])[0-9a-zA-Z]{25,70}$/.test(s)) return true;   // BTC
+  return false;
+}
+
+function saveManualLabels() {
+  return fsp.writeFile(MANUAL_LABEL_FILE, JSON.stringify(manualLabels, null, 1), 'utf8')
+    .catch(e => console.error('[LABEL_DB] 管理分の保存に失敗:', e.message));
+}
+
 // ══ 取引所連絡先DB ════════════════════════════════════════════
 const EXCHANGE_CONTACTS = {
   binance: {
@@ -6828,6 +6868,89 @@ app.get('/api/admin/label-lookup', requireAdmin, async (req, res) => {
 /* ★どこが遅いかを見る画面。時間切れの原因を推測でなく事実で追うため。
    調査が時間切れになっても、内側の処理は最後まで走って記録を残すので、
    ここに後から出てくる。 */
+/* ★到達先の名前を、確認したその場で登録する画面。
+   デプロイも再起動も要らない。次の調査から名前が出る。 */
+app.get('/api/admin/labels', requireAdmin, (req, res) => {
+  const t = String(req.query.t || '');
+  const esc = x => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const rows = Object.entries(manualLabels)
+    .map(([a, v]) => ({ addr: a, name: typeof v === 'string' ? v : (v && v.name) || '',
+                        at: (v && v.at) || '' }))
+    .sort((x, y) => String(y.at).localeCompare(String(x.at)));
+  const msg = req.query.msg ? `<p style="color:#3DDC97">${esc(req.query.msg)}</p>` : '';
+  const err = req.query.err ? `<p style="color:#f87171">${esc(req.query.err)}</p>` : '';
+  /* git へ写すための書き出し。ここ（永続ディスク）はボリュームを作り直すと消えるため。 */
+  const forGit = rows.map(r => `  "${r.addr}": ${JSON.stringify(r.name)}`).join(',\n');
+  res.type('html').send(`<!doctype html><meta charset="utf-8">
+<title>BitTo 到達先の名前</title>
+<style>body{font-family:system-ui;margin:20px;background:#12151c;color:#e8ecf3;font-size:14px}
+h1{font-size:18px}h2{font-size:15px;margin:22px 0 8px}
+input,button{font-size:14px;padding:7px 9px;border-radius:6px;border:1px solid #2a3140;background:#1b2130;color:#e8ecf3}
+button{background:#2563eb;border-color:#2563eb;cursor:pointer}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #2a3140;padding:5px 8px;text-align:left;font-size:13px}
+th{background:#1b2130}.mono{font-family:ui-monospace,monospace;font-size:12px}
+p{color:#9aa4b5;line-height:1.8}textarea{width:100%;height:150px;background:#1b2130;color:#e8ecf3;
+border:1px solid #2a3140;border-radius:6px;font-family:ui-monospace,monospace;font-size:12px;padding:8px}
+.warn{background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.34);border-radius:8px;padding:10px 12px}</style>
+<h1>到達先の名前を登録</h1>
+${msg}${err}
+<div class="warn"><b>誤って登録すると、誤った凍結要請先が出ます。</b>
+必ず出所（OKLink・MistTrack・警察からの回答など）を確認してから登録してください。</div>
+
+<h2>登録</h2>
+<form method="POST" action="/api/admin/labels?t=${esc(t)}">
+  <input name="addr" placeholder="アドレス" style="width:44%" required>
+  <input name="name" placeholder="名前（例：Binance／WhiteBIT）" style="width:28%" required>
+  <button type="submit">登録する</button>
+</form>
+<p>対応：0x…（Ethereum系）／T…（TRON）／r…（XRP）／bc1・1・3…（Bitcoin）<br>
+登録した瞬間から有効です。デプロイも再起動も要りません。</p>
+
+<h2>登録済み ${rows.length}件</h2>
+${rows.length ? `<table><tr><th>アドレス</th><th>名前</th><th>登録日時</th><th></th></tr>
+${rows.map(r => `<tr><td class="mono">${esc(r.addr)}</td><td>${esc(r.name)}</td>
+  <td>${esc(String(r.at).slice(0, 16).replace('T', ' '))}</td>
+  <td><form method="POST" action="/api/admin/labels/delete?t=${esc(t)}" style="margin:0">
+    <input type="hidden" name="addr" value="${esc(r.addr)}">
+    <button style="background:#7f1d1d;border-color:#7f1d1d">削除</button></form></td></tr>`).join('')}</table>`
+  : '<p>まだありません。</p>'}
+
+<h2>コードへ写す用</h2>
+<p>ここ（サーバーのディスク）はボリュームを作り直すと消えます。<br>
+ときどき下記を <b>address-labels.json</b> に貼って、コード側にも残してください。</p>
+<textarea readonly>${esc(forGit)}</textarea>`);
+});
+
+app.post('/api/admin/labels', requireAdmin, express.urlencoded({ extended: false }), async (req, res) => {
+  const t = encodeURIComponent(String(req.query.t || ''));
+  const addr = String(req.body.addr || '').trim();
+  const name = String(req.body.name || '').trim();
+  const back = (k, v) => res.redirect(`/api/admin/labels?t=${t}&${k}=${encodeURIComponent(v)}`);
+  if (!looksLikeAddress(addr)) return back('err', 'アドレスの形が正しくありません');
+  if (!name || name.length > 60) return back('err', '名前は1〜60文字で入力してください');
+  if (/[<>]/.test(name)) return back('err', '名前に使えない記号があります');
+  const key = addr.toLowerCase();
+  const before = LABEL_DB[key];
+  manualLabels[key] = { name, at: new Date().toISOString() };
+  LABEL_DB[key] = name;                     // その場で有効にする
+  await saveManualLabels();
+  console.log(`[LABEL_DB] 管理画面から登録: ${key.slice(0, 12)}… → "${name}"`);
+  return back('msg', before && before !== name
+    ? `登録しました（「${before}」から変更）` : '登録しました');
+});
+
+app.post('/api/admin/labels/delete', requireAdmin, express.urlencoded({ extended: false }), async (req, res) => {
+  const t = encodeURIComponent(String(req.query.t || ''));
+  const key = String(req.body.addr || '').trim().toLowerCase();
+  if (manualLabels[key]) {
+    delete manualLabels[key];
+    delete LABEL_DB[key];                   // 消したら即座に効かなくする
+    await saveManualLabels();
+    console.log(`[LABEL_DB] 管理画面から削除: ${key.slice(0, 12)}…`);
+  }
+  return res.redirect(`/api/admin/labels?t=${t}&msg=${encodeURIComponent('削除しました')}`);
+});
+
 app.get('/api/admin/timing', requireAdmin, (req, res) => {
   const esc = x => String(x ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const byHost = {};
