@@ -4049,6 +4049,48 @@ async function investigateTRON(txid) {
     sender: t.from, senderLabel: senderDb.label, recipient: t.to, path, exchanges };
 }
 
+/* 経路から到達取引所の一覧を作る。★何度呼んでも同じ結果になるようにしてある。
+   情報付けが締切をまたいで終わることがあり、そのとき一覧を作った時点では
+   まだ「取引所」と分かっていない場合がある（実測：経路には取引所と出ているのに
+   凍結要請先が空になった）。呼び出し側が最後にもう一度呼べるようにする。 */
+function collectExchanges(result) {
+  result.exchanges = result.exchanges || [];
+  for (const [i, n] of (result.path || []).entries()) {
+    // 先頭は送金元。被害者が出金した取引所であって、凍結を要請する相手ではない
+    if (i === 0 || n.role === 'sender') continue;
+    if (!n.isExchange || n.isVia || n.isToken || !n.address) continue;
+    if (result.exchanges.some(e => (e.address || '').toLowerCase() === n.address.toLowerCase())) continue;
+    result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address, amount: n.amount });
+  }
+
+  /* ★経路の途中で「同じ地点から取引所へも送られていた」場合も載せる。
+     本線に選ばなかっただけで、送金の記録は残っている。
+     実測（TRON経路②）：入金の5%が Binance へ出ていたが、
+     95%の別送金を本線にしたため、報告書に Binance が出てこなかった。
+     ★被害者が欲しいのは換金先の名前であって、どちらが本線かではない。 */
+  for (const [i, n] of (result.path || []).entries()) {
+    if (i === 0 || n.role === 'sender') continue;
+    for (const e of (n.exchangeNearby || [])) {
+      if (!e.address) continue;
+      if (result.exchanges.some(x => String(x.address || '').toLowerCase() === e.address.toLowerCase())) continue;
+      result.exchanges.push({ name: e.label || '取引所（名称未判明）', address: e.address,
+        amount: e.amount, sameHop: true });
+    }
+  }
+
+  /* ★ブリッジを渡った先で取引所に着いた場合も、凍結要請の宛先に載せる。
+     被害者が知りたいのは換金先であって、ブリッジの名前ではない。
+     どのチェーンのアドレスかを添えないと、要請文が書けない。 */
+  for (const n of (result.path || [])) {
+    const ex = n.crossChainExchange;
+    if (!ex || !ex.address) continue;
+    if (result.exchanges.some(e => String(e.address || '').toLowerCase() === ex.address.toLowerCase())) continue;
+    result.exchanges.push({ name: ex.name, address: ex.address,
+      amount: n.bridgeTo?.amount ?? null, chain: n.bridgeTo?.chainName || null, viaBridge: true });
+  }
+
+}
+
 async function investigate(txid, chain, opts = {}) {
   /* ★全体の締切。各段の予算を足しただけでは守れない（1周にかかる時間が
      増えると超える。実測で2回とも時間切れになった）。
@@ -4130,40 +4172,7 @@ async function investigate(txid, chain, opts = {}) {
      これをしないと、経路には「取引所」と出ているのに一覧が空になり、
      画面の見出しや報告書の凍結要請先が出てこない。
      DEX・ブリッジ・トークン契約は着金先ではないので入れない。 */
-  result.exchanges = result.exchanges || [];
-  for (const [i, n] of (result.path || []).entries()) {
-    // 先頭は送金元。被害者が出金した取引所であって、凍結を要請する相手ではない
-    if (i === 0 || n.role === 'sender') continue;
-    if (!n.isExchange || n.isVia || n.isToken || !n.address) continue;
-    if (result.exchanges.some(e => (e.address || '').toLowerCase() === n.address.toLowerCase())) continue;
-    result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address, amount: n.amount });
-  }
-
-  /* ★経路の途中で「同じ地点から取引所へも送られていた」場合も載せる。
-     本線に選ばなかっただけで、送金の記録は残っている。
-     実測（TRON経路②）：入金の5%が Binance へ出ていたが、
-     95%の別送金を本線にしたため、報告書に Binance が出てこなかった。
-     ★被害者が欲しいのは換金先の名前であって、どちらが本線かではない。 */
-  for (const [i, n] of (result.path || []).entries()) {
-    if (i === 0 || n.role === 'sender') continue;
-    for (const e of (n.exchangeNearby || [])) {
-      if (!e.address) continue;
-      if (result.exchanges.some(x => String(x.address || '').toLowerCase() === e.address.toLowerCase())) continue;
-      result.exchanges.push({ name: e.label || '取引所（名称未判明）', address: e.address,
-        amount: e.amount, sameHop: true });
-    }
-  }
-
-  /* ★ブリッジを渡った先で取引所に着いた場合も、凍結要請の宛先に載せる。
-     被害者が知りたいのは換金先であって、ブリッジの名前ではない。
-     どのチェーンのアドレスかを添えないと、要請文が書けない。 */
-  for (const n of (result.path || [])) {
-    const ex = n.crossChainExchange;
-    if (!ex || !ex.address) continue;
-    if (result.exchanges.some(e => String(e.address || '').toLowerCase() === ex.address.toLowerCase())) continue;
-    result.exchanges.push({ name: ex.name, address: ex.address,
-      amount: n.bridgeTo?.amount ?? null, chain: n.bridgeTo?.chainName || null, viaBridge: true });
-  }
+  collectExchanges(result);
 
   /* ★取引所が出なかったとき、「見つからなかった」で終わらせない。
      詐欺の資金が現金化のため取引所へ届くまでは1週間以内のことが多い
@@ -6563,7 +6572,10 @@ app.post('/api/admin/generate-report', requireAdmin, express.json(), async (req,
         let result = cachedResult(cacheKey, paidRun);
         if (!result) {
           result = await investigate(txid, chain, { paid: true });
-          txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
+          /* ★情報付けが締切をまたいで終わることがある。返す直前にもう一度
+           一覧を作り直す。何度呼んでも同じ結果になる作りにしてある。 */
+        collectExchanges(result);
+        txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
         }
         list.push({ txid, chain, result });
         console.log(`[Admin] 調査完了: ${txid}`);
@@ -7246,7 +7258,10 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
           let result = cachedResult(cacheKey, paidRun);
           if (!result) {
             result = await investigate(item.txid, item.chain, { paid: true });
-            txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
+            /* ★情報付けが締切をまたいで終わることがある。返す直前にもう一度
+           一覧を作り直す。何度呼んでも同じ結果になる作りにしてある。 */
+        collectExchanges(result);
+        txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
           }
           list.push({ txid: item.txid, chain: item.chain, result });
         } catch (e) {
@@ -7784,6 +7799,9 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
             INVESTIGATE_HARD_TIMEOUT_MS
           )),
         ]);
+        /* ★情報付けが締切をまたいで終わることがある。返す直前にもう一度
+           一覧を作り直す。何度呼んでも同じ結果になる作りにしてある。 */
+        collectExchanges(result);
         txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
       }
       const job = connectionJobs.get(jobId);
