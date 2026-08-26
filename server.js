@@ -3439,6 +3439,60 @@ async function getSwapTokenOutETH(txHash, holderAddr, chain = 'eth') {
 
 /* トークンを持っているアドレスから、次にそのトークンが出ていった先を探す。
    選び方はETHのときと同じ（取引所優先 → 次に金額最大）。 */
+/* ★交換後の資金が「別のアドレス」へ渡される場合。
+   手元に戻ってくるとは限らない。アグリゲーターは受取先を指定できるので、
+   交換の出口が第三のアドレスになることがある。
+
+   実測（利用者の正解経路④・Polygon）：
+     経緯B が 3,629 USDC を Bitget Swap に渡し、
+     交換後の 3,617 USDT は★経緯C（別アドレス）へ渡っていた。
+     手元に戻る場合しか見ていなかったので、ルーターを追って
+     AlgebraPool・UniswapV3Pool と配管に迷い込んでいた。
+
+   出口の見分け方：その取引の中で【一度も送り手にならないアドレス】が
+   受け取ったもの。配管（プール・ルーター）は必ず送り手にもなる。
+   実データで確認：出口候補3件のうち最大が正解（3,617 USDT）だった。 */
+async function getSwapExitETH(txHash, fromAddr, chain = 'eth') {
+  try {
+    const j = await apiJson(esUrl(chain, `module=proxy&action=eth_getTransactionReceipt&txhash=${txHash}`));
+    const logs = (j.result?.logs || []).filter(l =>
+      l.topics?.[0] === ERC20_TRANSFER_TOPIC && l.topics.length >= 3);
+    if (logs.length < 2) return null;                 // 単純な送金は対象外
+    const addrOf = t => ('0x' + String(t).slice(26)).toLowerCase();
+    const senders = new Set(logs.map(l => addrOf(l.topics[1])));
+    const me = String(fromAddr).toLowerCase();
+    /* 入り口で渡したトークン。出口はそれとは別の通貨のはず。 */
+    const inLog = logs.find(l => addrOf(l.topics[1]) === me);
+    const inToken = inLog ? String(inLog.address).toLowerCase() : null;
+
+    let best = null;
+    for (const l of logs) {
+      const to = addrOf(l.topics[2]);
+      if (senders.has(to) || to === me) continue;     // 配管は送り手にもなる
+      const token = String(l.address).toLowerCase();
+      if (inToken && token === inToken) continue;     // 渡した通貨のままなら交換ではない
+      let v; try { v = BigInt(l.data); } catch { continue; }
+      if (v <= 0n) continue;
+      if (!best || v > best.value) best = { to, token, value: v, txHash };
+    }
+    if (!best) return null;
+
+    /* 通貨の名前と桁を、その取引の記録から取る。 */
+    const blk = parseInt(j.result.blockNumber, 16);
+    const tk = (await apiJson(esUrl(chain,
+      `module=account&action=tokentx&address=${best.to}&startblock=${blk}&endblock=${blk}&page=1&offset=100&sort=asc`))).result;
+    const hit = (Array.isArray(tk) ? tk : []).find(t =>
+      String(t.hash).toLowerCase() === String(txHash).toLowerCase()
+      && String(t.contractAddress).toLowerCase() === best.token);
+    if (!hit) return null;
+    if (isImpostorToken(hit.tokenSymbol, hit.contractAddress, chain)) return null;
+    const dec = parseInt(hit.tokenDecimal) || 18;
+    return { address: best.to, contract: hit.contractAddress,
+             symbol: hit.tokenSymbol || 'TOKEN', decimals: dec,
+             amount: Number(best.value) / Math.pow(10, dec) };
+  } catch (e) { console.error('[SwapExit] 取得失敗:', e.message); return null; }
+}
+
 async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18, amountIn = null, chain = 'eth') {
   try {
     const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
@@ -3570,6 +3624,28 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
         visited.delete(next.addr.toLowerCase());   // コントラクトは通過点なので訪問済みにしない
         currentIsVia = false;
         continue;                                   // 住所は変えず、次の周回でトークンを追う
+      }
+      /* ★手元に戻ってこない場合。交換後の資金が別のアドレスへ渡っている。
+         ルーターは経路に残す（ブリッジの読み取りがそこを見るため）が、
+         追跡は出口のアドレスから続ける。 */
+      const exit = await getSwapExitETH(next.txHash, currentAddr, chain);
+      if (exit && exit.address.toLowerCase() !== currentAddr.toLowerCase()
+          && !visited.has(exit.address.toLowerCase())) {
+        const holder = hops.length ? hops[hops.length - 1] : null;
+        if (holder) { holder.swapTo = exit.symbol; }
+        hops.push({ address: next.addr, label: lbl, amount: next.amount,
+          token: next.token, isExchange: false, isToken: isTok, isVia: true,
+          time: next.time, txHash: next.txHash, siblings: [], swapTo: exit.symbol });
+        console.log(`[traceHops] ${exit.symbol} に交換され、${exit.address.slice(0, 12)}… へ渡った（${exit.amount}）`);
+        token         = { contract: exit.contract, symbol: exit.symbol, decimals: exit.decimals };
+        currentAmount = Number.isFinite(exit.amount) ? exit.amount : null;
+        prevAddr      = currentAddr;
+        currentAddr   = exit.address;
+        currentTime   = next.time;
+        incomingHash  = next.txHash;
+        currentIsVia  = false;
+        visited.add(exit.address.toLowerCase());
+        continue;
       }
       // 何のトークンか読めなければ、従来どおりの扱いに落とす
     }
