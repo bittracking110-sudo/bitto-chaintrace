@@ -2998,23 +2998,68 @@ function xrpAmount(a) {
   return Number.isFinite(v) ? v / 1e6 : null;   // 文字列はドロップ数
 }
 
+/* XRPの取引記録は XRPL の公開ノードから取る。
+   ★以前は xrpscan の一覧を使っていたが、★最新25件しか返らない。
+     実測（正解経路①②）：目的の送金がその25件に入っておらず、
+     正解が候補にすら現れなかった（2区間とも見失った）。
+     ETHの送金・トークンの送金・TRONに続いて、同じ誤りの4例目。
+
+   公開ノードの account_tx は1回200件・marker で続きを取れる。
+   新しい順に取り、着金時刻より古くなったら止める。 */
+const XRPL_RPC = process.env.XRPL_RPC || 'https://xrplcluster.com/';
+const XRPL_MAX_PAGES = 5;                      // 1000件まで。無限に遡らない
+const RIPPLE_EPOCH = 946684800;                // 2000-01-01 との差（秒）
+
+async function xrplAccountTx(addr, refMs) {
+  const out = [];
+  let marker = null;
+  for (let page = 0; page < XRPL_MAX_PAGES; page++) {
+    const params = { account: addr, ledger_index_min: -1, ledger_index_max: -1, limit: 200 };
+    if (marker) params.marker = marker;
+    const r = await fetchT(XRPL_RPC, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'account_tx', params: [params] }),
+    });
+    if (!r.ok) break;
+    const j = await r.json();
+    const rows = j.result?.transactions || [];
+    if (!rows.length) break;
+    let oldest = Infinity;
+    for (const row of rows) {
+      const t = row.tx || row.tx_json || {};
+      const sec = Number(t.date ?? row.close_time_iso ? null : t.date);
+      const ms = Number.isFinite(t.date) ? (t.date + RIPPLE_EPOCH) * 1000
+               : Date.parse(row.close_time_iso || t.date || '');
+      if (!Number.isFinite(ms)) continue;
+      oldest = Math.min(oldest, ms);
+      out.push({ tx: t, meta: row.meta || row.metaData, ms, hash: t.hash || row.hash });
+    }
+    marker = j.result?.marker;
+    if (!marker || oldest < refMs - 1000) break;   // 着金より前まで遡ったら終わり
+  }
+  return out;
+}
+
 async function getNextTxXRP(addr, afterTime, amountIn) {
   try {
-    const r = await fetchT(`https://api.xrpscan.com/api/v1/account/${addr}/transactions`);
-    const j = await r.json();
-    const txs = j.transactions || j || [];
-    const refMs = new Date(afterTime).getTime();
+    const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
+    const rows = await xrplAccountTx(addr, Number.isFinite(refMs) ? refMs : 0);
     /* ★以前は「最初に見つけた1件」を返していた。ETHで直した誤りが残っていた。 */
     const cands = [];
-    for (const tx of txs) {
+    for (const row of rows) {
+      const tx = row.tx || {};
+      if (tx.TransactionType !== 'Payment') continue;
       if (tx.Account !== addr) continue;
       if (!tx.Destination) continue;
-      const txMs = new Date(tx.date).getTime();
-      if (!(txMs >= refMs - 1000)) continue;
+      if (!(row.ms >= refMs - 1000)) continue;
+      /* 実際に届いた額。分割払いのときは Amount と一致しない。 */
+      const delivered = row.meta && typeof row.meta === 'object'
+        ? (row.meta.delivered_amount ?? row.meta.DeliveredAmount) : null;
+      const amt = xrpAmount(delivered ?? tx.Amount);
       const lbl = getLabel(tx.Destination).label || '';
       cands.push({
-        addr: tx.Destination, amount: xrpAmount(tx.Amount), time: tx.date, txHash: tx.hash,
-        label: lbl, txMs,
+        addr: tx.Destination, amount: amt, time: new Date(row.ms).toISOString(),
+        txHash: row.hash, label: lbl, txMs: row.ms,
         token: (tx.Amount && typeof tx.Amount === 'object') ? tx.Amount.currency : undefined,
         isExchange: isExchange(lbl) && !isViaService(lbl) && !isTokenContract(lbl),
       });
