@@ -1832,6 +1832,9 @@ const TRACE_BUDGET_MS = 27000;   // トークン契約・ブリッジを通過�
 const ENRICH_BUDGET_MS = 15000;   // 混雑したコントラクトはBlockchairの応答が遅い。ここで足りないと経路を確かめられない
 // investigateETH の内部呼び出し(calls)ラベル取得の時間予算。
 const CALLS_BUDGET_MS = 6000;
+/* ブリッジを渡った先（TRON）を追う時間。参考経路と同時には使わない。
+   両方に満額を与えると持ち時間75秒を超え、実測で時間切れになった。 */
+const CROSSCHAIN_BUDGET_MS = 14000;
 // 上記の予算をすべてすり抜けた場合に調査ジョブを強制終了させる上限時間。
 const INVESTIGATE_HARD_TIMEOUT_MS = 75000;   // 各予算の合計48秒＋外部APIの遅れを吸収する
 
@@ -2067,8 +2070,11 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
         /* 渡り先がTRONなら、そのまま追い続ける。
            ★被害者が知りたいのは換金先であって、ブリッジの名前ではない。 */
         if (info.chainId === TRON_CHAIN_ID) {
+          /* ★時間の取り合いに注意。参考経路と足すと持ち時間（75秒）を超え、
+             実測で「時間内に完了しませんでした」になった。
+             渡り先を追えたなら参考経路は要らないので、その分をこちらに回す。 */
           const tHops = await traceHops(info.address, n.time || new Date().toISOString(),
-            'tron', 6, Date.now() + 20000, null, info.amount).catch(() => []);
+            'tron', 5, Date.now() + CROSSCHAIN_BUDGET_MS, null, info.amount).catch(() => []);
           if (tHops.length) {
             n.crossChainHops = tHops.map(h => ({
               address: h.address, label: h.label || '', amount: h.amount, token: h.token,
@@ -2111,7 +2117,10 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   const alreadyReached = path.some((p, i) =>
     i > 0 && p.isExchange && !p.inferred && !p.isVia && !p.isToken);
   const refNode = stopNode || poolNode;
-  if (refNode && chain === 'eth' && refNode.address && !alreadyReached) {
+  /* ★渡り先を追えたなら、参考経路（＝追えないときの代わり）は要らない。
+     時間を取り合って全体が時間切れになる（実測）。 */
+  const bridgeFollowed = (path || []).some(p => p.bridgeTo && p.crossChainHops);
+  if (refNode && chain === 'eth' && refNode.address && !alreadyReached && !bridgeFollowed) {
     const refDeadline = Date.now() + 20000;   // 旧処理と統合したぶんを回す
     try {
       /* 1本だけ追うと、混雑した地点では候補が数十件あるため当たりを引けない。
