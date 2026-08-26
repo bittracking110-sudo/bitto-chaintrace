@@ -1322,6 +1322,18 @@ function pickOverviewFromResponse(j) {
   if (last)  out.最後の活動 = String(last);
   return Object.keys(out).length ? out : null;
 }
+/* 外部APIの日時は UNIX秒・ミリ秒・ISO文字列のどれでも来る。
+   数値のまま報告書に出ると「1758921743」となって読めない。
+   判断できないものは、いじらずそのまま出す（勝手な解釈で誤った日付にしない）。 */
+function fmtUnixOrText(v) {
+  const s = String(v).trim();
+  if (/^\d{10}$/.test(s)) return new Date(Number(s) * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  if (/^\d{13}$/.test(s)) return new Date(Number(s)).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  const d = new Date(s);
+  if (!isNaN(d.getTime()) && /\d{4}/.test(s)) return d.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  return s;
+}
+
 async function lookupMistTrackSimple(kind, addr, chain) {
   const conf = kind === 'action'
     ? { path: 'address_action',   cache: actionCache,   save: saveActionCache,   pick: pickActionFromResponse,   tag: 'Action' }
@@ -4167,8 +4179,31 @@ ${r.txid}
             <p class="ref-p">お客様が最初に送金されたアドレス（<span class="mono">${escHtml(pn.address || '')}</span>）について、
             外部の解析事業者が保有する情報を照会した結果です。</p>
             ${不正}
-            ${pf.firstAddress ? `<p class="ref-p">このアドレスの手数料の出所：<strong>${escHtml(pf.firstAddress)}</strong></p>` : ''}
+            ${pf.firstAddress ? `<p class="ref-p">このアドレスの<strong>手数料（ガス代）の出所</strong>：<span class="mono">${escHtml(pf.firstAddress)}</span><br>
+            <span style="font-size:0.9em;color:#aaa">新しく作られたウォレットは残高が無いため、送金するには誰かが手数料を送る必要があります。
+            その送り主は、同じ人物の別のウォレットか、その人物が使った取引所である可能性があります。
+            <strong>相手方の特定を進める際の手がかり</strong>になります。</span></p>` : ''}
             ${一覧('利用が確認されたサービス', pf.platforms, [['exchange','取引所'],['dex','DEX'],['mixer','匿名化サービス'],['nft','NFT']])}
+            ${(() => {
+              /* ★日本の登録業者との接点は、被害者にとって最も価値のある情報。
+                 海外業者と違い、資金決済法・犯収法の対象で、捜査機関の照会に応じる。
+                 数値や名前を並べるだけでは、被害者も警察もその意味に気づけない。 */
+              const JP = ['coincheck', 'bitflyer', 'bitbank', 'gmo', 'sbi', 'bitpoint', 'dmm',
+                          'zaif', 'bittrade', 'coinbest', 'decurret', 'okcoin', 'bitmax', 'liquid'];
+              const list = [].concat(pf.platforms.exchange || []);
+              const hit = [...new Set(list.filter(n => JP.some(k => String(n).toLowerCase().includes(k))))];
+              if (!hit.length) return '';
+              return `<div style="background:rgba(5,150,105,.10);border:1px solid rgba(5,150,105,.35);border-radius:8px;padding:12px 14px;margin:10px 0">
+                <p style="margin:0"><strong>■ 日本の登録業者との接点が確認されています：${escHtml(hit.join('、'))}</strong></p>
+                <p style="margin:8px 0 0;font-size:0.92em">これは<strong>本件で最も重要な手がかりの一つ</strong>です。
+                日本の暗号資産交換業者は金融庁の登録を受けており、<strong>資金決済法・犯罪収益移転防止法にもとづく本人確認記録と取引記録の保存義務</strong>があります。
+                海外の業者と異なり、<strong>捜査機関からの照会に応じる体制が国内にあります</strong>。<br>
+                警察へのご相談・弁護士へのご依頼の際は、<strong>この事実を必ずお伝えください。</strong>
+                相手方の本人確認情報にたどり着ける可能性が、海外業者のみの場合と比べて大きく変わります。</p>
+                <p style="margin:8px 0 0;font-size:0.85em;color:#aaa">※ 接点があるという記録であり、当該業者に現在も資金があることを意味するものではありません。
+                また、当該業者に落ち度があることを示すものでもありません。</p>
+              </div>`;
+            })()}
             ${一覧('このアドレスに紐づく情報', pf.relation, [['ens','ENS名'],['twitter','X（Twitter）'],['wallet','関連ウォレット']])}
             <p class="ref-warn"><strong>この情報の扱いについて</strong><br>
             上記は外部事業者に蓄積された報告・関連付けであり、<strong>当社が独自に事実関係を確認したものではありません</strong>。
@@ -4191,7 +4226,9 @@ ${r.txid}
           if (ac.出金額    != null) rows.push(['取引所等からの出金額', String(ac.出金額)]);
           if (Array.isArray(ac.利用先) && ac.利用先.length) rows.push(['利用が確認されたサービス', escHtml(ac.利用先.join('、'))]);
           const 活動 = ov.最後の活動 || ac.最後の活動;
-          if (活動) rows.push(['最後に動いた日時', escHtml(String(活動))]);
+          /* 応答は UNIX秒・ミリ秒・文字列のいずれでも来る。
+             そのまま出すと「1758921743」と表示され、利用者には読めない。 */
+          if (活動) rows.push(['最後に動いた日時', escHtml(fmtUnixOrText(活動))]);
           if (!rows.length) return '';
           const 残っている = ov.残高 != null && ov.残高 > 0;
           return `<div class="ref-box">
