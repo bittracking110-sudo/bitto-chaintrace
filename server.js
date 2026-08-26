@@ -2422,12 +2422,19 @@ function normalizeTimeStr(t) {
   return t;
 }
 
-async function getNextTxBTC(addr, afterTime) {
+/* ★ビットコインは「お釣り」があるぶん、他のチェーンより間違えやすい。
+   1つの送金で複数の宛先に出力が出る。うち1つは送金者自身へ戻る釣り銭で、
+   多くの場合それが**最も大きい**。
+   以前はその最大の出力を選んでいたので、★釣り銭＝犯人の同じ財布に
+   戻る側を「次の送金先」として追っていた可能性がある。
+   （ETHで直したのと同じ誤り。第4-S節。BTCには入っていなかった） */
+async function getNextTxBTC(addr, afterTime, amountIn) {
   try {
     const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
     const j = await apiJson(url);
     const txHashes = j.data?.[addr]?.transactions || [];
     const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
+    const cands = [];
     for (const txHash of txHashes.slice(0, 8)) {
       await new Promise(res => setTimeout(res, 250));
       try {
@@ -2437,14 +2444,29 @@ async function getNextTxBTC(addr, afterTime) {
         if (!tdata) continue;
         const inputs  = tdata.inputs  || [];
         const outputs = tdata.outputs || [];
-        const isOutgoing = inputs.some(i => i.recipient === addr);
-        if (!isOutgoing) continue;
+        if (!inputs.some(i => i.recipient === addr)) continue;   // 出ていく送金だけ
         const txMs = new Date(normalizeTimeStr(tdata.transaction.time)).getTime();
         if (txMs < refMs - 3600000) continue;
-        const target = outputs.filter(o => o.recipient !== addr).sort((a, b) => b.value - a.value)[0];
-        if (!target) continue;
-        return { addr: target.recipient, amount: target.value / 1e8, time: tdata.transaction.time, txHash };
+        /* 入力に出てくるアドレスへ戻る出力は釣り銭。同じ人の財布なので追わない。
+           （自分自身だけでなく、同じ送金に使われた別アドレスも同一人物） */
+        const own = new Set(inputs.map(i => i.recipient));
+        for (const o of outputs) {
+          if (!o.recipient || own.has(o.recipient)) continue;
+          const lbl = getLabel(o.recipient).label || '';
+          cands.push({
+            addr: o.recipient, amount: o.value / 1e8, time: tdata.transaction.time,
+            txHash, label: lbl, txMs,
+            isExchange: isExchange(lbl) && !isViaService(lbl) && !isTokenContract(lbl),
+          });
+        }
       } catch { continue; }
+    }
+    if (cands.length) {
+      const chosen = pickNextHop(cands, amountIn);
+      chosen._siblings = chosen._siblings || cands.filter(c => c !== chosen).slice(0, 4);
+      console.log(`[HOP] BTC送金先: ${chosen.addr} ${chosen.amount} BTC 候補${cands.length}件`
+        + `${chosen._matched ? ' ★入金額と一致' : ''}${chosen._pooled ? ' ★合流' : ''}`);
+      return chosen;
     }
   } catch (e) { console.error('getNextTxBTC:', e.message); }
   return null;
@@ -2706,17 +2728,48 @@ async function getNextTxETH(addr, afterTime, amountIn) {
   return null;
 }
 
-async function getNextTxXRP(addr, afterTime) {
+/* XRPの Amount は2種類ある。
+   ・XRPそのもの → 文字列のドロップ数（100万分の1 XRP）
+   ・発行された通貨 → { currency, issuer, value } というまとまり
+   以前は常に parseFloat(…)/1e6 としていたため、後者では NaN になり、
+   金額が読めないまま次を選んでいた。 */
+function xrpAmount(a) {
+  if (a == null) return null;
+  if (typeof a === 'object') {
+    const v = parseFloat(a.value);
+    return Number.isFinite(v) ? v : null;
+  }
+  const v = parseFloat(a);
+  return Number.isFinite(v) ? v / 1e6 : null;
+}
+
+async function getNextTxXRP(addr, afterTime, amountIn) {
   try {
     const r = await fetchT(`https://api.xrpscan.com/api/v1/account/${addr}/transactions`);
     const j = await r.json();
     const txs = j.transactions || j || [];
     const refMs = new Date(afterTime).getTime();
+    /* ★以前は「最初に見つけた1件」を返していた。ETHで直した誤りが残っていた。 */
+    const cands = [];
     for (const tx of txs) {
       if (tx.Account !== addr) continue;
-      if (new Date(tx.date).getTime() < refMs - 1000) continue;
-      const db = getLabel(tx.Destination);
-      return { addr: tx.Destination, amount: parseFloat(tx.Amount)/1e6, time: tx.date, txHash: tx.hash, label: db.label||'' };
+      if (!tx.Destination) continue;
+      const txMs = new Date(tx.date).getTime();
+      if (!(txMs >= refMs - 1000)) continue;
+      const lbl = getLabel(tx.Destination).label || '';
+      cands.push({
+        addr: tx.Destination, amount: xrpAmount(tx.Amount), time: tx.date, txHash: tx.hash,
+        label: lbl, txMs,
+        token: (tx.Amount && typeof tx.Amount === 'object') ? tx.Amount.currency : undefined,
+        isExchange: isExchange(lbl) && !isViaService(lbl) && !isTokenContract(lbl),
+      });
+    }
+    if (cands.length) {
+      const chosen = pickNextHop(cands, amountIn);
+      chosen._siblings = chosen._siblings || cands.filter(c => c !== chosen).slice(0, 4);
+      console.log(`[HOP] XRP送金先: ${chosen.addr} ${chosen.amount} 候補${cands.length}件`
+        + `${chosen._matched ? ' ★入金額と一致' : ''}`);
+      return chosen;
     }
   } catch (e) { console.error('getNextTxXRP:', e.message); }
   return null;
@@ -2724,36 +2777,46 @@ async function getNextTxXRP(addr, afterTime) {
 
 /* TRONで次に出ていった送金を探す。TRC20を先に見て、無ければTRXを見る。
    min_timestamp と昇順指定が効くので、着金の直後の送金だけを取れる。 */
-async function getNextTxTRON(addr, afterTime) {
+async function getNextTxTRON(addr, afterTime, amountIn) {
   const refMs = new Date(afterTime).getTime();
   try {
     const url = `${TRONGRID}/v1/accounts/${addr}/transactions/trc20`
       + `?limit=50&order_by=block_timestamp,asc&min_timestamp=${Math.max(0, refMs - 1000)}`;
     const j = await (await fetchT(url, { headers: tronHeaders() })).json();
+    /* ★以前は「最初に見つけた1件」を返していた。
+       ETHで直したのと同じ誤り（第4-S節・第4-X節）が残っていた。
+       ★TRONのUSDT-TRC20は日本の被害でいちばん多い経路なので、
+         ここが一番効く場所だった。 */
+    const cands = [];
     for (const t of (j.data || [])) {
       if (t.from !== addr) continue;              // 出ていった分だけ
       if (t.block_timestamp < refMs - 1000) continue;
       const dec = Number(t.token_info?.decimals != null ? t.token_info.decimals : 6);
-      const db  = getLabel(t.to);
+      const lbl = getLabel(t.to).label || tronTags.get(t.to) || '';
+      cands.push({
+        addr: t.to, amount: Number(t.value || 0) / Math.pow(10, dec),
+        time: new Date(t.block_timestamp).toISOString(), txHash: t.transaction_id,
+        token: t.token_info?.symbol || 'TRC20', label: lbl,
+        isExchange: isExchange(lbl) && !isViaService(lbl) && !isTokenContract(lbl),
+        txMs: t.block_timestamp,
+      });
+    }
+    if (cands.length) {
+      const chosen = pickNextHop(cands, amountIn);
       /* 同じ地点から他にも出ていれば控えておく。犯人が資金を分けたとき、
          こちらが本命の可能性がある。お客様に調べ直す手がかりを渡すため。 */
-      const others = (j.data || []).filter(x => x !== t && x.from === addr
-        && Math.abs(x.block_timestamp - t.block_timestamp) < 24 * 3600 * 1000)
-        .slice(0, 4).map(x => {
-          const d2 = Number(x.token_info?.decimals != null ? x.token_info.decimals : 6);
-          return { addr: x.to, label: tronTags.get(x.to) || '', txHash: x.transaction_id,
-                   amount: Number(x.value || 0) / Math.pow(10, d2), token: x.token_info?.symbol || 'TRC20' };
-        });
-      return { addr: t.to, amount: Number(t.value || 0) / Math.pow(10, dec),
-               time: new Date(t.block_timestamp).toISOString(), txHash: t.transaction_id,
-               token: t.token_info?.symbol || 'TRC20', label: db.label || tronTags.get(t.to) || '',
-               _siblings: others };
+      chosen._siblings = chosen._siblings
+        || cands.filter(c => c !== chosen).slice(0, 4);
+      console.log(`[HOP] TRC20送金先: ${chosen.addr} ${chosen.amount} ${chosen.token}`
+        + ` 候補${cands.length}件${chosen._matched ? ' ★入金額と一致' : ''}${chosen._pooled ? ' ★合流' : ''}`);
+      return chosen;
     }
   } catch (e) { console.error('getNextTxTRON(trc20):', e.message); }
   try {
     const url = `${TRONGRID}/v1/accounts/${addr}/transactions`
       + `?limit=50&order_by=block_timestamp,asc&min_timestamp=${Math.max(0, refMs - 1000)}`;
     const j = await (await fetchT(url, { headers: tronHeaders() })).json();
+    const cands = [];
     for (const t of (j.data || [])) {
       const c = t.raw_data?.contract?.[0];
       if (!c || c.type !== 'TransferContract') continue;
@@ -2762,10 +2825,19 @@ async function getNextTxTRON(addr, afterTime) {
       const to = v.to_address_base58 || v.to_address;
       if (!isTronAddr(to)) continue;              // 16進表記のものは扱わない
       if (t.block_timestamp < refMs - 1000) continue;
-      const db = getLabel(to);
-      return { addr: to, amount: Number(v.amount || 0) / 1e6,
-               time: new Date(t.block_timestamp).toISOString(), txHash: t.txID,
-               label: db.label || tronTags.get(to) || '' };
+      const lbl = getLabel(to).label || tronTags.get(to) || '';
+      cands.push({
+        addr: to, amount: Number(v.amount || 0) / 1e6,
+        time: new Date(t.block_timestamp).toISOString(), txHash: t.txID, label: lbl,
+        isExchange: isExchange(lbl) && !isViaService(lbl) && !isTokenContract(lbl),
+        txMs: t.block_timestamp,
+      });
+    }
+    if (cands.length) {
+      const chosen = pickNextHop(cands, amountIn);
+      chosen._siblings = chosen._siblings || cands.filter(c => c !== chosen).slice(0, 4);
+      console.log(`[HOP] TRX送金先: ${chosen.addr} ${chosen.amount} 候補${cands.length}件`);
+      return chosen;
     }
   } catch (e) { console.error('getNextTxTRON(trx):', e.message); }
   return null;
@@ -3044,10 +3116,12 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
       if (next) console.log(`[traceHops] 同じ取引の中で次の送金先を特定（推測ではない）`);
     }
     if (!next) {
-      if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime);
+      /* ★入ってきた額は全チェーンに渡す。以前はETHにしか渡しておらず、
+         BTC・XRP・TRONでは「最大の1件」「最初の1件」を選んだままだった。 */
+      if (chain === 'btc') next = await getNextTxBTC(currentAddr, currentTime, currentAmount);
       else if (chain === 'eth') next = await getNextTxETH(currentAddr, currentTime, currentAmount);
-      else if (chain === 'xrp') next = await getNextTxXRP(currentAddr, currentTime);
-      else if (chain === 'tron') next = await getNextTxTRON(currentAddr, currentTime);
+      else if (chain === 'xrp') next = await getNextTxXRP(currentAddr, currentTime, currentAmount);
+      else if (chain === 'tron') next = await getNextTxTRON(currentAddr, currentTime, currentAmount);
     }
     if (!next) break;
     if (visited.has(next.addr.toLowerCase())) break; // ループ防止
@@ -3140,7 +3214,10 @@ async function investigateBTC(txid) {
   const btcDeadline = Date.now() + TRACE_BUDGET_MS;   // 全送金先の追跡を合計でこの時間内に収める
   for (const startNode of nonExPaths.slice(0, 10)) {
     if (Date.now() > btcDeadline) break;
-    const hops = await traceHops(startNode.address, tx.time, 'btc', 10, btcDeadline);
+    /* ★この送金先が受け取った額を渡す。渡さないと最初の一手で
+       釣り銭側（送金者自身に戻る出力）を掴みうる。 */
+    const hops = await traceHops(startNode.address, tx.time, 'btc', 10, btcDeadline,
+      null, Number.isFinite(startNode.amount) ? startNode.amount : null);
     for (const hop of hops) {
       if (!path.some(p => p.address === hop.address)) {
         path.push(hop);
@@ -3282,7 +3359,9 @@ async function investigateXRP(txid) {
   ];
   const exchanges = isDestEx ? [{ name: destLbl, address: tx.Destination, amount: parseFloat(tx.Amount)/1e6 }] : [];
   if (!isDestEx) {
-    const hops = await traceHops(tx.Destination, tx.date, 'xrp', 10);
+    /* ★受け取った額を渡す。渡さないと最初の一手が「最初に見つけた1件」になる。 */
+    const hops = await traceHops(tx.Destination, tx.date, 'xrp', 10,
+      Date.now() + TRACE_BUDGET_MS, null, xrpAmount(tx.Amount));
     for (const hop of hops) {
       if (!path.some(p => p.address === hop.address)) {
         path.push(hop);
@@ -3311,7 +3390,9 @@ async function investigateTRON(txid) {
   ];
   const exchanges = isDestEx ? [{ name: destLbl, address: t.to, amount: t.amount }] : [];
   if (!isDestEx) {
-    const hops = await traceHops(t.to, new Date(t.time).toISOString(), 'tron', 10);
+    /* ★受け取った額を渡す。TRONは日本の被害でいちばん多い経路。 */
+    const hops = await traceHops(t.to, new Date(t.time).toISOString(), 'tron', 10,
+      Date.now() + TRACE_BUDGET_MS, null, Number.isFinite(t.amount) ? t.amount : null);
     for (const hop of hops) {
       if (path.some(p => p.address === hop.address)) continue;
       path.push(hop);
