@@ -3256,11 +3256,19 @@ async function getSwapTokenOutETH(txHash, holderAddr) {
 
 /* トークンを持っているアドレスから、次にそのトークンが出ていった先を探す。
    選び方はETHのときと同じ（取引所優先 → 次に金額最大）。 */
-async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18) {
+async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18, amountIn = null) {
   try {
     const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
+    /* ★開始ブロックを指定していなかったため、1件あたり200件の制限で
+       「最も古い200件」しか見えていなかった。第4-H節でETHの送金について
+       直したのと同じ誤りが、トークンの側に残っていた。
+       実測：2023年12月の送金を探すのに、6月からの200件を見ていて届かず、
+       交換は読めているのに、その先へ進めずに終わっていた。 */
+    const startBlock = Number.isFinite(refMs) && refMs > 0
+      ? await blockNoByTime(Math.floor(refMs / 1000)) : 0;
     const j = await apiJson(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokentx`
-      + `&contractaddress=${contract}&address=${addr}&page=1&offset=200&sort=asc&apikey=${ETHERSCAN_KEY}`);
+      + `&contractaddress=${contract}&address=${addr}&startblock=${startBlock}&endblock=latest`
+      + `&page=1&offset=200&sort=asc&apikey=${ETHERSCAN_KEY}`);
     const list = Array.isArray(j.result) ? j.result : [];
     const candidates = [];
     for (const t of list) {
@@ -3280,11 +3288,12 @@ async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18) {
       });
     }
     if (!candidates.length) return null;
-    const exCand  = candidates.find(c => c.isExchange);
-    const byAmount = [...candidates].sort((a, b) => b.amount - a.amount);
-    const chosen = exCand || byAmount[0];
+    /* ★ここも「取引所優先→最大」のままだった。ETHの側で直した
+       「入ってきた額と同じ送金を追う」（第4-S節・第4-X節）を通す。 */
+    const chosen = pickNextHop(candidates, amountIn);
     chosen._siblings = chosen._siblings || candidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
-    console.log(`[HOP] トークン送金先: ${chosen.addr} ${chosen.amount} ${chosen.token} candidates=${candidates.length}`);
+    console.log(`[HOP] トークン送金先: ${chosen.addr} ${chosen.amount} ${chosen.token} candidates=${candidates.length}`
+      + `${chosen._matched ? ' ★入金額と一致' : ''}${chosen._pooled ? ' ★合流' : ''}`);
     return chosen;
   } catch (e) { console.error('[HOP] tokentx:', e.message); return null; }
 }
@@ -3310,7 +3319,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
     /* 資金がトークンになっている間は、そのトークンの送金だけを追う。
        ETHの送金を見ても、もうそこに資金は流れていない。 */
     if (chain === 'eth' && token) {
-      next = await getNextTokenTxETH(currentAddr, currentTime, token.contract, token.decimals);
+      next = await getNextTokenTxETH(currentAddr, currentTime, token.contract, token.decimals, currentAmount);
       if (!next) { console.log(`[traceHops] ${token.symbol} はこのアドレスから動いていない`); break; }
     }
     /* 同じ取引の中の出金を先に読む。
@@ -3371,6 +3380,9 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
         token = t;
         const holder = hops.length ? hops[hops.length - 1] : null;
         if (holder) { holder.swapTo = t.symbol; holder.token = t.symbol; }
+        /* ★追う額も、交換後の数字に入れ替える。ETHの数字のまま
+           トークンを照合しても一致するはずがない（第5-Cで同じ誤りをした）。 */
+        currentAmount = Number.isFinite(t.amount) ? t.amount : null;
         console.log(`[traceHops] ${t.symbol} に交換された（${t.amount}）。ここからは ${t.symbol} を追う`);
         visited.delete(next.addr.toLowerCase());   // コントラクトは通過点なので訪問済みにしない
         currentIsVia = false;
