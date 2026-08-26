@@ -2732,14 +2732,14 @@ function pickNextHop(candidates, amountIn) {
     const feeOnly = inWindow
       .filter(c => ok(c) && c.amount <= amountIn * 1.000001 && c.amount >= amountIn * 0.95)
       .sort((a, b) => (amountIn - a.amount) - (amountIn - b.amount));
-    if (feeOnly.length) { feeOnly[0]._matched = true; return feeOnly[0]; }
+    if (feeOnly.length) { feeOnly[0]._matched = true; return attachExchangeSiblings(feeOnly[0], candidates); }
     /* 同額以下が無い場合のみ、わずかに増えている分も見る。
        同じ取引の中で複数の入金がまとまることがあるため。 */
     const tol = Math.max(amountIn * 0.02, 1e-9);
     const near = inWindow
       .filter(c => ok(c) && Math.abs(c.amount - amountIn) <= tol)
       .sort((a, b) => Math.abs(a.amount - amountIn) - Math.abs(b.amount - amountIn));
-    if (near.length) { near[0]._matched = true; return near[0]; }
+    if (near.length) { near[0]._matched = true; return attachExchangeSiblings(near[0], candidates); }
   }
   /* ★ここに来た＝入ってきた額に見合う送金が1件も無い。
      他人の資金と合流（プール）した地点で、1件の送金には対応しない。
@@ -2754,7 +2754,35 @@ function pickNextHop(candidates, amountIn) {
 
      資金をまとめて運ぶ側は、同じ宛先へ何度も送る。
      1件ずつ見ると紛れるが、宛先ごとに束ねると本命が浮かぶ。 */
-  return pickByDestinationVolume(candidates, Number.isFinite(amountIn) && amountIn > 0);
+  return attachExchangeSiblings(
+    pickByDestinationVolume(candidates, Number.isFinite(amountIn) && amountIn > 0), candidates);
+}
+
+/* ★同じ地点から取引所へも送られていたら、本線に選ばなくても必ず控える。
+
+   実測（TRON経路②）：入金 2976.71 に対し 2834（95%）が別のアドレスへ、
+   138.21（5%）が Binance へ出ていた。同額に近い方を本線に選ぶのは
+   間違いではないが、★被害者が欲しいのは換金先の名前であって、
+   どちらが本線かではない。選ばなかった方に取引所があるなら、
+   それは報告書に出さなければならない。
+
+   合流地点では、そもそもどちらが「その資金」かを断定できない。
+   断定できないからこそ、取引所を落とさない。 */
+function attachExchangeSiblings(chosen, candidates) {
+  const seen = new Set([String(chosen.addr).toLowerCase()]);
+  const ex = [];
+  for (const c of candidates) {
+    if (!c.isExchange) continue;
+    const k = String(c.addr).toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    ex.push(c);
+  }
+  if (!ex.length) return chosen;
+  const rest = (chosen._siblings || []).filter(x => !seen.has(String(x.addr).toLowerCase()));
+  chosen._siblings = ex.concat(rest).slice(0, 6);   // 取引所を先頭に置く
+  chosen._exchangeSiblings = ex.slice(0, 4);
+  return chosen;
 }
 
 /* 合流地点で「どこへ流れたか」を、送金先ごとの合計で判断する。
@@ -2768,7 +2796,13 @@ function candidatesInWindow(candidates) {
   const times = candidates.map(c => c.txMs).filter(Number.isFinite);
   if (!times.length) return candidates;
   const t0 = Math.min(...times);
-  const win = candidates.filter(c => !Number.isFinite(c.txMs) || c.txMs - t0 <= POOL_WINDOW_MS);
+  /* ★取引所への送金は、窓の外でも落とさない。
+     実測（TRON経路③）：入金の24時間より後に、74%の額が取引所へ出ていた。
+     窓で切ったせいで候補から消え、55%の別アドレスを選んでいた。
+     窓は「無関係な将来の送金に引きずられない」ためのもので、
+     換金先そのものを捨てるためのものではない。 */
+  const win = candidates.filter(c => !Number.isFinite(c.txMs)
+    || c.txMs - t0 <= POOL_WINDOW_MS || c.isExchange);
   return win.length ? win : candidates;
 }
 
@@ -3427,7 +3461,10 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
       time: next.time, txHash: next.txHash, siblings,
       /* 合流地点は「同じ資金を追えた」とは言えない。読み手が確度を判断できるよう、
          合流したことと、その先の分かれ方をそのまま伝える。 */
-      pooled: !!next._pooled, poolShare: next._poolShare ?? null, poolDests: next._poolDests ?? null });
+      pooled: !!next._pooled, poolShare: next._poolShare ?? null, poolDests: next._poolDests ?? null,
+      /* ★同じ地点から取引所へも出ていた場合。本線に選ばなくても報告書に出す。 */
+      exchangeNearby: (next._exchangeSiblings || []).map(x => ({
+        address: x.addr, label: x.label || '', amount: x.amount, token: x.token, txHash: x.txHash })) });
     if (isEx) {
       exCount++;
       console.log(`[traceHops] 取引所到達(${exCount}件目): ${lbl}`);
@@ -3708,6 +3745,21 @@ async function investigate(txid, chain, opts = {}) {
     if (!n.isExchange || n.isVia || n.isToken || !n.address) continue;
     if (result.exchanges.some(e => (e.address || '').toLowerCase() === n.address.toLowerCase())) continue;
     result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address, amount: n.amount });
+  }
+
+  /* ★経路の途中で「同じ地点から取引所へも送られていた」場合も載せる。
+     本線に選ばなかっただけで、送金の記録は残っている。
+     実測（TRON経路②）：入金の5%が Binance へ出ていたが、
+     95%の別送金を本線にしたため、報告書に Binance が出てこなかった。
+     ★被害者が欲しいのは換金先の名前であって、どちらが本線かではない。 */
+  for (const [i, n] of (result.path || []).entries()) {
+    if (i === 0 || n.role === 'sender') continue;
+    for (const e of (n.exchangeNearby || [])) {
+      if (!e.address) continue;
+      if (result.exchanges.some(x => String(x.address || '').toLowerCase() === e.address.toLowerCase())) continue;
+      result.exchanges.push({ name: e.label || '取引所（名称未判明）', address: e.address,
+        amount: e.amount, sameHop: true });
+    }
   }
 
   /* ★ブリッジを渡った先で取引所に着いた場合も、凍結要請の宛先に載せる。
