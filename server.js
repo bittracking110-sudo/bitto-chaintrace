@@ -2447,11 +2447,17 @@ async function getNextTxBTC(addr, afterTime, amountIn) {
         if (!inputs.some(i => i.recipient === addr)) continue;   // 出ていく送金だけ
         const txMs = new Date(normalizeTimeStr(tdata.transaction.time)).getTime();
         if (txMs < refMs - 3600000) continue;
-        /* 入力に出てくるアドレスへ戻る出力は釣り銭。同じ人の財布なので追わない。
-           （自分自身だけでなく、同じ送金に使われた別アドレスも同一人物） */
-        const own = new Set(inputs.map(i => i.recipient));
+        /* ★釣り銭の除き方は「追跡中のアドレス自身へ戻る出力」だけにする。
+           一度は「入力に出てくるアドレス全部」に広げたが、実データで害が出た。
+           正解経路6本・27区間で比較（第5-B節）：
+             自分自身だけ除く … 本線21・候補に残る6・見失う0
+             入力すべて除く   … 本線21・候補に残る5・★見失う1
+           集約ウォレットは同じアドレスが入力にも出力にも現れる。
+           実例：0x8504d47c… は入力26件で、正解の送金先 bc1qsyy7f38… が
+           入力にも出力にも出ていた。広い方の規則だと正解ごと消えて、
+           枝にも残らず、被害者は行き先を永久に失う。 */
         for (const o of outputs) {
-          if (!o.recipient || own.has(o.recipient)) continue;
+          if (!o.recipient || o.recipient === addr) continue;
           const lbl = getLabel(o.recipient).label || '';
           cands.push({
             addr: o.recipient, amount: o.value / 1e8, time: tdata.transaction.time,
@@ -2737,10 +2743,15 @@ function xrpAmount(a) {
   if (a == null) return null;
   if (typeof a === 'object') {
     const v = parseFloat(a.value);
-    return Number.isFinite(v) ? v : null;
+    if (!Number.isFinite(v)) return null;
+    /* ★XRP本体は、まとまりで返ってきても中身はドロップ数。
+       実データ（xrpscan）：{"value":192256521,"currency":"XRP"} ＝ 192.256521 XRP。
+       ここで割らないと1,000,000倍で読み、金額の一致がまったく効かなくなる。
+       発行された別通貨（USD等）は、その通貨の単位そのままなので割らない。 */
+    return String(a.currency).toUpperCase() === 'XRP' ? v / 1e6 : v;
   }
   const v = parseFloat(a);
-  return Number.isFinite(v) ? v / 1e6 : null;
+  return Number.isFinite(v) ? v / 1e6 : null;   // 文字列はドロップ数
 }
 
 async function getNextTxXRP(addr, afterTime, amountIn) {
