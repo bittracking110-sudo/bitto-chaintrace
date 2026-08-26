@@ -778,7 +778,8 @@ function poolBadge(n){
   const pct  = many && n.poolShare != null ? Math.round(n.poolShare * 100) + '%' : null;
   const sub  = [many ? `${n.poolDests}箇所へ分散` : null, pct ? `うち最大 ${pct}` : null]
     .filter(Boolean).join('・');
-  return `<div class="pool-note">⚠ ここで他の資金と合流${sub ? `<br><span>${esc(sub)}</span>` : ''}</div>`;
+  return `<div class="pool-note">⚠ ここで他の資金と合流${sub ? `<br><span>${esc(sub)}</span>` : ''}
+    <br><span>この先の取引所も伏せずに出します</span></div>`;
 }
 /* 取引所ノードの強調クラス／アイコン（到達先を目立たせる） */
 function nodeCls(n){

@@ -1115,7 +1115,20 @@ function labelMonthKey() { return labelDayKey().slice(0, 7); }   // 2026/8/20 �
 
 /* 日・月・総量のどれかに当たったら照会しない。
    当たっても調査自体は続く（名前が付かないだけ）。 */
+/* ★動作確認のための調査は、買った回数を使わない。
+   実際に起きたこと：修正の検証で1日に十数件の調査を流し、
+   ★その日の外部ラベルの枠を使い切ってしまった。
+   その結果、利用者が本番で試したとき取引所名が出なかった。
+   検証は本番と同じ経路を通したいが、代金のかかる部分だけは避けたい。
+   合言葉は要らない。この印を付けると結果が減るだけで、得をする使い方が無いため。 */
+const SELFTEST_PREFIX = 'selftest-';
+const isSelfTest = device => String(device || '').startsWith(SELFTEST_PREFIX);
+
 function labelQuotaOk(paid = false, device = null) {
+  if (isSelfTest(device)) {
+    console.log('[LabelAPI] 動作確認のため外部ラベルは引きません');
+    return false;
+  }
   const d = labelDayKey(), m = labelMonthKey();
   if (labelUsage.day !== d)   { labelUsage.day = d; labelUsage.count = 0; }
   if (labelUsage.month !== m) { labelUsage.month = m; labelUsage.monthCount = 0; }
@@ -2398,7 +2411,9 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   /* 犯人が指定してきたアドレス（最初の送金先）の素性を調べる。
      過去に詐欺として報告されていれば、報告書の説得力が変わる。
      すでに名前の付いた取引所なら、素性は分かっているので引かない。 */
-  const pfBudget = opts.paid ? MISTTRACK_PROFILE_PAID : MISTTRACK_PROFILE_FREE;
+  /* 動作確認では素性の照会も行わない（買った回数を使わない） */
+  const pfBudget = isSelfTest(opts.device) ? 0
+    : (opts.paid ? MISTTRACK_PROFILE_PAID : MISTTRACK_PROFILE_FREE);
   const target = (path || [])[1];
   const knownExchange = target && target.isExchange && target.label && !target.inferred && !target.cpInferred;
   if (pfBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
@@ -5143,6 +5158,9 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
         ⚠ ここで<strong>他の資金と合流</strong>しています。${poolMany ? `この直後、資金は<strong>${p.poolDests}箇所</strong>に分かれています。` : ''}
         ${poolMany && p.poolShare != null ? `そのうち最も多い送金先が<strong>${Math.round(p.poolShare * 100)}%</strong>で、この先はそれを追っています。` : ''}
         <br><span style="color:#aaa">複数の資金がまとまるため、ここから先は同じ資金と言い切れません。${poolMany ? '他の送金先は後述の「参考経路」に記載しています。' : ''}</span>
+        <br><span style="color:#aaa"><strong>ただし、この先で到達した取引所は伏せずに記載しています。</strong>
+        経路が記録として存在することは事実であり、照会の価値があるためです。
+        確度の但し書きとあわせて、警察・弁護士にお伝えください。</span>
       </div>` : '';
 
       return `
