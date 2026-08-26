@@ -1884,6 +1884,11 @@ const FETCH_TIMEOUT_MS = 6000;
      速い呼び出しの記録には診断上の価値がない。
    ★アドレスやTXIDはそのまま残さない。問い合わせ先（どのサービスの何を
      呼んだか）が分かれば原因は追えるので、中身は削る。 */
+/* Blockchair のアドレス照会は、実測で7回中4回が失敗していた（診断画面で判明）。
+   ★返ってこない相手を6秒待つのは、そのぶん他を諦めることになる。
+   短く見切って、Etherscan の残高に切り替える。 */
+const BLOCKCHAIR_TIMEOUT_MS = 2500;
+
 const SLOW_CALL_MS = 1500;
 const SLOW_KEEP    = 120;
 const slowCalls    = [];        // { at, host, what, ms, ng }
@@ -1953,18 +1958,59 @@ const CROSSCHAIN_BUDGET_MS = 20000;
 // 上記の予算をすべてすり抜けた場合に調査ジョブを強制終了させる上限時間。
 const INVESTIGATE_HARD_TIMEOUT_MS = 75000;   // 各予算の合計48秒＋外部APIの遅れを吸収する
 
+/* 同じアドレスを何度も照会しない。
+   取引所のホットウォレットや共有コントラクトは、別々の調査でも繰り返し出てくる。
+   ★残高は変わるので長くは持たない。10分だけ覚える。
+     古い残高を「現在の残高」として出すのは、凍結の判断を誤らせる。 */
+const ADDR_INFO_TTL_MS = 10 * 60 * 1000;
+const addrInfoCache = new Map();     // "chain:addr" → { at, info }
+
 async function getAddressInfo(addr, chain) {
+  const ck = `${chain}:${String(addr).toLowerCase()}`;
+  const hit = addrInfoCache.get(ck);
+  if (hit && Date.now() - hit.at < ADDR_INFO_TTL_MS) return hit.info;
+  const info = await getAddressInfoFresh(addr, chain);
+  addrInfoCache.set(ck, { at: Date.now(), info });
+  if (addrInfoCache.size > 500) {    // 際限なく溜めない
+    for (const k of [...addrInfoCache.keys()].slice(0, 100)) addrInfoCache.delete(k);
+  }
+  return info;
+}
+
+async function getAddressInfoFresh(addr, chain) {
   try {
     if (chain === 'eth') {
-      const url = `https://api.blockchair.com/ethereum/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-      const j = await apiJson(url);
-      const d = j.data?.[addr.toLowerCase()]?.address;
-      if (!d) return null;
-      const balNative = parseFloat(d.balance || 0) / 1e18;
-      const price     = await getUSDPrice('eth');
-      // Blockchairが持つアドレスラベル・コントラクト名を取得
-      const bcLabel   = d.label || d.contract_name || '';
-      return { balance: balNative, txCount: d.transaction_count || 0, balanceUSD: balNative * price, bcLabel };
+      /* ★実測（診断画面 2026-08-27）：この問い合わせが7回中4回失敗し、
+         そのたびに上限の6秒を待っていた。1件の調査67秒のうち39秒がここ。
+         しかも失敗時に1回やり直すので、1件あたり最大12秒を使っていた。
+         ★遅い相手には、待つ時間を短くし、やり直さない。
+           待っても返ってこないものを待ち続ける理由がない。 */
+      let d = null;
+      try {
+        const url = `https://api.blockchair.com/ethereum/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
+        const j = await (await fetchT(url, {}, BLOCKCHAIR_TIMEOUT_MS)).json();
+        d = j.data?.[addr.toLowerCase()]?.address || null;
+      } catch (e) { console.warn('[AddrInfo] Blockchairが応答せず:', e.message); }
+
+      const price = await getUSDPrice('eth');
+      if (d) {
+        const balNative = parseFloat(d.balance || 0) / 1e18;
+        // Blockchairが持つアドレスラベル・コントラクト名を取得
+        const bcLabel   = d.label || d.contract_name || '';
+        return { balance: balNative, txCount: d.transaction_count || 0, balanceUSD: balNative * price, bcLabel };
+      }
+      /* ★返ってこなくても、何も無いよりは残高だけでも出す。
+         取引回数は Etherscan では数えられないので null にする。
+         0 を入れると「使われていないアドレス」と読まれる。 */
+      try {
+        const b = await apiJson(esUrl('eth', `module=account&action=balance&address=${addr}&tag=latest`));
+        const wei = String(b.result ?? '');
+        if (/^\d+$/.test(wei)) {
+          const balNative = Number(wei) / 1e18;
+          return { balance: balNative, txCount: null, balanceUSD: balNative * price, bcLabel: '' };
+        }
+      } catch (e) { console.error('[AddrInfo] Etherscanの残高も取れず:', e.message); }
+      return null;
     }
     /* ★Ethereum 以外のEVMチェーン。
        Blockchair は Ethereum しか扱わないので、そこへ問い合わせてはいけない。
