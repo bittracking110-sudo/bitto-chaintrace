@@ -5,3 +5,4 @@ node_modules/
 public/reports/
 
 .claude/
+_*.tmp.js
