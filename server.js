@@ -1648,7 +1648,34 @@ function isExchange(label) {
      ホップ選択の側では !isVia で除いていたが、
      最初の送金先とトークン受取人の判定では除いていなかった。 */
   if (isViaService(label)) return false;
+  if (isContractName(label)) return false;
   return EX_KEYWORDS.some(k => label.toLowerCase().includes(k));
+}
+
+/* ★契約の名前は、取引所の名前ではない。
+   実測（第4-Y節）：0x6352a56c… が「OpenOceanExchangeProxy」という名前で
+   凍結要請先の一覧に載っていた。OpenOcean は DEX アグリゲーターで、
+   運営者が資金を止められる仕組みではない。要請しても止まらない。
+   EX_KEYWORDS の 'exchange' に当たっていたのが原因。
+
+   DEX を1つずつ語彙に足しても、次に出てきた名前でまた同じことが起きる。
+   ★形で見分ける：ソースコードから来る契約名は
+     「空白なしのキャメルケース」（OpenOceanExchangeProxy・ButterRouterV3）。
+     取引所のラベルは「Binance 14」「Crypto.com Exchange」のように
+     空白か数字を伴うか、「OKX」「Coinbase」のように大文字の山が1つ以下。
+
+   契約らしい語（exchange・swap・router 等）を含み、かつ
+   キャメルケースの1語である場合だけ落とす。取引所名は巻き込まない。 */
+const CONTRACTISH = ['exchange', 'swap', 'router', 'proxy', 'adapter', 'aggregator',
+  'settler', 'bridge', 'pool', 'vault', 'handler', 'executor', 'forwarder', 'factory'];
+
+function isContractName(label) {
+  const s = String(label || '').trim();
+  if (!s || /[\s:：]/.test(s)) return false;                    // 空白や区切りを含む＝ラベル
+  if (!CONTRACTISH.some(k => s.toLowerCase().includes(k))) return false;
+  const caps = (s.match(/[A-Z]/g) || []).length;
+  const lows = (s.match(/[a-z]/g) || []).length;
+  return caps >= 2 && lows >= 2;                                // キャメルケースの1語
 }
 
 // アドレスの「振る舞い」から取引所・ホットウォレットを推定
@@ -2503,7 +2530,12 @@ function candidatesInWindow(candidates) {
 }
 
 function pickByDestinationVolume(candidates, pooled) {
-  const use = candidatesInWindow(candidates);
+  const win = candidatesInWindow(candidates);
+  /* ★額が0の送金は資金の移動ではない（契約の呼び出し等）。
+     数に入れると「2箇所へ分散・最大100%」のような、意味の通らない
+     表示になる。実測（第4-Y節）で発生した。 */
+  const moved = win.filter(c => Number.isFinite(c.amount) && c.amount > 0);
+  const use = moved.length ? moved : win;
 
   const by = new Map();
   for (const c of use) {
