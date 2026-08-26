@@ -4765,6 +4765,48 @@ const SERVICE_NOTES = [
    どこか特定の地点から急に始まる話ではない（記録：第4-Z節）。
    前提を書かずに線だけ見せると、確定した事実として読まれる。
    読むのは被害者・弁護士・警察で、これをもとに動く人たち。 */
+/* ★どうやって見つけた取引所かを、必ず添える。
+   これまで「本線で到達した」「同じ地点から分岐して到達した」
+   「ブリッジを渡った先で到達した」を区別せず、すべて同じ確度に見せていた。
+
+   ★名前を出すこと自体は正しい。合流地点では「どちらが本件の資金か」を
+     そもそも断定できないのだから、断定できないことを理由に伏せるのは
+     被害者から手がかりを奪うだけになる。
+   ★問題は、断定できないものを断定として見せること。
+     凍結要請を出すか決めるのは読み手（被害者・弁護士・警察）で、
+     判断には「どのくらい確かか」が要る。 */
+function exProvenanceHTML(ex) {
+  if (!ex) return '';
+  if (ex.viaBridge) return `<p class="flow-note" style="border-left:3px solid #10b981;padding-left:10px">
+    <strong>■ この取引所は、ブリッジを渡った先（${escHtml(ex.chain || '別チェーン')}）で到達したものです。</strong><br>
+    渡り先はブリッジへの送金に含まれる指定内容から復元しています。
+    <strong>照会の際は、チェーン名（${escHtml(ex.chain || '')}）を必ず添えてください。</strong>
+    アドレスの形が同じでも、チェーンが違えば別の口座です。</p>`;
+  if (ex.sameHop) return `<p class="flow-note" style="border-left:3px solid var(--r-accent);padding-left:10px">
+    <strong>■ この取引所は、経路上の同じ地点から【分岐して】送られた先です。</strong><br>
+    その地点では複数の宛先へ同時に送金されており、
+    <strong>どれが本件の資金かを一つに断定することはできません。</strong>
+    ただし<strong>この取引所へ送金された記録は実在します。</strong>
+    照会の価値はあると考え、判断材料として記載しています。</p>`;
+  return '';
+}
+
+/* 2件目以降も、見つけ方を添えて並べる。1件目だけ出して他を伏せない。 */
+function exOthersHTML(list) {
+  const rest = (list || []).slice(1);
+  if (!rest.length) return '';
+  return `<h4 style="margin:18px 0 10px">🏦 このほかに到達した取引所</h4>
+    <table class="info-table">
+      ${rest.map(e => `<tr><th>${escHtml(e.name || '取引所')}</th><td>
+        <span class="mono">${escHtml(e.address)}</span>
+        ${e.chain ? `<br><span style="font-size:0.9em">チェーン：${escHtml(e.chain)}</span>` : ''}
+        <br><span style="font-size:0.9em;color:#aaa">${
+          e.viaBridge ? 'ブリッジを渡った先で到達'
+          : e.sameHop ? '同じ地点から分岐して到達（本件の資金と断定はできません）'
+          : '経路をたどって到達'}</span></td></tr>`).join('')}
+    </table>`;
+}
+
 function traceCaveatHTML(path) {
   const stop  = (path || []).find(p => p.traceStop);
   const crowd = stop && (stop.stopReason === 'crowded' || stop.stopReason === 'via');
@@ -4967,11 +5009,13 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       const contact = getExchangeContact(ex.name);
 
       exHTML = `
+        ${exProvenanceHTML(ex)}
         <table class="info-table">
           <tr><th>取引所名</th><td>${ex.name || '特定済み'}</td></tr>
           <tr><th>着金アドレス</th><td class="mono">${ex.address}</td></tr>
-          <tr><th>着金額</th><td>${(ex.amount != null && !isNaN(ex.amount)) ? ex.amount.toFixed(8) : '不明'} ${r.chain}</td></tr>
+          <tr><th>着金額</th><td>${(ex.amount != null && !isNaN(ex.amount)) ? ex.amount.toFixed(8) : '不明'} ${ex.chain || r.chain}</td></tr>
         </table>
+        ${exOthersHTML(r.exchanges)}
         ${contact ? `
         <h4 style="margin:18px 0 10px">📞 取引所連絡先・対応窓口</h4>
         <table class="info-table">
