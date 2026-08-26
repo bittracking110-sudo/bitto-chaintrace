@@ -179,6 +179,10 @@
   .node .meta{font-size:10px;color:var(--sub);margin-top:2px}
   .node .meta.hi{color:var(--amber);font-weight:700}
   .badge{display:inline-block;margin-top:6px;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:4px}
+  /* 合流の注意書き。確度が落ちる地点なので、目に入る強さで出す */
+  .pool-note{margin-top:6px;font-size:9.5px;line-height:1.45;font-weight:700;color:var(--amber);
+             background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.34);border-radius:4px;padding:3px 6px}
+  .pool-note span{font-weight:400;color:var(--sub)}
   .b-known{background:rgba(61,220,151,.18);color:var(--green);border:1px solid rgba(61,220,151,.42)}
   .b-guess{background:rgba(251,191,36,.16);color:var(--amber);border:1px solid rgba(251,191,36,.42)}
   .b-via{background:rgba(125,180,255,.16);color:#A9CBFF;border:1px solid rgba(125,180,255,.42)}
@@ -692,6 +696,16 @@ function nodeBadge(n){
     return `<span class="badge b-via">🔀 経由（利用者の多いコントラクト）</span>`;
   return `<span class="badge b-unk">未特定</span>`;
 }
+/* ★ここで他人の資金と混ざった、という事実は隠さない。
+   合流した先は「同じ資金を追えた」とは言えず、確度が一段落ちる。
+   黙って1本の線に見せると、読み手は確定した経路だと受け取ってしまう。 */
+function poolBadge(n){
+  if (!n.pooled) return '';
+  const pct = n.poolShare != null ? Math.round(n.poolShare * 100) + '%' : null;
+  const dst = n.poolDests > 1 ? `${n.poolDests}箇所へ分散` : null;
+  const sub = [dst, pct ? `うち最大 ${pct}` : null].filter(Boolean).join('・');
+  return `<div class="pool-note">⚠ ここで他の資金と合流${sub ? `<br><span>${esc(sub)}</span>` : ''}</div>`;
+}
 /* 取引所ノードの強調クラス／アイコン（到達先を目立たせる） */
 function nodeCls(n){
   if (n.isToken)               return '';
@@ -783,6 +797,7 @@ function flowHTML(path){
       ${n.amount != null ? `<div class="am">${esc(String(n.amount).slice(0,10))}${n.token ? ' ' + esc(n.token) : ''}</div>` : ''}
       ${Number.isFinite(n.txCount) ? `<div class="meta${n.txCount >= HIGH_TX ? ' hi' : ''}">取引 ${fmtNum(n.txCount)}回</div>` : ''}
       ${nodeBadge(n)}
+      ${poolBadge(n)}
     </div>`).join('') + `</div>
       <button class="flow-next" type="button" aria-label="次の経路を表示">›</button>
     </div>

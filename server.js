@@ -1958,6 +1958,13 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
      確定ではないことは報告書側で明示する。 */
   const stopNode = (path || []).find(p => p.traceStop);
 
+  /* ★合流地点（他人の資金と混ざった場所）も、追跡が確かでなくなる点。
+     打ち切っていなくても、そこから先は選ばなかった宛先に正解がありうる。
+     実測（第4-X節）：合流地点Cでは正解が金額順2位（44.2%）で、
+     本線（55.8%）だけを追うと Binance を落としていた。
+     選ばなかった宛先も枝として最後まで追う。 */
+  const poolNode = (path || []).find(p => p.pooled && (p.siblings || []).length);
+
   /* ★打ち切った先を、そのまま最後まで追った経路も「参考」として出す。
      出さないと、混雑した地点で止まるたびに利用者は到達先に辿り着けない。
      被害者が知りたいのは「どこへ換金されたか」なので、
@@ -1970,12 +1977,21 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
      名前が無ければ凍結要請の宛先にならず、利用者にとって到達したことにならない。 */
   const alreadyReached = path.some((p, i) =>
     i > 0 && p.isExchange && !p.inferred && !p.isVia && !p.isToken);
-  if (stopNode && chain === 'eth' && stopNode.address && !alreadyReached) {
+  const refNode = stopNode || poolNode;
+  if (refNode && chain === 'eth' && refNode.address && !alreadyReached) {
     const refDeadline = Date.now() + 20000;   // 旧処理と統合したぶんを回す
     try {
       /* 1本だけ追うと、混雑した地点では候補が数十件あるため当たりを引けない。
-         金額の大きい順に3本追い、取引所に着いたものを全て出す。 */
-      const starts = await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 3);
+         金額の大きい順に3本追い、取引所に着いたものを全て出す。
+
+         合流地点の場合は、選ばなかった宛先がすでに金額順で手元にある。
+         取り直さずにそれを使う（API呼出しを増やさない）。 */
+      const starts = stopNode
+        ? await listNextCandidatesETH(stopNode.address, stopNode.time || Date.now(), 3)
+        : poolNode.siblings.slice(0, 3).map(s => ({
+            address: s.address, label: s.label || '', amount: s.amount,
+            time: s.time || poolNode.time, token: s.token, gapMin: 0,
+          }));
       const branches = [];
       for (const st of starts) {
         if (Date.now() > refDeadline) { console.log('[参考経路] 時間切れで残りの枝を省略'); break; }
@@ -1994,7 +2010,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
         console.log(`[参考経路] ${st.address.slice(0, 10)}… から${hops.length}ホップ`
           + (ex ? ` → ${ex.label || '名称未判明の取引所'}` : '（取引所には未到達）'));
       }
-      if (branches.length) stopNode.referenceTrace = { branches };
+      if (branches.length) refNode.referenceTrace = { branches };
     } catch (e) { console.error('[参考経路] 失敗:', e.message); }
   }
 
@@ -2003,7 +2019,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
      名前が引けても凍結要請の宛先にならない。
      参考経路で取引所に着いていて、その名前が無いなら、そこに使う方が役に立つ。
      被害者が本当に欲しいのは「どこへ換金されたか」の名前。 */
-  const unnamed = stopNode?.referenceTrace?.branches?.find(b => b.exchangeUnnamed);
+  const unnamed = refNode?.referenceTrace?.branches?.find(b => b.exchangeUnnamed);
   if (unnamed && MISTTRACK_KEY && labelQuotaOk(opts.paid, opts.device)) {
     try {
       labelQuotaUse(opts.device);
@@ -2019,15 +2035,15 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   /* 旧「候補3件を3ホップだけ追う」処理は、上の参考経路と同じことを
      二重にやっていた（実測で77秒に達し上限超過）。統合し、
      報告書が使う nextCandidates は参考経路の結果から作る。 */
-  if (stopNode?.referenceTrace?.branches) {
-    const bs = stopNode.referenceTrace.branches;
-    stopNode.nextCandidates = bs.filter(b => b.reachedExchange).map(b => ({
+  if (refNode?.referenceTrace?.branches) {
+    const bs = refNode.referenceTrace.branches;
+    refNode.nextCandidates = bs.filter(b => b.reachedExchange).map(b => ({
       address: b.hops[0].address, label: b.hops[0].label || '',
       amount: b.hops[0].amount, time: b.hops[0].time,
       reachedExchange: b.reachedExchange, reachedAddress: b.reachedAddress, reachedHops: b.reachedHops,
       gapMin: b.hops[0].gapMin ?? 0,
     }));
-    stopNode.candidatesChecked = bs.length;
+    refNode.candidatesChecked = bs.length;
   }
 
   /* 時間予算で打ち切ると、名前がいちばん要る最後のノード（着金先）だけ
@@ -2424,6 +2440,16 @@ async function getNextTxBTC(addr, afterTime) {
    手数料で少し減るのが普通なので、2%の幅を見る。増える側にも同じ幅を許すのは、
    同じ取引の中で複数の入金がまとまることがあるため。 */
 function pickNextHop(candidates, amountIn) {
+  /* ★金額の一致は「入金の直後」に限る。
+     実測（第4-X節）：合流地点Cで 0.712624 ETH の入金に対し、
+     0.695155 ETH という近い額の送金が一致として選ばれていた。
+     しかしそれは**8日後**の送金で、正解は**15分後**の 2.2 ETH だった。
+     資金を逃がす側は数分〜数時間で動く。何日も経った額の近さは偶然であり、
+     それを掴むと経路ごと別人の資金に乗り換えてしまう。
+
+     窓の中に候補が1件も無いときだけ、全体を見る（休眠していた場合）。 */
+  const inWindow = candidatesInWindow(candidates);
+
   if (Number.isFinite(amountIn) && amountIn > 0) {
     const ok = c => Number.isFinite(c.amount);
     /* ★同じ資金が動くなら、手数料の分だけ減ることはあっても増えることはない。
@@ -2433,21 +2459,82 @@ function pickNextHop(candidates, amountIn) {
          2.9123（差0.0046・増えている）← 単純な近さで選ぶとこちら
          2.9000（差0.0077・減っている）← 正解。ここからブリッジへ渡っていた
        近さだけで選ぶと、より近い方＝別の資金を掴む。 */
-    const feeOnly = candidates
+    const feeOnly = inWindow
       .filter(c => ok(c) && c.amount <= amountIn * 1.000001 && c.amount >= amountIn * 0.95)
       .sort((a, b) => (amountIn - a.amount) - (amountIn - b.amount));
     if (feeOnly.length) { feeOnly[0]._matched = true; return feeOnly[0]; }
     /* 同額以下が無い場合のみ、わずかに増えている分も見る。
        同じ取引の中で複数の入金がまとまることがあるため。 */
     const tol = Math.max(amountIn * 0.02, 1e-9);
-    const near = candidates
+    const near = inWindow
       .filter(c => ok(c) && Math.abs(c.amount - amountIn) <= tol)
       .sort((a, b) => Math.abs(a.amount - amountIn) - Math.abs(b.amount - amountIn));
     if (near.length) { near[0]._matched = true; return near[0]; }
   }
-  const exCand = candidates.find(c => c.isExchange);
-  if (exCand) return exCand;
-  return [...candidates].sort((a, b) => b.amount - a.amount)[0];
+  /* ★ここに来た＝入ってきた額に見合う送金が1件も無い。
+     他人の資金と合流（プール）した地点で、1件の送金には対応しない。
+
+     このとき「最大の1件」を選ぶのは誤り。実測（第4-X節）：
+       合流地点E：入金 2.19975 ETH に対し送出94件・送金先63箇所。
+         正解は 17.645478 ETH（Binance）で、時系列では5番目。
+         最大の1件は 34.718806 ETH（別の宛先）＝外れ。
+         最古の1件は  1.858016 ETH（別の宛先）＝外れ。
+       ところが「送金先ごとに合計」すると Binance が 268.6 ETH・18回で
+       全体の78.5%を占め、堂々の1位になる。
+
+     資金をまとめて運ぶ側は、同じ宛先へ何度も送る。
+     1件ずつ見ると紛れるが、宛先ごとに束ねると本命が浮かぶ。 */
+  return pickByDestinationVolume(candidates, Number.isFinite(amountIn) && amountIn > 0);
+}
+
+/* 合流地点で「どこへ流れたか」を、送金先ごとの合計で判断する。
+   窓を切るのは、何ヶ月も先の無関係な送金まで足し込まないため。 */
+const POOL_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/* 入金の直後だけを見る。候補は入金以降しか入っていないので、
+   最も早い1件を起点にして、そこから24時間で切る。
+   時刻が分からない候補は落とさない（判断材料が無いだけで、無関係とは限らない）。 */
+function candidatesInWindow(candidates) {
+  const times = candidates.map(c => c.txMs).filter(Number.isFinite);
+  if (!times.length) return candidates;
+  const t0 = Math.min(...times);
+  const win = candidates.filter(c => !Number.isFinite(c.txMs) || c.txMs - t0 <= POOL_WINDOW_MS);
+  return win.length ? win : candidates;
+}
+
+function pickByDestinationVolume(candidates, pooled) {
+  const use = candidatesInWindow(candidates);
+
+  const by = new Map();
+  for (const c of use) {
+    const k = String(c.addr).toLowerCase();
+    const g = by.get(k) || { total: 0, count: 0, first: c, isExchange: false };
+    g.total += Number.isFinite(c.amount) ? c.amount : 0;
+    g.count++;
+    if (c.isExchange) g.isExchange = true;
+    if ((c.txMs || 0) < (g.first.txMs || 0)) g.first = c;   // 代表は最初の1件
+    by.set(k, g);
+  }
+  const ranked = [...by.values()].sort((a, b) => b.total - a.total);
+  const sum = ranked.reduce((s, g) => s + g.total, 0);
+
+  /* 取引所が宛先にあるなら、そこを優先する。被害者が知りたいのは換金先。 */
+  const pick = ranked.find(g => g.isExchange) || ranked[0];
+  const chosen = pick.first;
+
+  if (pooled) {
+    chosen._pooled = true;
+    chosen._poolShare = sum > 0 ? pick.total / sum : null;
+    chosen._poolDests = ranked.length;
+    /* ★合流地点では1本に絞れない。実測C地点では正解が2位（44.2%）だった。
+       上位の宛先を枝として残し、参考経路で全部追う。 */
+    chosen._siblings = ranked.filter(g => g !== pick).slice(0, 4).map(g => ({
+      addr: g.first.addr, label: g.first.label, amount: g.total,
+      txHash: g.first.txHash, time: g.first.time, txMs: g.first.txMs,
+      _poolShare: sum > 0 ? g.total / sum : null,
+    }));
+  }
+  return chosen;
 }
 
 async function getNextTxETH(addr, afterTime, amountIn) {
@@ -2490,7 +2577,7 @@ async function getNextTxETH(addr, afterTime, amountIn) {
     }
     if (candidates.length > 0) {
       const chosen = pickNextHop(candidates, amountIn);
-      chosen._siblings = candidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
+      chosen._siblings = chosen._siblings || candidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
       console.log(`[HOP] ETH送金先: ${chosen.addr} label="${chosen.label}" amount=${chosen.amount} candidates=${candidates.length}`
         + (chosen._matched ? ' ★入金額と一致' : ''));
       return chosen;
@@ -2523,7 +2610,7 @@ async function getNextTxETH(addr, afterTime, amountIn) {
     }
     if (intCandidates.length > 0) {
       const chosen = pickNextHop(intCandidates, amountIn);
-      chosen._siblings = intCandidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
+      chosen._siblings = chosen._siblings || intCandidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
       console.log(`[HOP] 内部TX送金先: ${chosen.addr} label="${chosen.label}" amt=${chosen.amount} total=${intCandidates.length}`);
       return chosen;
     }
@@ -2727,22 +2814,35 @@ async function listNextCandidatesETH(addr, afterTime, limit = 3) {
       j = await apiJson(base + '&action=txlist');
       txs = Array.isArray(j.result) ? j.result : [];
     }
-    const out = [];
+    /* ★以前は「時系列で先頭3件」を返していた。混雑した地点では外れる。
+       実測（第4-X節）：合流地点Eで入金後の送出は94件・送金先63箇所。
+       時系列の1〜3番目は 1.858 / 0.231 / 0.014 ETH でいずれも無関係。
+       正解のBinanceは5番目だが、送金先ごとに合計すると268.6 ETH で1位。
+
+       同じ宛先への送金を束ね、合計額の大きい順に返す。 */
+    const by = new Map();
     for (const t of txs) {
       const sec = parseInt(t.timeStamp);
       if (!(sec >= refSec)) continue;                                   // 入金より前は対象外
+      if (sec - refSec > POOL_WINDOW_MS / 1000) continue;               // 窓の外は別件とみなす
       if (String(t.from).toLowerCase() !== String(addr).toLowerCase()) continue;  // 出ていく送金だけ
       if (!t.to) continue;
-      out.push({
+      const k = String(t.to).toLowerCase();
+      const amt = parseFloat(t.value || '0') / 1e18;
+      const g = by.get(k) || {
         address: t.to,
         label: getLabel(t.to).label || '',
-        amount: parseFloat(t.value || '0') / 1e18,
+        amount: 0,
+        sends: 0,
         time: new Date(sec * 1000).toISOString(),
         txHash: t.hash,
         gapMin: Math.round((sec - refSec) / 60),
-      });
-      if (out.length >= limit) break;        // 昇順なので、先頭から順に「次の送金」
+      };
+      g.amount += amt;
+      g.sends++;
+      by.set(k, g);      // 代表の時刻・TXIDは最初の1件（昇順で来るため）
     }
+    const out = [...by.values()].sort((a, b) => b.amount - a.amount).slice(0, limit);
     if (out.length) {
       console.log(`[Candidates] 次の送金 ${out.length}件（日時差 ${out.map(c => c.gapMin + '分').join('・')}）`);
     }
@@ -2848,7 +2948,7 @@ async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18) {
     const exCand  = candidates.find(c => c.isExchange);
     const byAmount = [...candidates].sort((a, b) => b.amount - a.amount);
     const chosen = exCand || byAmount[0];
-    chosen._siblings = candidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
+    chosen._siblings = chosen._siblings || candidates.filter(c => c.addr !== chosen.addr).slice(0, 4);
     console.log(`[HOP] トークン送金先: ${chosen.addr} ${chosen.amount} ${chosen.token} candidates=${candidates.length}`);
     return chosen;
   } catch (e) { console.error('[HOP] tokentx:', e.message); return null; }
@@ -2936,12 +3036,17 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
     const siblings = (next._siblings || []).map(s => ({
       address: s.addr, label: s.label || '', amount: s.amount, token: s.token,
       txHash: s.txHash || '',   // これを渡せば、その枝をそのまま調べられる
+      time: s.time || next.time,   // 枝をそのまま追い続けるのに要る
+      poolShare: s._poolShare ?? null,
     }));
     console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... label="${lbl}" exchange=${isEx} siblings=${siblings.length}`);
     hops.push({ address: next.addr, label: lbl, amount: next.amount,
       token: next.token || (token ? token.symbol : undefined),
       isExchange: isEx, isToken: isTok, isVia, sameTx: !!next._sameTx,
-      time: next.time, txHash: next.txHash, siblings });
+      time: next.time, txHash: next.txHash, siblings,
+      /* 合流地点は「同じ資金を追えた」とは言えない。読み手が確度を判断できるよう、
+         合流したことと、その先の分かれ方をそのまま伝える。 */
+      pooled: !!next._pooled, poolShare: next._poolShare ?? null, poolDests: next._poolDests ?? null });
     if (isEx) {
       exCount++;
       console.log(`[traceHops] 取引所到達(${exCount}件目): ${lbl}`);
@@ -3256,7 +3361,12 @@ function buildReport(result) {
           return `   ┣ 同時送金先：${sa}${sl}${sm}${st}`;
         }).join('\n')
       : '';
-    return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}${siblingLines}`;
+    /* 合流したことは文章でも必ず伝える。伏せると確定した経路と読まれる。 */
+    const poolLine = p.pooled
+      ? `\n   ⚠ ここで他の資金と合流${p.poolDests > 1 ? `（この直後 ${p.poolDests}箇所に分散` : ''}`
+        + `${p.poolShare != null ? `／最大の送金先が ${Math.round(p.poolShare * 100)}%` : ''}${p.poolDests > 1 ? '）' : ''}`
+      : '';
+    return `🔵 中継アドレス（${i}次先）\n   ${addrShort}${lbl}${timeStr}${amountStr}${poolLine}${siblingLines}`;
   });
 
   let exSection = '';
@@ -3956,12 +4066,21 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       // 名前だけでは何のサービスか分からないため、分かるものには一行説明を添える
       const svcNote  = serviceNote(p.label);
       const svcTd    = svcNote ? `<div class="node-note">💡 ${svcNote}</div>` : '';
+      /* ★ここで他人の資金と混ざった、という事実を隠さない。
+         合流地点から先は「同じ資金を追えた」とは言えず、確度が一段落ちる。
+         凍結要請を出す判断は読み手（被害者・弁護士・警察）がするので、
+         材料を伏せてはいけない。 */
+      const poolTd = p.pooled ? `<div class="node-note" style="color:#fbbf24">
+        ⚠ ここで<strong>他の資金と合流</strong>しています。${p.poolDests > 1 ? `この直後、資金は<strong>${p.poolDests}箇所</strong>に分かれています。` : ''}
+        ${p.poolShare != null ? `そのうち最も多い送金先が<strong>${Math.round(p.poolShare * 100)}%</strong>で、この先はそれを追っています。` : ''}
+        <br><span style="color:#aaa">複数の資金がまとまるため、ここから先は1本に確定できません。他の送金先は後述の「参考経路」に記載しています。</span>
+      </div>` : '';
 
       return `
         <div class="flow-node ${cls}">
           <div class="node-role"><span class="node-icon">${icon}</span>${roleLabel}${exBadge}</div>
           <div class="node-address">${p.address}</div>
-          ${balTd}${txCntTd}${timeTd}${amtTd}${svcTd}
+          ${balTd}${txCntTd}${timeTd}${amtTd}${svcTd}${poolTd}
         </div>
         ${i < (r.path || []).length - 1 ? '<div class="flow-arrow">▼</div>' : ''}`;
     }).join('');
