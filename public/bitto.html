@@ -763,6 +763,13 @@ function traceCaveatHTML(nodes){
 /* ★ここで他人の資金と混ざった、という事実は隠さない。
    合流した先は「同じ資金を追えた」とは言えず、確度が一段落ちる。
    黙って1本の線に見せると、読み手は確定した経路だと受け取ってしまう。 */
+/* ★どれだけ薄まったかを数字で出す。追跡は続け、その先の取引所も出す。
+   伏せると被害者は手がかりを失うだけ（方針・第5-H節）。 */
+function dilutionBadge(n){
+  if (!n.dilutionX) return '';
+  return `<div class="pool-note">⚠ 約${esc(String(n.dilutionX))}倍の流れに合流
+    <br><span>この先は断定できませんが、記録は事実なので出します</span></div>`;
+}
 function poolBadge(n){
   if (!n.pooled) return '';
   /* 送金先が1箇所しかないなら「分散」も「割合100%」も意味を成さない。
@@ -865,6 +872,7 @@ function flowHTML(path){
       ${Number.isFinite(n.txCount) ? `<div class="meta${n.txCount >= HIGH_TX ? ' hi' : ''}">取引 ${fmtNum(n.txCount)}回</div>` : ''}
       ${nodeBadge(n)}
       ${poolBadge(n)}
+      ${dilutionBadge(n)}
     </div>`).join('') + `</div>
       <button class="flow-next" type="button" aria-label="次の経路を表示">›</button>
     </div>

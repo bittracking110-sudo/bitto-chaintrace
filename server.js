@@ -2890,6 +2890,12 @@ function attachExchangeSiblings(chosen, candidates) {
    窓を切るのは、何ヶ月も先の無関係な送金まで足し込まないため。 */
 const POOL_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/* この倍率を超えて金額が増えたら「薄まった」と見る。
+   ★薄まっても追跡はやめない。説明を添えて、その先の取引所まで記載する。
+     10倍は控えめな線。集約は正当に金額を増やすので、
+     少し増えた程度で「薄まった」と言うと、確かな経路まで疑わしく見せてしまう。 */
+const DILUTION_MIN_X = 10;
+
 /* 入金の直後だけを見る。候補は入金以降しか入っていないので、
    最も早い1件を起点にして、そこから24時間で切る。
    時刻が分からない候補は落とさない（判断材料が無いだけで、無関係とは限らない）。 */
@@ -3750,6 +3756,17 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
       /* 合流地点は「同じ資金を追えた」とは言えない。読み手が確度を判断できるよう、
          合流したことと、その先の分かれ方をそのまま伝える。 */
       pooled: !!next._pooled, poolShare: next._poolShare ?? null, poolDests: next._poolDests ?? null,
+      /* ★どれだけ薄まったか。入ってきた額に対し、出ていく額が何倍か。
+         実測：被害資金 25.83 USDT が入った地点から 64,832 USDT が出ていた（約2,500倍）。
+         被害資金はその流れの約1%で、1本を選ぶ根拠は無い。
+         ★それでも先は追い、到達した取引所は必ず記載する（方針・第5-H節）。
+           薄まったことを理由に伏せると、被害者は手がかりを失うだけ。
+           数字で薄まり具合を示し、判断は読み手に委ねる。
+         通貨が変わった区間は倍率に意味が無いので出さない。 */
+      dilutionX: (Number.isFinite(currentAmount) && currentAmount > 0
+                  && Number.isFinite(next.amount) && next.amount > currentAmount * DILUTION_MIN_X
+                  && (next.token || null) === (token ? token.symbol : null))
+                 ? Math.round(next.amount / currentAmount) : null,
       /* ★同じ地点から取引所へも出ていた場合。本線に選ばなくても報告書に出す。 */
       exchangeNearby: (next._exchangeSiblings || []).map(x => ({
         address: x.addr, label: x.label || '', amount: x.amount, token: x.token, txHash: x.txHash })) });
@@ -4092,14 +4109,29 @@ async function investigateTRON(txid) {
    情報付けが締切をまたいで終わることがあり、そのとき一覧を作った時点では
    まだ「取引所」と分かっていない場合がある（実測：経路には取引所と出ているのに
    凍結要請先が空になった）。呼び出し側が最後にもう一度呼べるようにする。 */
+/* 薄まった地点より後ろか。経路の順に見て、最初の薄まりから先を印にする。 */
+function markAfterDilution(path) {
+  let seen = null;
+  for (const n of (path || [])) {
+    if (seen) n.afterDilution = seen;
+    if (n.dilutionX && !seen) seen = { at: n.address, x: n.dilutionX, label: n.label || '' };
+  }
+  return seen;
+}
+
 function collectExchanges(result) {
+  markAfterDilution(result && result.path);
   result.exchanges = result.exchanges || [];
   for (const [i, n] of (result.path || []).entries()) {
     // 先頭は送金元。被害者が出金した取引所であって、凍結を要請する相手ではない
     if (i === 0 || n.role === 'sender') continue;
     if (!n.isExchange || n.isVia || n.isToken || !n.address) continue;
     if (result.exchanges.some(e => (e.address || '').toLowerCase() === n.address.toLowerCase())) continue;
-    result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address, amount: n.amount });
+    /* ★薄まった地点より後ろでも、必ず記載する（方針・第5-H節）。
+       薄まったことは印として添え、判断は読み手に委ねる。
+       ★伏せると被害者は手がかりを失うだけで、良いことは何も無い。 */
+    result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address,
+      amount: n.amount, afterDilution: n.afterDilution || null });
   }
 
   /* ★経路の途中で「同じ地点から取引所へも送られていた」場合も載せる。
@@ -4902,6 +4934,21 @@ const SERVICE_NOTES = [
      判断には「どのくらい確かか」が要る。 */
 function exProvenanceHTML(ex) {
   if (!ex) return '';
+  /* ★薄まった先でも必ず記載する（方針・第5-H節）。
+     伏せると被害者は手がかりを失うだけ。薄まり具合を数字で示し、
+     判断は読み手（被害者・弁護士・警察）に委ねる。 */
+  if (ex.afterDilution) {
+    const d = ex.afterDilution;
+    return `<p class="flow-note" style="border-left:3px solid var(--r-accent);padding-left:10px">
+    <strong>■ この取引所は、資金が大きくまとめられた地点より先で到達したものです。</strong><br>
+    経路上の <strong>${escHtml(d.label || d.at || 'ある地点')}</strong> で、
+    ご依頼の資金は<strong>約${escHtml(String(d.x))}倍の流れに合流</strong>しています。
+    そこから先は多数の資金が混ざるため、<strong>この取引所に届いたのがご依頼の資金である、
+    とは断定できません。</strong><br>
+    ただし<strong>この経路が記録として存在することは事実です。</strong>
+    照会の価値はあると考え、判断材料として記載しています。
+    <strong>警察・弁護士にご相談の際は、この但し書きも併せてお伝えください。</strong></p>`;
+  }
   if (ex.viaBridge) return `<p class="flow-note" style="border-left:3px solid #10b981;padding-left:10px">
     <strong>■ この取引所は、ブリッジを渡った先（${escHtml(ex.chain || '別チェーン')}）で到達したものです。</strong><br>
     渡り先はブリッジへの送金に含まれる指定内容から復元しています。
@@ -5086,6 +5133,12 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       /* 送金先が1箇所しかないなら「分散」も「割合100%」も意味を成さない。
          合流した事実だけを伝える。数字を足すほど正確になるわけではない。 */
       const poolMany = p.poolDests > 1;
+      /* ★どれだけ薄まったかを数字で出す。追跡は続けるが、確度は正直に示す。 */
+      const dilTd = p.dilutionX ? `<div class="node-note" style="color:#fbbf24">
+        ⚠ ここでご依頼の資金は<strong>約${p.dilutionX}倍の流れに合流</strong>しています。
+        <br><span style="color:#aaa">この先に出てくる送金先は、ご依頼の資金が届いたものとは断定できません。
+        ただし<strong>経路が記録として存在することは事実</strong>なので、伏せずに記載しています。</span>
+      </div>` : '';
       const poolTd = p.pooled ? `<div class="node-note" style="color:#fbbf24">
         ⚠ ここで<strong>他の資金と合流</strong>しています。${poolMany ? `この直後、資金は<strong>${p.poolDests}箇所</strong>に分かれています。` : ''}
         ${poolMany && p.poolShare != null ? `そのうち最も多い送金先が<strong>${Math.round(p.poolShare * 100)}%</strong>で、この先はそれを追っています。` : ''}
@@ -5096,7 +5149,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
         <div class="flow-node ${cls}${p.afterStop ? ' after-stop' : ''}">
           <div class="node-role"><span class="node-icon">${icon}</span>${roleLabel}${exBadge}</div>
           <div class="node-address">${p.address}</div>
-          ${balTd}${txCntTd}${timeTd}${amtTd}${svcTd}${poolTd}
+          ${balTd}${txCntTd}${timeTd}${amtTd}${svcTd}${poolTd}${dilTd}
         </div>
         ${i < (r.path || []).length - 1 ? '<div class="flow-arrow">▼</div>' : ''}`;
     }).join('');
