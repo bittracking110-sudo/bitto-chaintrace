@@ -5533,9 +5533,13 @@ h2{font-size:0.95rem;color:#1a1a2e;margin:0 0 14px;padding-bottom:8px;border-bot
 被害の経緯をうかがい、調査結果と合わせて時系列の資料にまとめます。警察・取引所へご相談の際にお使いいただけます。</p>
     <a class="btn" style="background:#0f766e" href="${hearingUrl}">📑 経緯を入力して資料を作る</a>
     <div class="url-box">${hearingUrl}</div>` : ''}
+    <p class="note" style="margin-top:20px">📥 <strong>PDFで保存・提出する</strong><br>
+警察・弁護士・取引所へ提出される場合は、下記からPDFをお受け取りください。</p>
+    <a class="btn" style="background:#334155" href="${reportUrl}.pdf">📥 PDFをダウンロード</a>
+    <div class="url-box">${reportUrl}.pdf</div>
     <p class="note" style="margin-top:14px;font-size:0.82rem;color:#64748b">
-💡 <strong>PDFとして保存するには</strong><br>
-ブラウザの印刷メニュー（Ctrl+P / ⌘P）を開き、「PDFとして保存」を選択してください。</p>
+💡 うまく開けない場合は、レポートを開いてブラウザの印刷メニュー（Ctrl+P / ⌘P）から
+「PDFとして保存」もお使いいただけます。</p>
   </div>
   <div class="footer">
     <p>このメールはお支払い確認後に自動送信されました。</p>
