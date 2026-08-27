@@ -2103,6 +2103,20 @@ const BRIDGE_CHAINS = {
   728126428: 'TRON',
 };
 const TRON_CHAIN_ID = 728126428;
+
+/* 表示名から、問い合わせに使うチェーンの呼び名へ。
+   ★chainName は画面に出す名前（Ethereum・TRON）で、
+   問い合わせ先が使う呼び名（eth・tron）とは別物。
+   ここを取り違えると、対応しているチェーンなのに
+   「対象外」と判定して外部照会を丸ごと飛ばす。 */
+const CHAIN_NAME_TO_KEY = {
+  'ethereum': 'eth', 'eth': 'eth', 'tron': 'tron',
+  'bitcoin': 'btc', 'btc': 'btc', 'polygon': 'polygon', 'arbitrum': 'arbitrum',
+};
+function chainKeyFromName(name) {
+  const n = String(name || '').trim().toLowerCase();
+  return CHAIN_NAME_TO_KEY[n] || n;
+}
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
 /* 20バイトのアドレスをTRONの表記に直す。
@@ -2268,7 +2282,8 @@ function decodeBridgeCall(input) {
   const amount = Number(BigInt('0x' + w(base + spec.amountIdx))) / 1e18;
   const address = chainId === TRON_CHAIN_ID ? toTronAddress(hex20) : '0x' + hex20;
   if (!address) return null;
-  return { bridge: spec.name, chainId, chainName: BRIDGE_CHAINS[chainId], address,
+  return { bridge: spec.name, chainId, chainName: BRIDGE_CHAINS[chainId],
+           chainKey: chainKeyFromName(BRIDGE_CHAINS[chainId]), address,
            amount: Number.isFinite(amount) && amount > 0 ? amount : null };
 }
 
@@ -2603,6 +2618,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
         const info = decodeBridgeMemo(t.Memos);
         if (!info) continue;
         n.bridgeTo = { bridge: info.bridge, chainId: null, chainName: info.chainName,
+                       chainKey: info.chainKey || chainKeyFromName(info.chainName),
                        address: info.address, amount: n.amount ?? null,
                        arrivedToken: info.token || null };
         console.log(`[ブリッジ] メモ欄から渡り先: ${info.chainName} の ${info.address}`);
@@ -2983,7 +2999,7 @@ async function enrichCrossChain(path, opts = {}) {
   for (const n of (path || [])) {
     const t = n.bridgeTo;
     if (!t || !t.chainName) continue;
-    const cxChain = String(t.chainName).toLowerCase();
+    const cxChain = t.chainKey || chainKeyFromName(t.chainName);
     if (!misttrackSupports(cxChain)) continue;
     if (budgetLeft(opts, 20000) < 4000) return;
 
