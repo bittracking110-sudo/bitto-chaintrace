@@ -651,10 +651,17 @@ function packRateOk(ip) {
 
    ディスクには書かない。TXID・アドレス・被害内容が入るため。 */
 const packFiles = new Map();   // token → { pdf, name, at }
-const PACK_TTL_MS = 20 * 60 * 1000;
+/* ★保持時間。カードはチャットに残り続けるので、短すぎると
+   後から押したときにリンクだけ切れる（実測：20分で切れて
+   「期限切れです」の素っ気ない画面になった）。
+   ディスクには書かない方針なので、件数の上限で使用量を抑える。 */
+const PACK_TTL_MS = 6 * 60 * 60 * 1000;   // 6時間
+const PACK_MAX    = 120;                  // 1件およそ0.5MB。上限で約60MB
 function sweepPackFiles() {
   const now = Date.now();
   for (const [k, v] of packFiles) if (now - v.at > PACK_TTL_MS) packFiles.delete(k);
+  // 古いものから捨てる。Map は入れた順を保つ
+  while (packFiles.size > PACK_MAX) packFiles.delete(packFiles.keys().next().value);
 }
 
 app.post('/api/pack/pdf', express.json({ limit: '2mb' }), async (req, res) => {
@@ -694,7 +701,28 @@ app.post('/api/pack/pdf', express.json({ limit: '2mb' }), async (req, res) => {
 app.get('/api/pack/file/:token', (req, res) => {
   sweepPackFiles();
   const f = packFiles.get(String(req.params.token || ''));
-  if (!f) return res.status(404).send('この書類は期限切れです。もう一度作成してください。');
+  if (!f) {
+    /* ★素っ気ない文字だけを返すと、利用者は何をすればよいか分からない。
+       PDFは端末にもサーバーにも残さない方針なので、作り直してもらう。
+       ★何が起きたのか・次に何をするのかを、その画面で伝える。 */
+    return res.status(404).type('html').send(`<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>初動パック</title>
+<style>body{margin:0;background:#0C1728;color:#e2e8f0;font-family:system-ui,sans-serif;
+display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+.c{max-width:420px;text-align:center;background:#111c33;border:1px solid #24344f;
+border-radius:16px;padding:28px 24px}
+h1{font-size:17px;margin:0 0 12px}p{font-size:13.5px;line-height:1.9;color:#93a4bd;margin:0}
+b{color:#e2e8f0}</style></head><body><div class="c">
+<h1>この書類はお預かり期間を過ぎました</h1>
+<p>初動パックは、内容に被害の情報が含まれるため<b>サーバーに保存していません</b>。
+作成から一定時間で自動的に消去されます。<br><br>
+お手数ですが、アプリのチャットに戻り<b>「初動パックを作る（無料）」</b>を
+もう一度押してください。同じ内容がすぐに作り直せます。<br><br>
+作成した書類は、その場で<b>保存または印刷</b>しておくと安心です。</p>
+</div></body></html>`);
+  }
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Cache-Control', 'private, no-store');
   res.setHeader('Content-Disposition',
