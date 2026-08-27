@@ -17,6 +17,14 @@ const nodemailer   = require('nodemailer');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
+/* ★別オリジンからの呼び出しを許可する。ここは必ずすべての口より前に置く。
+   Express は「登録より後の口」にしか効かないため、途中に置くと
+   それより前に定義した口だけが許可されない状態になる。
+   ★実際にそうなっていた：画像の読み取り(280行目)と初動パック(645行目)が
+   許可の登録より前にあり、アプリから呼ぶと CORS で弾かれていた。
+   Webは同一オリジンなので気づけず、エミュレータで初めて分かった。 */
+app.use(cors());
+
 // ── APIキー ────────────────────────────────────────────────
 const BLOCKCHAIR_KEY            = process.env.BLOCKCHAIR_API_KEY;
 const ETHERSCAN_KEY             = process.env.ETHERSCAN_API_KEY;
@@ -7519,7 +7527,6 @@ app.post('/webhook', line.middleware(lineConfig), async (req, res) => {
   await Promise.all(req.body.events.map(handleLineEvent)).catch(console.error);
 });
 
-app.use(cors());
 app.use(express.json());
 /* 本文が大きすぎるとExpressがHTMLのエラーページを返し、画面側が「保存できません」
    としか出せない。JSONで理由を返し、利用者に短くしてもらう。 */
