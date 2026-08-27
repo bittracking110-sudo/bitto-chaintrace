@@ -2130,13 +2130,37 @@ const BRIDGE_METHODS = {
    実測：2.9 ETH を渡し、TRON側には 12,409.6 USDT が届いていた。
    ETHの数字で USDT を照合しても一致するはずがなく、
    毎回「合流」と判定されて送金先ごとの合計で選ぶことになる。 */
+/* ★TronGridは連続で叩くと断ってくる（回数制限）。
+   断られた応答は data を持たないので、そのまま使うと
+   ★「送金が無い」と見分けがつかず、追跡が静かに止まる。
+   実測：XRPからTRONへ渡った先で1段しか進まず、その先の
+   Binance に届かなかった。診断画面に api.trongrid.io の失敗が出ていた。
+
+   ★取得できなかったことと、無いことは違う。
+     区別できないまま進むと、誤った結論を静かに出す。
+   少し待って1度だけ取り直し、それでも駄目なら「取得できず」と分かる形で返す。 */
+async function tronJson(url) {
+  for (let i = 1; i <= 2; i++) {
+    try {
+      const r = await fetchT(url, { headers: tronHeaders() });
+      if (r.ok) return await r.json();
+      console.warn(`[TronGrid] 応答 ${r.status}${i === 1 ? '。待って取り直します' : '。諦めます'}`);
+    } catch (e) {
+      console.warn(`[TronGrid] 取得失敗: ${e.message}${i === 1 ? '。取り直します' : ''}`);
+    }
+    if (i === 1) await new Promise(res => setTimeout(res, 1200));
+  }
+  return null;                       // ★null＝取得できず。空配列（＝無い）とは区別する
+}
+
 async function getBridgeArrivalTRON(addr, fromMs) {
   const win = 6 * 3600 * 1000;                       // 払い出しは数分〜数時間遅れる
   try {
     /* 受け手として絞り込む。集約ウォレットは送出に埋もれることがあるため。 */
     const url = `${TRONGRID}/v1/accounts/${addr}/transactions/trc20`
       + `?limit=50&order_by=block_timestamp,asc&only_to=true&min_timestamp=${Math.max(0, fromMs - 60000)}`;
-    const j = await (await fetchT(url, { headers: tronHeaders() })).json();
+    const j = await tronJson(url);
+    if (!j) return null;                 // ★取得できず。無いとは限らない
     for (const t of (j.data || [])) {
       if (t.to !== addr) continue;                   // 受け取りだけ
       if (t.block_timestamp - fromMs > win) break;   // 昇順なので、離れたら打ち切り
@@ -3590,7 +3614,8 @@ async function getNextTxTRON(addr, afterTime, amountIn) {
        絞ると同じ50件が全部「出ていった送金」になる。 */
     const url = `${TRONGRID}/v1/accounts/${addr}/transactions/trc20`
       + `?limit=50&order_by=block_timestamp,asc&only_from=true&min_timestamp=${Math.max(0, refMs - 1000)}`;
-    const j = await (await fetchT(url, { headers: tronHeaders() })).json();
+    const j = await tronJson(url);
+    if (!j) return null;                 // ★取得できず。無いとは限らない
     /* ★以前は「最初に見つけた1件」を返していた。
        ETHで直したのと同じ誤り（第4-S節・第4-X節）が残っていた。
        ★TRONのUSDT-TRC20は日本の被害でいちばん多い経路なので、
@@ -3623,7 +3648,8 @@ async function getNextTxTRON(addr, afterTime, amountIn) {
   try {
     const url = `${TRONGRID}/v1/accounts/${addr}/transactions`
       + `?limit=50&order_by=block_timestamp,asc&min_timestamp=${Math.max(0, refMs - 1000)}`;
-    const j = await (await fetchT(url, { headers: tronHeaders() })).json();
+    const j = await tronJson(url);
+    if (!j) return null;                 // ★取得できず。無いとは限らない
     const cands = [];
     for (const t of (j.data || [])) {
       const c = t.raw_data?.contract?.[0];
