@@ -3183,6 +3183,22 @@ const TRON_KEY  = process.env.TRON_API_KEY || '';
    XRPの取引所名が丸ごと出せなくなる。Bithomp を二重化として使う。
    無料枠は1日2,000件・毎分10件。鍵が無ければ何もしない（休眠）。 */
 const BITHOMP_KEY = process.env.BITHOMP_API_KEY || '';
+/* ★Bithomp は分と日に上限がある（無料：10件/分・2,000件/日）。
+   当社は枝の探索だけで1回の調査に最大30件引くので、そのまま呼ぶと
+   確実に超える。超えると弾かれ、名前が引けないどころか
+   相手にも迷惑をかける。★自分で数えて、超える前に止める。
+   環境変数で上げられるようにしておく（有料プランに移ったとき用）。 */
+const BITHOMP_PER_MIN = Number(process.env.BITHOMP_PER_MIN ?? 8);     // 10の手前で止める
+const BITHOMP_PER_DAY = Number(process.env.BITHOMP_PER_DAY ?? 1800);  // 2,000の手前
+const bithompHits = [];
+function bithompOk() {
+  const now = Date.now();
+  while (bithompHits.length && now - bithompHits[0] > 86400000) bithompHits.shift();
+  if (bithompHits.length >= BITHOMP_PER_DAY) return false;
+  const inMin = bithompHits.filter(t => now - t < 60000).length;
+  if (inMin >= BITHOMP_PER_MIN) return false;
+  return true;
+}
 const tronHeaders = () => (TRON_KEY ? { 'TRON-PRO-API-KEY': TRON_KEY } : {});
 const isTronAddr = a => /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(String(a || ''));
 
@@ -3404,7 +3420,8 @@ async function fetchAddressLabel(addr, chain) {
      XRPScan で名前が出なかったときの二重化。鍵が無ければ黙って飛ばす。
      ★1社が落ちた日に「取引所が見つかりません」と出すより、
      もう一方に聞く方が被害者の役に立つ。 */
-  if (!label && chain === 'xrp' && BITHOMP_KEY) {
+  if (!label && chain === 'xrp' && BITHOMP_KEY && bithompOk()) {
+    bithompHits.push(Date.now());
     try {
       const r = await fetchT(`https://bithomp.com/api/v2/address/${encodeURIComponent(addr)}?service=true`,
         { headers: { 'x-bithomp-token': BITHOMP_KEY } }, 2500);
