@@ -2290,6 +2290,14 @@ function budgetLeft(opts, want) {
 const EXPLORE_MAX_VISITS = 24;      // 訪問する地点の上限
 const EXPLORE_MAX_DEPTH  = 6;       // 何段先まで見るか
 const EXPLORE_MIN_SHARE  = 0.02;    // 2%未満の枝は追わない（数が増えるだけ）
+/* ★枝の先の名前を、費用のかからない範囲で引く上限。
+   これが無いと、枝の探索は自前DB（19件）に載っている取引所しか見つけられない。
+   XRPは3件・TRONは0件しか無く、仕組みが入っていても実際には発火しなかった
+   （実測：利用者提供のXRP調査で、3段すべて「未特定」で終わった）。
+   ★MistTrackの残り回数は使わない。無料の情報源だけを短い見切りで使う。 */
+const EXPLORE_NAME_LOOKUPS    = 8;      // 1回の探索で名前を引く上限
+const EXPLORE_NAME_TIMEOUT_MS = 2500;   // 1件あたりの見切り（遅い相手で全体を止めない）
+const EXPLORE_NAME_MIN_SHARE  = 0.05;   // 5%未満の枝には引かない（上限を使い切らせない）
 
 /* その地点から出ていった先を、まとめて返す。
    本線として選ばれた1件と、控えに残った送金先を合わせる。 */
@@ -2318,7 +2326,7 @@ async function exploreArrivals(start, chain, deadline) {
   const queue = [{ address: start.address, time: start.time, amount: start.amount,
                    share: 1, depth: 0, trail: [] }];
   const arrivals = [], dead = [];
-  let visits = 0;
+  let visits = 0, nameLookups = 0;
   while (queue.length && visits < EXPLORE_MAX_VISITS && Date.now() < deadline - 3000) {
     queue.sort((a, b) => b.share - a.share);       // 割合の大きい枝から
     const cur = queue.shift();
@@ -2337,8 +2345,24 @@ async function exploreArrivals(start, chain, deadline) {
       if (share < EXPLORE_MIN_SHARE) continue;
       seen.add(k);
       const trail = cur.trail.concat([c.address]);
-      if (isNamedExchange(c.label, c.isExchange)) {
-        arrivals.push({ address: c.address, label: c.label, share,
+
+      /* ★名前が付いていなければ、無料の情報源に当たってみる。
+         XRPScanのアカウント名・TronScanのタグ・Etherscanの契約名など、
+         すでに他の場所で使っている無料の口を、ここでも使う。
+         引いた結果は覚えるので、同じアドレスに何度も当たらない。 */
+      let label = c.label, isEx = c.isExchange;
+      if (!label && nameLookups < EXPLORE_NAME_LOOKUPS
+          && share >= EXPLORE_NAME_MIN_SHARE && Date.now() < deadline - 4000) {
+        nameLookups++;
+        label = await Promise.race([
+          fetchAddressLabel(c.address, chain).catch(() => ''),
+          new Promise(r => setTimeout(() => r(''), EXPLORE_NAME_TIMEOUT_MS)),
+        ]) || '';
+        if (label) isEx = isExchange(label) && !isViaService(label) && !isTokenContract(label);
+      }
+
+      if (isNamedExchange(label, isEx)) {
+        arrivals.push({ address: c.address, label, share,
                         amount: c.amount, hops: cur.depth + 1, trail });
         continue;                                  // 着いたらその枝は止める
       }
@@ -2348,7 +2372,8 @@ async function exploreArrivals(start, chain, deadline) {
   }
   arrivals.sort((a, b) => b.share - a.share);
   dead.sort((a, b) => b.share - a.share);
-  console.log(`[枝の探索] ${visits}地点を確認、取引所に到達 ${arrivals.length}件`);
+  console.log(`[枝の探索] ${visits}地点を確認、名前を引いた ${nameLookups}件、`
+    + `取引所に到達 ${arrivals.length}件`);
   return { arrivals, dead, visits };
 }
 
@@ -5433,6 +5458,12 @@ function nodeNotes(p) {
   return out;
 }
 
+/* その通貨の単位。★ブリッジの説明で ETH に固定していた誤りを直すために使う。 */
+function nativeUnit(chain) {
+  return { btc: 'BTC', eth: 'ETH', polygon: 'POL', arbitrum: 'ETH',
+           xrp: 'XRP', tron: 'TRX' }[String(chain || '').toLowerCase()] || '';
+}
+
 /* 調査全体に添える説明。 */
 function resultNotes(result) {
   const path = result.path || [];
@@ -5454,7 +5485,9 @@ function resultNotes(result) {
     out.push(note('bridge', 'good', '別のチェーンへ渡った先が判明しました',
       `${b.label || 'このコントラクト'}（${t.bridge}）から ${t.chainName} へ渡っています。`
       + `渡った先のアドレス：${t.address}`
-      + (t.amount != null ? `／渡した額：${String(t.amount).slice(0, 12)} ETH` : '')
+      /* ★単位は調査した通貨に合わせる。ここを ETH に固定していたため、
+         XRPの調査で「1998.9995 ETH」と誤った通貨名を出していた（実測）。 */
+      + (t.amount != null ? `／渡した額：${String(t.amount).slice(0, 12)} ${nativeUnit(result.chain)}` : '')
       + (t.arrivedAmount != null ? `／届いた額：${String(t.arrivedAmount).slice(0, 14)} ${t.arrivedToken || ''}` : '')
       /* ★渡った先で追えた分も必ず書く。追ったのに見せなければ、
          被害者にとっては追っていないのと同じ。 */
