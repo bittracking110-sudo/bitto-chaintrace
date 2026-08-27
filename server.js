@@ -2555,7 +2555,10 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
     /* 送金元（起点）は照会しない。被害者自身が使った取引所であり、
        本人に聞けば分かる。有料の回数はその先に使う。 */
     const isSender = idx === 0 || node.role === 'sender';
-    if (!node.label && MISTTRACK_KEY && !isSender
+    /* ★対応していないチェーンには投げても空しか返らない。それでも
+       ここで枠を先に減らしていたため、XRPの調査は毎回1回を確実に捨てていた
+       （実測：この案件で唯一の1回がここで消え、資金があるTRON側に使えなかった）。 */
+    if (!node.label && MISTTRACK_KEY && misttrackSupports(chain) && !isSender
         && (isLastNode || inferExchangeByBehavior(node))) {
       const known = labelCache.has(node.address.toLowerCase());
       const budgetOk = isLastNode ? apiLookups < lookupBudget : apiLookups < lookupBudget - 1;
@@ -2830,7 +2833,8 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
      参考経路で取引所に着いていて、その名前が無いなら、そこに使う方が役に立つ。
      被害者が本当に欲しいのは「どこへ換金されたか」の名前。 */
   const unnamed = refNode?.referenceTrace?.branches?.find(b => b.exchangeUnnamed);
-  if (unnamed && MISTTRACK_KEY && labelQuotaOk(opts.paid, opts.device)) {
+  if (unnamed && MISTTRACK_KEY && misttrackSupports(chain)   // ★対象外に投げない
+      && labelQuotaOk(opts.paid, opts.device)) {
     try {
       labelQuotaUse(opts.device);
       const api = await lookupLabelAPI(unnamed.reachedAddress, chain);
@@ -2873,7 +2877,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
          被害者が出金した元に名前を引いても、凍結の宛先にはならない。
          ★無料は1件あたり1回しか引けないので、ここで使うと到達先に残らない。 */
       const lastIsSender = !last || last.role === 'sender' || last === path[0];
-      if (!last.label && MISTTRACK_KEY && !lastIsSender) {
+      if (!last.label && MISTTRACK_KEY && misttrackSupports(chain) && !lastIsSender) {
         const known = labelCache.has(last.address.toLowerCase());
         if (known || (apiLookups < lookupBudget && labelQuotaOk(opts.paid, opts.device))) {
           if (!known) { apiLookups++; labelQuotaUse(opts.device); }
