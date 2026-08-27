@@ -841,11 +841,19 @@ function resultCard(results){
   const addrs   = new Set(); paths.forEach(p => p.forEach(n => n.address && addrs.add(n.address)));
   // 取引所（CEX）と 経由（DEX/ブリッジ/匿名化）を厳密に分ける
   const exNodes  = []; const viaNodes = [];
-  paths.forEach(p => p.forEach(n => {
+  /* ★送金元は「到達した取引所」ではない。被害者が出金した元であって、
+     凍結を要請する相手ではない（第5-K節）。
+     サーバー側の一覧では除いていたが、★画面が自分で数え直していたため、
+     「到達した取引所として bitFlyer を確認しました」と出ていた。 */
+  paths.forEach(p => p.forEach((n, i) => {
+    if (i === 0 || n.role === 'sender') return;
     if (isBridgeLike(n))      viaNodes.push(n);
     else if (n.isExchange)    exNodes.push(n);
   }));
   const exNames = [...new Set(exNodes.map(n => n.label).filter(Boolean))];
+  /* ★ブリッジで別チェーンへ渡ったことは、ラベルでは分からない。
+     取引の中身から復元しているので、そちらを見て判定する。 */
+  const crossed = [].concat(...paths).filter(n => n && n.bridgeTo);
 
   // 金額はチェーンごとに集計（為替換算はしない＝推測値を出さない）
   const byChain = {};
@@ -891,6 +899,8 @@ function resultCard(results){
   <div class="card"><h4>リスク検出</h4><div class="risks">
     ${riskRow('匿名化・スワップ経由', mixer, 'bad')}
     ${riskRow('ブリッジ・DEX経由', bridge, 'warn')}
+    ${crossed.length ? `<div class="risk hit"><div class="ic">!</div><div><div class="rt">別のチェーンへ渡っています</div>
+      <div class="rs">${esc(crossed.map(c => c.bridgeTo.chainName).join('、'))} へ渡った先まで追跡しています</div></div></div>` : ''}
   </div>
   <div class="note">※ 検出は判明したラベル情報に基づきます。ラベルが未取得のアドレスについては判定できません。</div>
   ${btcNote}</div>`;

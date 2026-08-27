@@ -5409,6 +5409,15 @@ function nodeNotes(p) {
       'この先に出てくる送金先は、ご依頼の資金が届いたものとは断定できません。',
       'ただし経路が記録として存在することは事実なので、伏せずに記載しています。'));
   }
+  if (p.bridgeTo) {
+    /* ★経路の枠そのものに出す。下に説明を置くだけでは見落とされる。
+       「ここで別のチェーンへ渡った」は、経路を目で追う人が
+       いちばん知りたい一点。 */
+    const t = p.bridgeTo;
+    out.push(note('bridge', 'good', `ここで ${t.chainName} へ渡っています`,
+      `渡り先：${t.address}`
+      + (t.arrivedAmount != null ? `／届いた額：${String(t.arrivedAmount).slice(0, 14)} ${t.arrivedToken || ''}` : '')));
+  }
   if (p.branchTaken) {
     out.push(note('branch', 'info', 'この地点では複数の送金先がありました',
       'それぞれの先を実際にたどり、取引所に到達した方をこの経路として採用しています。',
