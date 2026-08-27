@@ -1126,7 +1126,7 @@ function cachedLabelName(lo) {
    同じアドレスを二度引かないため。名前が無かった場合も空で残す。 */
 const MISTTRACK_KEY  = process.env.MISTTRACK_API_KEY || '';
 const MISTTRACK_BASE = process.env.MISTTRACK_BASE_URL || 'https://openapi.misttrack.io/v1';
-const MISTTRACK_PAID_LOOKUPS = Number(process.env.MISTTRACK_PAID_LOOKUPS ?? 3);   // 有料レポート1件あたり
+const MISTTRACK_PAID_LOOKUPS = Number(process.env.MISTTRACK_PAID_LOOKUPS ?? 5);   // 有料レポート1件あたり（枝を追うぶん増やした）
 const MISTTRACK_FREE_LOOKUPS = Number(process.env.MISTTRACK_FREE_LOOKUPS ?? 1);   // 無料の追跡1件あたり（0で無料は呼ばない）
 const MISTTRACK_DAILY_CAP    = Number(process.env.MISTTRACK_DAILY_CAP ?? 5);      // 1日の上限（無料）
 const MISTTRACK_MONTH_CAP    = Number(process.env.MISTTRACK_MONTH_CAP ?? 15);     // 1か月の上限
@@ -1956,7 +1956,18 @@ const CALLS_BUDGET_MS = 6000;
    両方に満額を与えると持ち時間75秒を超え、実測で時間切れになった。 */
 const CROSSCHAIN_BUDGET_MS = 20000;
 // 上記の予算をすべてすり抜けた場合に調査ジョブを強制終了させる上限時間。
-const INVESTIGATE_HARD_TIMEOUT_MS = 75000;   // 各予算の合計48秒＋外部APIの遅れを吸収する
+/* ★無料と有料で、待たせ方がまったく違う。
+     無料調査   利用者が画面の前で待っている
+                → 画面で「1件あたり30秒〜2分」と案内しているので、その内側
+     有料レポート ★メールで届ける。待たせていない
+                → 「通常10分〜30分ほどで完成します」と案内済み
+                → 1件に5分かけてよい
+
+   ★75秒は当社が自分で決めた数字で、外部からの制限ではなかった。
+     絞りすぎていたぶん、枝を追う余裕が無かった。 */
+const INVESTIGATE_HARD_TIMEOUT_MS = 110000;        // 無料（案内の2分以内）
+const INVESTIGATE_HARD_PAID_MS    = 300000;        // 有料（メール配信なので余裕がある）
+const investigateHardMs = paid => paid ? INVESTIGATE_HARD_PAID_MS : INVESTIGATE_HARD_TIMEOUT_MS;
 
 /* 同じアドレスを何度も照会しない。
    取引所のホットウォレットや共有コントラクトは、別々の調査でも繰り返し出てくる。
@@ -2188,11 +2199,91 @@ function decodeBridgeCall(input) {
 /* 全体の締切までに残っている時間。締切が渡っていなければ従来どおりの予算。
    ★後段（参考経路・ブリッジ先）は「あれば嬉しい」情報なので、
      ここを削ってでも本体を返し切る。何も返さないのが最悪。 */
-const INVESTIGATE_SOFT_LIMIT_MS = 64000;   // 上限75秒に対し11秒の余白
+const INVESTIGATE_SOFT_LIMIT_MS = 96000;         // 無料：上限110秒に対し14秒の余白
+const INVESTIGATE_SOFT_PAID_MS  = 280000;        // 有料：上限300秒に対し20秒の余白
+const investigateSoftMs = paid => paid ? INVESTIGATE_SOFT_PAID_MS : INVESTIGATE_SOFT_LIMIT_MS;
 function budgetLeft(opts, want) {
   const d = opts && opts.hardDeadline;
   if (!Number.isFinite(d)) return want;
   return Math.max(0, Math.min(want, d - Date.now()));
+}
+
+/* ══ 分散した資金を、割合を持って追う ══════════════════════
+   ★1本だけ追う方式は、資金が分けられる経路に向いていない。
+     実測（利用者提供・BTC）：0.85→0.70→0.56→… と13段にわたって
+     小分けにされ、13段追っても取引所に届かなかった。
+     一方、別の枝は3段で Binance に着いていた。
+
+   ★「どこへ、どれだけ」を出す。
+     被害資金の何%がその枝を通ったかを持ち回り、多い順に追う。
+     大きい枝ほど凍結の価値が高いので、時間をそこから使う。
+
+   割合の出し方は、送り出した額のうちその枝が占める分を掛けていく。
+   増えている（他人の資金と混ざった）場合は1を上限にする。
+   ★資金追跡で広く使われる考え方で、根拠を説明できる。 */
+const EXPLORE_MAX_VISITS = 24;      // 訪問する地点の上限
+const EXPLORE_MAX_DEPTH  = 6;       // 何段先まで見るか
+const EXPLORE_MIN_SHARE  = 0.02;    // 2%未満の枝は追わない（数が増えるだけ）
+
+/* その地点から出ていった先を、まとめて返す。
+   本線として選ばれた1件と、控えに残った送金先を合わせる。 */
+async function nextCandidatesAny(addr, time, amountIn, chain) {
+  let nx = null;
+  try {
+    if (chain === 'btc')      nx = await getNextTxBTC(addr, time, amountIn);
+    else if (isEVM(chain))    nx = await getNextTxETH(addr, time, amountIn, chain);
+    else if (chain === 'xrp') nx = await getNextTxXRP(addr, time, amountIn);
+    else if (chain === 'tron')nx = await getNextTxTRON(addr, time, amountIn);
+  } catch (e) { console.error('[枝の探索] 取得に失敗:', e.message); }
+  if (!nx) return [];
+  const one = c => ({ address: c.addr || c.address, amount: c.amount, time: c.time,
+                      label: c.label || '', token: c.token, txHash: c.txHash,
+                      isExchange: !!c.isExchange });
+  return [one(nx), ...(nx._siblings || []).map(one)].filter(c => c.address);
+}
+
+function isNamedExchange(label, isEx) {
+  const l = String(label || '');
+  return !!(isEx && l && !isViaService(l) && !isTokenContract(l));
+}
+
+async function exploreArrivals(start, chain, deadline) {
+  const seen = new Set([String(start.address).toLowerCase()]);
+  const queue = [{ address: start.address, time: start.time, amount: start.amount,
+                   share: 1, depth: 0, trail: [] }];
+  const arrivals = [], dead = [];
+  let visits = 0;
+  while (queue.length && visits < EXPLORE_MAX_VISITS && Date.now() < deadline - 3000) {
+    queue.sort((a, b) => b.share - a.share);       // 割合の大きい枝から
+    const cur = queue.shift();
+    if (cur.depth >= EXPLORE_MAX_DEPTH) continue;
+    visits++;
+    const cands = await nextCandidatesAny(cur.address, cur.time, cur.amount, chain);
+    if (!cands.length) { if (cur.share >= 0.05) dead.push(cur); continue; }
+    for (const c of cands) {
+      const k = String(c.address).toLowerCase();
+      if (seen.has(k)) continue;
+      /* この枝が運んだ割合。減っていれば分割された分、
+         増えていれば他人の資金が混ざったので1を上限にする。 */
+      const frac = (Number.isFinite(c.amount) && Number.isFinite(cur.amount) && cur.amount > 0)
+        ? Math.min(1, c.amount / cur.amount) : 1;
+      const share = cur.share * frac;
+      if (share < EXPLORE_MIN_SHARE) continue;
+      seen.add(k);
+      const trail = cur.trail.concat([c.address]);
+      if (isNamedExchange(c.label, c.isExchange)) {
+        arrivals.push({ address: c.address, label: c.label, share,
+                        amount: c.amount, hops: cur.depth + 1, trail });
+        continue;                                  // 着いたらその枝は止める
+      }
+      queue.push({ address: c.address, time: c.time, amount: c.amount,
+                   share, depth: cur.depth + 1, trail });
+    }
+  }
+  arrivals.sort((a, b) => b.share - a.share);
+  dead.sort((a, b) => b.share - a.share);
+  console.log(`[枝の探索] ${visits}地点を確認、取引所に到達 ${arrivals.length}件`);
+  return { arrivals, dead, visits };
 }
 
 async function enrichPathWithAddressInfo(path, chain, opts = {}) {
@@ -2436,6 +2527,34 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
         break outer;
       }
     }
+  }
+
+  /* ★資金が分けられている場合、1本追っただけでは行き先が分からない。
+     被害資金の何%がどこへ渡ったかを、枝ごとに追って出す。
+     ★凍結要請は複数の取引所へ同時に出せるので、全部見つける方が役に立つ。
+     有料は時間に余裕がある（メール配信）ので、そのぶん深く探す。 */
+  const first = (path || [])[1];
+  if (first && first.address && budgetLeft(opts, 40000) > 8000) {
+    try {
+      const budget = budgetLeft(opts, opts.paid ? 90000 : 25000);
+      const found = await exploreArrivals(
+        { address: first.address, time: first.time || path[0]?.time, amount: first.amount },
+        chain, Date.now() + budget);
+      if (found.arrivals.length) {
+        path.exploredArrivals = found.arrivals;      // 経路と一緒に持ち回る
+        for (const a of found.arrivals) {
+          if (!path.some(p => String(p.address).toLowerCase() === String(a.address).toLowerCase())) {
+            path.push({ address: a.address, label: a.label, amount: a.amount,
+              isExchange: true, exploredShare: a.share, exploredHops: a.hops,
+              role: 'explored' });
+          } else {
+            const n = path.find(p => String(p.address).toLowerCase() === String(a.address).toLowerCase());
+            if (n && n.exploredShare == null) n.exploredShare = a.share;
+          }
+        }
+      }
+      path.exploredDead = found.dead.slice(0, 3);
+    } catch (e) { console.error('[枝の探索] 失敗:', e.message); }
   }
 
   const reachedAfterSeek = path.some((p, i) =>
@@ -4343,7 +4462,9 @@ function collectExchanges(result) {
        薄まったことは印として添え、判断は読み手に委ねる。
        ★伏せると被害者は手がかりを失うだけで、良いことは何も無い。 */
     result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address,
-      amount: n.amount, afterDilution: n.afterDilution || null });
+      amount: n.amount, afterDilution: n.afterDilution || null,
+      share: n.exploredShare ?? null, hops: n.exploredHops ?? null,
+      explored: n.role === 'explored' || undefined });
   }
 
   /* ★経路の途中で「同じ地点から取引所へも送られていた」場合も載せる。
@@ -4398,7 +4519,7 @@ async function investigate(txid, chain, opts = {}) {
      増えると超える。実測で2回とも時間切れになった）。
      ★時間切れは何も出せない＝間違った答えより悪い。
      残り時間から後段の予算を削って、必ず内側で終える。 */
-  const hardDeadline = Date.now() + INVESTIGATE_SOFT_LIMIT_MS;
+  const hardDeadline = Date.now() + investigateSoftMs(opts.paid);
   const ph = mkPhases(txid);
   let result;
   if (chain === 'btc') {
@@ -5217,6 +5338,21 @@ function resultNotes(result) {
       '渡り先は、ブリッジへの送金に含まれる指定内容から復元しています。'
       + 'ブリッジは通貨を換えて払い出すため、送った額と数字が変わります。'
       + `照会の際は、チェーン名（${t.chainName}）を必ず添えてください。`));
+  }
+  /* ★分けられた資金の行き先を、割合つきでまとめて出す。
+     凍結要請は複数の取引所へ同時に出せるので、
+     「どこへ、どれだけ」が分かることに意味がある。 */
+  const withShare = (result.exchanges || []).filter(e => e.share != null);
+  if (withShare.length > 1) {
+    const lines = withShare.slice(0, 6)
+      .map(e => `${e.name}：約${Math.round(e.share * 100)}%（${e.hops != null ? e.hops + '次先' : ''}）`)
+      .join('／');
+    out.push(note('spread', 'good', '分けられた資金の行き先',
+      `ご依頼の資金は複数に分かれています。それぞれの枝を実際にたどった結果、`
+      + `次の取引所に到達しました。${lines}`,
+      '割合は、各地点で送り出された額のうちその枝が占める分を掛け合わせた概算です。'
+      + '断定はできませんが、★どの取引所へ多く流れたかの目安になります。'
+      + '凍結要請は複数の取引所へ同時に出せます。'));
   }
   if (result.stillMoving) {
     out.push(note('moving', 'warn', 'まだ資金が動いている最中かもしれません',
@@ -8368,7 +8504,7 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
           investigate(txid, chain, { device }),
           new Promise((_, reject) => setTimeout(
             () => reject(new Error('調査が時間内に完了しませんでした。時間をおいてもう一度お試しください。')),
-            INVESTIGATE_HARD_TIMEOUT_MS
+            investigateHardMs(paidRun)
           )),
         ]);
         /* ★情報付けが締切をまたいで終わることがある。返す直前にもう一度
