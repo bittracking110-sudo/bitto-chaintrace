@@ -7602,11 +7602,11 @@ app.get('/api/status', (_req, res) => res.json({
   webhook: `${BASE_URL}/webhook`,
 }));
 app.get('/api/btc/tx/:txid', async (req, res) => {
-  try { res.json(await (await fetchT(`https://api.blockchair.com/bitcoin/dashboards/transaction/${req.params.txid}?key=${BLOCKCHAIR_KEY}`)).json()); }
+  try { res.json(await (await fetchT(`https://api.blockchair.com/bitcoin/dashboards/transaction/${encodeURIComponent(req.params.txid)}?key=${BLOCKCHAIR_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/btc/address/:addr', async (req, res) => {
-  try { res.json(await (await fetchT(`https://api.blockchair.com/bitcoin/dashboards/address/${req.params.addr}?key=${BLOCKCHAIR_KEY}`)).json()); }
+  try { res.json(await (await fetchT(`https://api.blockchair.com/bitcoin/dashboards/address/${encodeURIComponent(req.params.addr)}?key=${BLOCKCHAIR_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/eth/tx/:hash', async (req, res) => {
@@ -7615,16 +7615,16 @@ app.get('/api/eth/tx/:hash', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/eth/address/:addr', async (req, res) => {
-  try { res.json(await (await fetchT(`https://api.blockchair.com/ethereum/dashboards/address/${req.params.addr}?key=${BLOCKCHAIR_KEY}`)).json()); }
+  try { res.json(await (await fetchT(`https://api.blockchair.com/ethereum/dashboards/address/${encodeURIComponent(req.params.addr)}?key=${BLOCKCHAIR_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/eth/txlist/:addr', async (req, res) => {
   try { const { page=1, offset=20, sort='desc' } = req.query;
-    res.json(await (await fetchT(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${req.params.addr}&startblock=0&endblock=latest&page=${page}&offset=${offset}&sort=${sort}&apikey=${ETHERSCAN_KEY}`)).json()); }
+    res.json(await (await fetchT(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${encodeURIComponent(req.params.addr)}&startblock=0&endblock=latest&page=${page}&offset=${offset}&sort=${sort}&apikey=${ETHERSCAN_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/xrp/tx/:txid', async (req, res) => {
-  try { const r = await fetchT(`https://api.xrpscan.com/api/v1/tx/${req.params.txid.toUpperCase()}`);
+  try { const r = await fetchT(`https://api.xrpscan.com/api/v1/tx/${encodeURIComponent(req.params.txid.toUpperCase())}`);
     const t = await r.text(); if (t === 'Not found') return res.status(404).json({ error: 'Not found' }); res.json(JSON.parse(t)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -9188,7 +9188,14 @@ app.post('/api/connection/chat/:token', express.json(), async (req, res) => {
     // 初回メッセージは運営者にも通知
     if (isFirst && SMTP_USER) {
       sendEmail(SMTP_USER, '【Connection】サポートチャットに新規お問い合わせ',
-        `<p>お客様：${chat.customerName} 様（${chat.email}）</p><p>TXID：${chat.txid}</p><p>メッセージ：${message}</p><p><a href="${BASE_URL}/support/${req.params.token}">チャットを開く</a></p>`
+        /* ★利用者が書いた文章と、申込時の氏名・メールをそのまま入れない。
+           運営者が読むメールにリンクやタグを仕込まれる。
+           ★被害者の文章には記号が混ざることも多く、素で入れると
+           メールの体裁も崩れる。 */
+        `<p>お客様：${escHtml(chat.customerName)} 様（${escHtml(chat.email)}）</p>`
+        + `<p>TXID：${escHtml(chat.txid)}</p>`
+        + `<p>メッセージ：${escHtml(message)}</p>`
+        + `<p><a href="${BASE_URL}/support/${encodeURIComponent(req.params.token)}">チャットを開く</a></p>`
       ).catch(console.error);
     }
 
