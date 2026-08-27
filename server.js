@@ -2526,10 +2526,29 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
             'tron', 8, Date.now() + budgetLeft(opts, CROSSCHAIN_BUDGET_MS), null, arr?.amount ?? null)
             .catch(() => []);
           if (tHops.length) {
-            n.crossChainHops = tHops.map(h => ({
-              address: h.address, label: h.label || '', amount: h.amount, token: h.token,
-              isExchange: h.isExchange, isVia: h.isVia, time: h.time, txHash: h.txHash,
-              pooled: !!h.pooled, poolDests: h.poolDests ?? null }));
+            /* ★渡り先でも「どれだけ薄まったか」を段ごとに持たせる。
+               実測（利用者提供・XRP→TRON）：5,498USDT で入ったのに
+               2段目で117,495USDT の流れに合流し、3段目では100USDTへ分割、
+               最後は890,000USDT。1段目に対して162倍の流れになっていた。
+               ★これを黙って8段並べると、全部が本件の資金の行き先に見える。
+               経路は切り落とさず、薄まったことを段ごとに書く。 */
+            const arrived = arr?.amount ?? null;
+            let prevAmt = arrived;
+            n.crossChainHops = tHops.map(h => {
+              const x = (Number.isFinite(prevAmt) && prevAmt > 0 && Number.isFinite(h.amount))
+                ? h.amount / prevAmt : null;
+              const row = {
+                address: h.address, label: h.label || '', amount: h.amount, token: h.token,
+                isExchange: h.isExchange, isVia: h.isVia, time: h.time, txHash: h.txHash,
+                pooled: !!h.pooled, poolDests: h.poolDests ?? null,
+                /* 合流＝他人の資金が混ざった倍率。分割＝この先へ渡った割合。 */
+                mergedX: (x != null && x > 1.05) ? Math.round(x * 10) / 10 : null,
+                keptShare: (x != null && x < 0.95) ? x : null,
+                fromArrivedX: (Number.isFinite(arrived) && arrived > 0 && Number.isFinite(h.amount))
+                  ? Math.round((h.amount / arrived) * 10) / 10 : null };
+              prevAmt = h.amount;
+              return row;
+            });
             const ex = tHops.find(h => h.isExchange && !h.isVia && !h.isToken);
             if (ex) n.crossChainExchange = { name: ex.label || '取引所（名称未判明）', address: ex.address };
           }
@@ -5485,6 +5504,28 @@ function nativeUnit(chain) {
            xrp: 'XRP', tron: 'TRX' }[String(chain || '').toLowerCase()] || '';
 }
 
+/* 渡り先でたどった段に添える説明。★合流と分割を、その場で書く。 */
+function crossHopNotes(h) {
+  const out = [];
+  if (h.mergedX) {
+    out.push(note('cross-merged', 'warn', `約${h.mergedX}倍の流れに合流しています`,
+      'ここから先に出てくる送金先は、ご依頼の資金が届いたものとは断定できません。',
+      'ただし経路が記録として存在することは事実なので、伏せずに記載しています。'));
+  }
+  if (h.keptShare != null) {
+    const pct = h.keptShare * 100;
+    out.push(note('cross-split', 'warn',
+      `渡った額のうち約${pct < 1 ? pct.toFixed(2) : pct.toFixed(0)}%だけがこの先へ進んでいます`,
+      '残りは別の送金先へ分けられています。この先だけを追っても全体像にはなりません。'));
+  }
+  if (h.fromArrivedX != null && h.fromArrivedX >= 10) {
+    out.push(note('cross-far', 'warn',
+      `渡り先に着いた額の約${h.fromArrivedX}倍の流れになっています`,
+      'この地点はご依頼の資金だけの流れではありません。手がかりとして記載しています。'));
+  }
+  return out;
+}
+
 /* 調査全体に添える説明。 */
 function resultNotes(result) {
   const path = result.path || [];
@@ -5524,9 +5565,21 @@ function resultNotes(result) {
           ? `　${t.chainName} 側でさらに ${b.crossChainHops.length} 段たどりました：`
             + b.crossChainHops.map((h, i) => `${i + 1}. ${h.address}`
                 + (h.label ? `（${h.label}）` : '')
-                + (h.amount != null ? ` ${String(h.amount).slice(0, 12)} ${h.token || ''}` : '')).join('　')
+                + (h.amount != null ? ` ${String(h.amount).slice(0, 12)} ${h.token || ''}` : '')
+                /* ★薄まりをその場に書く。並べるだけだと全部が本件の
+                   資金の行き先に見える（実測：8段のうち2段目で21倍）。 */
+                + (h.mergedX ? `〈約${h.mergedX}倍に合流〉` : '')
+                + (h.keptShare != null
+                    ? `〈${h.keptShare * 100 < 1 ? (h.keptShare * 100).toFixed(2) : (h.keptShare * 100).toFixed(0)}%のみ進む〉`
+                    : '')).join('　')
           : '')
-      + (b.crossChainExchange ? `　到達した取引所：${b.crossChainExchange.name}（${b.crossChainExchange.address}）` : ''),
+      + (b.crossChainExchange ? `　到達した取引所：${b.crossChainExchange.name}（${b.crossChainExchange.address}）` : '')
+      /* ★どこから先が本件の資金と言えなくなるかを、はっきり書く。 */
+      + ((b.crossChainHops || []).findIndex(h => h.mergedX || h.keptShare != null) >= 0
+          ? `　※${(b.crossChainHops || []).findIndex(h => h.mergedX || h.keptShare != null) + 1}段目から先は`
+            + '他の資金と混ざっているため、ご依頼の資金の行き先とは断定できません。'
+            + '記録としてのつながりは事実なので、伏せずに記載しています。'
+          : ''),
       '渡り先は、ブリッジへの送金に含まれる指定内容から復元しています。'
       + 'ブリッジは通貨を換えて払い出すため、送った額と数字が変わります。'
       + `照会の際は、チェーン名（${t.chainName}）を必ず添えてください。`));
@@ -5556,7 +5609,12 @@ function resultNotes(result) {
 /* 結果に説明文を載せる。何度呼んでも同じになるようにする。 */
 function attachNotes(result) {
   if (!result) return result;
-  for (const p of (result.path || [])) p.notes = nodeNotes(p);
+  for (const p of (result.path || [])) {
+    p.notes = nodeNotes(p);
+    /* ★渡り先の段にも説明を付ける。図に並べているのに説明が無いと、
+       薄まった先まで本件の資金の行き先に見える。 */
+    for (const h of (p.crossChainHops || [])) h.notes = crossHopNotes(h);
+  }
   result.notes = resultNotes(result);
   return result;
 }
