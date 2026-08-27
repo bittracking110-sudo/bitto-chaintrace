@@ -3019,7 +3019,7 @@ function pickNextHop(candidates, amountIn) {
      資金をまとめて運ぶ側は、同じ宛先へ何度も送る。
      1件ずつ見ると紛れるが、宛先ごとに束ねると本命が浮かぶ。 */
   return attachExchangeSiblings(
-    pickByDestinationVolume(candidates, Number.isFinite(amountIn) && amountIn > 0), candidates);
+    pickByDestinationVolume(candidates, Number.isFinite(amountIn) && amountIn > 0, amountIn), candidates);
 }
 
 /* ★同じ地点から取引所へも送られていたら、本線に選ばなくても必ず控える。
@@ -3076,7 +3076,7 @@ function candidatesInWindow(candidates) {
   return win.length ? win : candidates;
 }
 
-function pickByDestinationVolume(candidates, pooled) {
+function pickByDestinationVolume(candidates, pooled, amountIn) {
   const win = candidatesInWindow(candidates);
   /* ★額が0の送金は資金の移動ではない（契約の呼び出し等）。
      数に入れると「2箇所へ分散・最大100%」のような、意味の通らない
@@ -3105,6 +3105,21 @@ function pickByDestinationVolume(candidates, pooled) {
     chosen._pooled = true;
     chosen._poolShare = sum > 0 ? pick.total / sum : null;
     chosen._poolDests = ranked.length;
+    /* ★「金額が一致しない」を全部『合流』と呼んでいたのが誤りだった。
+       実データ（BTC・13段）：0.85→0.70→0.56→0.41→0.27→0.14 と
+       ★減り続けているのに、全地点に「他の資金と合流しています」と出ていた。
+       減っているのは合流ではなく【分割】。資金が小分けにされ、
+       一部だけが先へ進み、残りは別の送金先へ渡っている。
+
+       ★向きが逆のものを同じ言葉で呼ぶと、読み手は事実を取り違える。
+         合流なら「他人の資金が混ざった」、分割なら「残りが他所にある」。
+         被害者にとって意味がまったく違う。 */
+    const out = Number.isFinite(chosen.amount) ? chosen.amount : null;
+    chosen._poolKind = (Number.isFinite(amountIn) && amountIn > 0 && out != null)
+      ? (out > amountIn * 1.000001 ? 'merged' : (out < amountIn * 0.95 ? 'split' : 'merged'))
+      : 'merged';
+    chosen._keptShare = (chosen._poolKind === 'split' && Number.isFinite(amountIn) && amountIn > 0)
+      ? out / amountIn : null;
     /* ★合流地点では1本に絞れない。実測C地点では正解が2位（44.2%）だった。
        上位の宛先を枝として残し、参考経路で全部追う。 */
     chosen._siblings = ranked.filter(g => g !== pick).slice(0, 4).map(g => ({
@@ -3931,6 +3946,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
       /* 合流地点は「同じ資金を追えた」とは言えない。読み手が確度を判断できるよう、
          合流したことと、その先の分かれ方をそのまま伝える。 */
       pooled: !!next._pooled, poolShare: next._poolShare ?? null, poolDests: next._poolDests ?? null,
+      poolKind: next._poolKind || null, keptShare: next._keptShare ?? null,
       /* ★どれだけ薄まったか。入ってきた額に対し、出ていく額が何倍か。
          実測：被害資金 25.83 USDT が入った地点から 64,832 USDT が出ていた（約2,500倍）。
          被害資金はその流れの約1%で、1本を選ぶ根拠は無い。
@@ -5131,13 +5147,25 @@ function nodeNotes(p) {
   const out = [];
   if (p.pooled) {
     const many = p.poolDests > 1;
-    out.push(note('pooled', 'warn', 'ここで他の資金と合流しています',
-      (many ? `この直後、資金は${p.poolDests}箇所に分かれています。` : '')
-      + (many && p.poolShare != null ? `そのうち最も多い送金先が${Math.round(p.poolShare * 100)}%で、この先はそれを追っています。` : '')
-      + '複数の資金がまとまるため、ここから先は同じ資金と言い切れません。',
-      'ただし、この先で到達した取引所は伏せずに記載しています。'
+    const keepSub = 'ただし、この先で到達した取引所は伏せずに記載しています。'
       + '経路が記録として存在することは事実であり、照会の価値があるためです。'
-      + '確度の但し書きとあわせて、警察・弁護士にお伝えください。'));
+      + '確度の但し書きとあわせて、警察・弁護士にお伝えください。';
+    if (p.poolKind === 'split') {
+      /* ★減っている＝合流ではなく分割。残りが別の送金先にある、という事実を伝える。
+         「合流」と書くと、読み手は他人の資金が混ざったと受け取ってしまう。 */
+      const kept = p.keptShare != null ? Math.round(p.keptShare * 100) : null;
+      out.push(note('pooled', 'warn', 'ここで資金が分けられています',
+        (kept != null ? `入ってきた資金のうち約${kept}%がこの先へ進んでいます。` : '')
+        + (many ? `残りは別の送金先（全部で${p.poolDests}箇所）へ渡っています。` : '残りは別へ渡っています。')
+        + 'そのため、ここから先はご依頼の資金の一部だけを追っていることになります。',
+        keepSub));
+    } else {
+      out.push(note('pooled', 'warn', 'ここで他の資金と合流しています',
+        (many ? `この直後、資金は${p.poolDests}箇所に分かれています。` : '')
+        + (many && p.poolShare != null ? `そのうち最も多い送金先が${Math.round(p.poolShare * 100)}%で、この先はそれを追っています。` : '')
+        + '複数の資金がまとまるため、ここから先は同じ資金と言い切れません。',
+        keepSub));
+    }
   }
   if (p.dilutionX) {
     out.push(note('dilution', 'warn', `約${p.dilutionX}倍の流れに合流しています`,
