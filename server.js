@@ -4297,10 +4297,22 @@ function markAfterDilution(path) {
 function collectExchanges(result) {
   markAfterDilution(result && result.path);
   result.exchanges = result.exchanges || [];
+  /* ★被害者が出金した元は、凍結を要請する相手ではない。
+     本線の先頭は除いていたが、★分岐やブリッジ先で見つけた取引所には
+     効いていなかった。資金が元の場所へ戻ることはあるので、
+     アドレスそのもので除く（利用者の指摘・第5-K節）。
+     ※同じ取引所の【別の】アドレスは対象。そこは要請先になりうる。 */
+  const origin = new Set([
+    String(result.sender || '').toLowerCase(),
+    String((result.path || [])[0]?.address || '').toLowerCase(),
+  ].filter(Boolean));
+  const isOrigin = a => origin.has(String(a || '').toLowerCase());
+  result.exchanges = result.exchanges.filter(e => !isOrigin(e.address));
   for (const [i, n] of (result.path || []).entries()) {
     // 先頭は送金元。被害者が出金した取引所であって、凍結を要請する相手ではない
     if (i === 0 || n.role === 'sender') continue;
     if (!n.isExchange || n.isVia || n.isToken || !n.address) continue;
+    if (isOrigin(n.address)) continue;                 // 出金元は要請先ではない
     if (result.exchanges.some(e => (e.address || '').toLowerCase() === n.address.toLowerCase())) continue;
     /* ★薄まった地点より後ろでも、必ず記載する（方針・第5-H節）。
        薄まったことは印として添え、判断は読み手に委ねる。
@@ -4317,7 +4329,7 @@ function collectExchanges(result) {
   for (const [i, n] of (result.path || []).entries()) {
     if (i === 0 || n.role === 'sender') continue;
     for (const e of (n.exchangeNearby || [])) {
-      if (!e.address) continue;
+      if (!e.address || isOrigin(e.address)) continue;   // 出金元は要請先ではない
       if (result.exchanges.some(x => String(x.address || '').toLowerCase() === e.address.toLowerCase())) continue;
       result.exchanges.push({ name: e.label || '取引所（名称未判明）', address: e.address,
         amount: e.amount, sameHop: true });
@@ -4329,7 +4341,7 @@ function collectExchanges(result) {
      どのチェーンのアドレスかを添えないと、要請文が書けない。 */
   for (const n of (result.path || [])) {
     const ex = n.crossChainExchange;
-    if (!ex || !ex.address) continue;
+    if (!ex || !ex.address || isOrigin(ex.address)) continue;   // 出金元は要請先ではない
     if (result.exchanges.some(e => String(e.address || '').toLowerCase() === ex.address.toLowerCase())) continue;
     result.exchanges.push({ name: ex.name, address: ex.address,
       amount: n.bridgeTo?.amount ?? null, chain: n.bridgeTo?.chainName || null, viaBridge: true });
