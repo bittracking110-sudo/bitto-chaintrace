@@ -4454,6 +4454,7 @@ async function investigate(txid, chain, opts = {}) {
      DEX・ブリッジ・トークン契約は着金先ではないので入れない。 */
   ph.mark('情報付け');
   collectExchanges(result);
+  attachNotes(result);
 
   /* ★取引所が出なかったとき、「見つからなかった」で終わらせない。
      詐欺の資金が現金化のため取引所へ届くまでは1週間以内のことが多い
@@ -5109,6 +5110,92 @@ const SERVICE_NOTES = [
    どこか特定の地点から急に始まる話ではない（記録：第4-Z節）。
    前提を書かずに線だけ見せると、確定した事実として読まれる。
    読むのは被害者・弁護士・警察で、これをもとに動く人たち。 */
+/* ══ 説明文はサーバーが書く ══════════════════════════════════
+   ★これまで、判定はサーバー・説明文は画面側、と分かれていた。
+     アプリは画面のコードを中に抱えているので、★説明を直すたびに
+     ストア審査とビルドが要る。実際、今日だけで文言を何度も直しており、
+     アプリ側だけが古い説明のまま取り残されていた。
+
+   ★判定した側が説明を書く。表示する側は受け取ったものを出すだけ。
+     こうすれば、文言の調整にビルドも審査も要らない。
+     判定と説明が離れていると、片方だけ古くなる。
+
+   受け渡しは飾りの無い文だけにする。見た目は表示する側が決める。
+   HTMLを送らないので、貼り付け先で壊れる心配もない。 */
+function note(kind, level, title, text, sub) {
+  return { kind, level, title, text, sub: sub || undefined };
+}
+
+/* 経路の1地点に添える説明。 */
+function nodeNotes(p) {
+  const out = [];
+  if (p.pooled) {
+    const many = p.poolDests > 1;
+    out.push(note('pooled', 'warn', 'ここで他の資金と合流しています',
+      (many ? `この直後、資金は${p.poolDests}箇所に分かれています。` : '')
+      + (many && p.poolShare != null ? `そのうち最も多い送金先が${Math.round(p.poolShare * 100)}%で、この先はそれを追っています。` : '')
+      + '複数の資金がまとまるため、ここから先は同じ資金と言い切れません。',
+      'ただし、この先で到達した取引所は伏せずに記載しています。'
+      + '経路が記録として存在することは事実であり、照会の価値があるためです。'
+      + '確度の但し書きとあわせて、警察・弁護士にお伝えください。'));
+  }
+  if (p.dilutionX) {
+    out.push(note('dilution', 'warn', `約${p.dilutionX}倍の流れに合流しています`,
+      'この先に出てくる送金先は、ご依頼の資金が届いたものとは断定できません。',
+      'ただし経路が記録として存在することは事実なので、伏せずに記載しています。'));
+  }
+  if (p.branchTaken) {
+    out.push(note('branch', 'info', 'この地点では複数の送金先がありました',
+      'それぞれの先を実際にたどり、取引所に到達した方をこの経路として採用しています。',
+      (p.droppedBranch || []).length
+        ? '採用しなかった送金先：' + p.droppedBranch.map(d => (d.label ? d.label + ' ' : '') + d.address).join('／')
+        : undefined));
+  }
+  return out;
+}
+
+/* 調査全体に添える説明。 */
+function resultNotes(result) {
+  const path = result.path || [];
+  const out = [];
+  const stop = path.find(p => p.traceStop);
+  const crowd = stop && (stop.stopReason === 'crowded' || stop.stopReason === 'via');
+  out.push(note('caveat', 'info', 'この経路の読み方',
+    '経路はブロックチェーン上の記録でつながっていますが、最初に送金されたものと'
+    + '同じ資金である保証はありません。暗号資産には印が無く、複数の資金が同じ'
+    + 'アドレスを通ると区別できないためです。これは本調査に限らず、'
+    + 'ブロックチェーン追跡全体の前提です。',
+    crowd ? `とくに ${stop.label || '利用者の多いアドレス'} から先は、多くの人の資金が通る地点を`
+      + '経由しているため確度が下がります。ただしつながり自体は記録に残っているため、'
+      + '判断材料として省かずに記載しています。' : undefined));
+
+  const b = path.find(p => p.bridgeTo);
+  if (b) {
+    const t = b.bridgeTo;
+    out.push(note('bridge', 'good', '別のチェーンへ渡った先が判明しました',
+      `${b.label || 'このコントラクト'}（${t.bridge}）から ${t.chainName} へ渡っています。`
+      + `渡った先のアドレス：${t.address}`
+      + (t.amount != null ? `／渡した額：${String(t.amount).slice(0, 12)} ETH` : '')
+      + (t.arrivedAmount != null ? `／届いた額：${String(t.arrivedAmount).slice(0, 14)} ${t.arrivedToken || ''}` : ''),
+      '渡り先は、ブリッジへの送金に含まれる指定内容から復元しています。'
+      + 'ブリッジは通貨を換えて払い出すため、送った額と数字が変わります。'
+      + `照会の際は、チェーン名（${t.chainName}）を必ず添えてください。`));
+  }
+  if (result.stillMoving) {
+    out.push(note('moving', 'warn', 'まだ資金が動いている最中かもしれません',
+      stillMovingText(result.stillMoving)));
+  }
+  return out;
+}
+
+/* 結果に説明文を載せる。何度呼んでも同じになるようにする。 */
+function attachNotes(result) {
+  if (!result) return result;
+  for (const p of (result.path || [])) p.notes = nodeNotes(p);
+  result.notes = resultNotes(result);
+  return result;
+}
+
 /* ★どうやって見つけた取引所かを、必ず添える。
    これまで「本線で到達した」「同じ地点から分岐して到達した」
    「ブリッジを渡った先で到達した」を区別せず、すべて同じ確度に見せていた。
@@ -6888,6 +6975,7 @@ app.post('/api/admin/generate-report', requireAdmin, express.json(), async (req,
           /* ★情報付けが締切をまたいで終わることがある。返す直前にもう一度
            一覧を作り直す。何度呼んでも同じ結果になる作りにしてある。 */
         collectExchanges(result);
+  attachNotes(result);
         txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
         }
         list.push({ txid, chain, result });
@@ -7707,6 +7795,7 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
             /* ★情報付けが締切をまたいで終わることがある。返す直前にもう一度
            一覧を作り直す。何度呼んでも同じ結果になる作りにしてある。 */
         collectExchanges(result);
+  attachNotes(result);
         txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
           }
           list.push({ txid: item.txid, chain: item.chain, result });
@@ -8248,6 +8337,7 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
         /* ★情報付けが締切をまたいで終わることがある。返す直前にもう一度
            一覧を作り直す。何度呼んでも同じ結果になる作りにしてある。 */
         collectExchanges(result);
+  attachNotes(result);
         txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
       }
       const job = connectionJobs.get(jobId);
