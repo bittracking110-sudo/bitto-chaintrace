@@ -4457,7 +4457,7 @@ async function investigateXRP(txid) {
     { address: tx.Account,     label: senderDb.label, role: 'sender' },
     { address: tx.Destination, label: destLbl, role: 'recipient', isExchange: isDestEx },
   ];
-  const exchanges = isDestEx ? [{ name: destLbl, address: tx.Destination, amount: parseFloat(tx.Amount)/1e6 }] : [];
+  const exchanges = isDestEx ? [{ name: destLbl, address: tx.Destination, amount: xrpAmount(tx.Amount) }] : [];
   if (!isDestEx) {
     /* ★受け取った額を渡す。渡さないと最初の一手が「最初に見つけた1件」になる。 */
     const hops = await traceHops(tx.Destination, tx.date, 'xrp', 10,
@@ -4470,7 +4470,7 @@ async function investigateXRP(txid) {
     }
   }
   return { chain: 'XRP', txid: h, blockTime: tx.date, blockHeight: tx.ledger_index,
-    amount: parseFloat(tx.Amount)/1e6, sender: tx.Account, senderLabel: senderDb.label,
+    amount: xrpAmount(tx.Amount), sender: tx.Account, senderLabel: senderDb.label,
     recipient: tx.Destination, destTag: tx.DestinationTag, path, exchanges };
 }
 
@@ -8639,7 +8639,7 @@ app.get('/api/connection/address/:addr', async (req, res) => {
       const j = await (await fetch(`https://api.xrpscan.com/api/v1/account/${addr}/transactions`)).json();
       txs = (j.transactions || []).slice(0, 10).map(t => ({
         hash: t.hash, from: t.Account, to: t.Destination || '',
-        value: parseFloat(t.Amount) / 1e6 || 0, unit: 'XRP',
+        value: (xrpAmount(t.Amount) || 0), unit: 'XRP',
         time: t.date, direction: t.Account === addr ? 'out' : 'in',
       }));
     } else if (chain === 'btc' && BLOCKCHAIR_KEY) {
