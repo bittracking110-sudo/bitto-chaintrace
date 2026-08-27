@@ -5450,7 +5450,16 @@ function resultNotes(result) {
       `${b.label || 'このコントラクト'}（${t.bridge}）から ${t.chainName} へ渡っています。`
       + `渡った先のアドレス：${t.address}`
       + (t.amount != null ? `／渡した額：${String(t.amount).slice(0, 12)} ETH` : '')
-      + (t.arrivedAmount != null ? `／届いた額：${String(t.arrivedAmount).slice(0, 14)} ${t.arrivedToken || ''}` : ''),
+      + (t.arrivedAmount != null ? `／届いた額：${String(t.arrivedAmount).slice(0, 14)} ${t.arrivedToken || ''}` : '')
+      /* ★渡った先で追えた分も必ず書く。追ったのに見せなければ、
+         被害者にとっては追っていないのと同じ。 */
+      + ((b.crossChainHops || []).length
+          ? `　${t.chainName} 側でさらに ${b.crossChainHops.length} 段たどりました：`
+            + b.crossChainHops.map((h, i) => `${i + 1}. ${h.address}`
+                + (h.label ? `（${h.label}）` : '')
+                + (h.amount != null ? ` ${String(h.amount).slice(0, 12)} ${h.token || ''}` : '')).join('　')
+          : '')
+      + (b.crossChainExchange ? `　到達した取引所：${b.crossChainExchange.name}（${b.crossChainExchange.address}）` : ''),
       '渡り先は、ブリッジへの送金に含まれる指定内容から復元しています。'
       + 'ブリッジは通貨を換えて払い出すため、送った額と数字が変わります。'
       + `照会の際は、チェーン名（${t.chainName}）を必ず添えてください。`));
