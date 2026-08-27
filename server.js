@@ -93,6 +93,17 @@ const lineClient = new line.Client(lineConfig);
 
 // ══ セッション管理 ════════════════════════════════════════════
 // state: idle → waiting_txid → investigating → done
+/* ★入れっぱなしの入れ物は、長く動かすほど増え続けてメモリを食う。
+   落ちれば全員が調査できなくなる。★上限を決めて古いものから捨てる。
+   Map は入れた順を保つので、先頭が最も古い。 */
+function capMap(m, max) {
+  while (m.size > max) m.delete(m.keys().next().value);
+}
+const SESSION_MAX = 2000;    // LINEの利用者ごとの状態。小さい
+const TXID_MAX    = 300;     // 調査結果まるごと。1件が大きい
+const REPORT_MAX  = 60;      // 報告書のHTML全体。★いちばん大きい
+const RATE_MAX    = 5000;    // IP・端末ごとの記録。件数だけ多い
+
 const userSessions    = new Map(); // userId → session
 const txidCache       = new Map();
 /* ★有料レポートで無料の結果を使い回さない。
@@ -735,6 +746,7 @@ async function loadReport(reportId) {
   try {
     const html = await fsp.readFile(path.join(REPORTS_DIR, `${reportId}.html`), 'utf8');
     reportCache.set(reportId, { html }); // メモリにも載せる
+    capMap(reportCache, REPORT_MAX);
     return html;
   } catch { return null; }
 } // token → { sessionId, userId, count, customerName, email, used, createdAt }
@@ -742,12 +754,14 @@ async function loadReport(reportId) {
 function getSession(userId) {
   if (!userSessions.has(userId)) {
     userSessions.set(userId, { state: 'idle', investigatedList: [] });
+    capMap(userSessions, SESSION_MAX);
   }
   return userSessions.get(userId);
 }
 
 function resetSession(userId) {
   userSessions.set(userId, { state: 'idle', investigatedList: [] });
+  capMap(userSessions, SESSION_MAX);
 }
 
 // ══ 取引所ラベルDB ═══════════════════════════════════════════
@@ -3406,6 +3420,7 @@ async function fetchAddressLabel(addr, chain) {
   }
 
   labelFetchCache.set(key, label);
+  capMap(labelFetchCache, 4000);   // 名前は小さいので多めに持てる
   return label;
 }
 
@@ -7279,6 +7294,7 @@ async function runInvestigation(userId, txid, chain) {
     } else {
       result = await investigate(txid, chain);
       txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
+  capMap(txidCache, TXID_MAX);
     }
 
     // 調査結果をリストに追加（重複除外）
@@ -7778,6 +7794,7 @@ app.post('/api/admin/generate-report', requireAdmin, express.json(), async (req,
         collectExchanges(result);
   attachNotes(result);
         txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
+  capMap(txidCache, TXID_MAX);
         }
         list.push({ txid, chain, result });
         console.log(`[Admin] 調査完了: ${txid}`);
@@ -8598,6 +8615,7 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
         collectExchanges(result);
   attachNotes(result);
         txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
+  capMap(txidCache, TXID_MAX);
           }
           list.push({ txid: item.txid, chain: item.chain, result });
         } catch (e) {
@@ -8943,6 +8961,7 @@ async function fulfillConnectionOrder({ txid, customerName, email, count = 1 }) 
   if (!result) {
     result = await investigate(txid, chain, { paid: true });
     txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
+  capMap(txidCache, TXID_MAX);
   }
 
   const list     = [{ txid, chain, result }];
@@ -9140,6 +9159,7 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
         collectExchanges(result);
   attachNotes(result);
         txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
+  capMap(txidCache, TXID_MAX);
       }
       const job = connectionJobs.get(jobId);
       if (job) { job.status = 'done'; job.result = result; }
@@ -9349,6 +9369,7 @@ app.post('/api/connection/consult', express.json(), async (req, res) => {
     const hist = (consultRateMap.get(ip) || []).filter(t => now - t < 3600000);
     if (hist.length >= 30) return res.status(429).json({ error: 'ご相談が混み合っています。しばらくしてから再度お試しください。' });
     hist.push(now); consultRateMap.set(ip, hist);
+    capMap(consultRateMap, RATE_MAX);
 
     const message = (req.body.message || '').trim().slice(0, 2000);
     if (!message) return res.status(400).json({ error: 'メッセージが空です' });
