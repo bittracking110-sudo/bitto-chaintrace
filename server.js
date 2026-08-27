@@ -670,7 +670,10 @@ app.post('/api/pack/pdf', express.json({ limit: '2mb' }), async (req, res) => {
     const name  = `BitTo_shodo_pack_${new Date().toISOString().slice(0, 10)}.pdf`;
     packFiles.set(token, { pdf, name, at: Date.now() });
     console.log(`[Pack] 初動パックPDF ${results.length}件分 / ${Math.round(pdf.length / 1024)}KB`);
-    res.json({ ok: true, url: `/api/pack/file/${token}`, size: pdf.length });
+    /* ★絶対URLで返す。相対パスだとアプリのWebView（https://localhost）が
+       自分自身を指してしまい、開けない（実測：押しても何も起きなかった）。
+       他の口はすべて BASE_URL を付けており、ここだけ揃っていなかった。 */
+    res.json({ ok: true, url: `${BASE_URL}/api/pack/file/${token}`, size: pdf.length });
   } catch (e) {
     console.error('[Pack] PDF生成失敗:', e.message);
     res.status(500).json({ ok: false, reason: 'pdf_failed' });
