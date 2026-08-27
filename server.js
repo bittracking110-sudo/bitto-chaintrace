@@ -2833,7 +2833,13 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
      参考経路で取引所に着いていて、その名前が無いなら、そこに使う方が役に立つ。
      被害者が本当に欲しいのは「どこへ換金されたか」の名前。 */
   const unnamed = refNode?.referenceTrace?.branches?.find(b => b.exchangeUnnamed);
+  /* ★出金元には使わない。参考経路の到達先は普通そこには戻らないが、
+     資金が元の場所へ戻ることはある。枠を使う場所すべてに同じ守りを置く
+     （第5-K節）。★構造上安全でも、改修で壊れたときに気づけない。 */
+  const originAddr0 = String((path || [])[0]?.address || '').toLowerCase();
+  const notOrigin = a => !originAddr0 || String(a || '').toLowerCase() !== originAddr0;
   if (unnamed && MISTTRACK_KEY && misttrackSupports(chain)   // ★対象外に投げない
+      && notOrigin(unnamed.reachedAddress)
       && labelQuotaOk(opts.paid, opts.device)) {
     try {
       labelQuotaUse(opts.device);
@@ -2909,7 +2915,13 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   /* 動作確認では素性の照会も行わない（買った回数を使わない） */
   const pfBudget = isSelfTest(opts.device) ? 0
     : (opts.paid ? MISTTRACK_PROFILE_PAID : MISTTRACK_PROFILE_FREE);
-  const target = (path || [])[1];
+  /* 対象は「最初の送金先」。先頭（＝出金元）は対象にしない。
+     ★構造上そうなっているが、明示しておく。枠を使う場所すべてで
+     同じ守りが読めるようにする（第5-K節）。 */
+  const originAddr1 = String((path || [])[0]?.address || '').toLowerCase();
+  const target0 = (path || [])[1];
+  const target = (target0 && target0.role !== 'sender'
+    && String(target0.address || '').toLowerCase() !== originAddr1) ? target0 : null;
   const knownExchange = target && target.isExchange && target.label && !target.inferred && !target.cpInferred;
   if (pfBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
       && target && target.address && !knownExchange && !target.isVia && !target.isToken) {
@@ -2949,6 +2961,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   ]) {
     if (!(budget > 0) || !MISTTRACK_KEY || !misttrackSupports(chain)) continue;
     if (!target || !target.address || knownExchange || target.isVia || target.isToken) continue;
+    if (String(target.address).toLowerCase() === originAddr1) continue;   // ★出金元には使わない
     const cache = kind === 'action' ? actionCache : overviewCache;
     const known = cache.has(target.address.toLowerCase());
     if (!known && !labelQuotaOk(opts.paid, opts.device)) continue;
@@ -5371,7 +5384,7 @@ async function sendViaResend(to, subject, html, brand) {
   const domainVerified = !/onboarding@resend\.dev/.test(from);
   const bccTarget = SMTP_USER && SMTP_USER !== to ? [SMTP_USER] : undefined;
   const bcc = domainVerified ? bccTarget : undefined;
-  const r = await fetch('https://api.resend.com/emails', {
+  const r = await fetchT('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${RESEND_API_KEY}`,
@@ -6857,7 +6870,7 @@ ${r.txid}
     const PAIRS = { bitcoin: 'btcusd', ethereum: 'ethusd', ripple: 'xrpusd' };
     const loadPrices = async () => {
       try {
-        const res = await fetch(
+        const res = await fetchT(
           'https://api.coingecko.com/api/v3/coins/' + coinId +
           '/market_chart/range?vs_currency=usd&from=' + from + '&to=' + to
         );
@@ -6866,7 +6879,7 @@ ${r.txid}
       } catch (e) { /* Bitstampを試す */ }
       const pair = PAIRS[coinId];
       if (!pair) return null;
-      const res2 = await fetch(
+      const res2 = await fetchT(
         'https://www.bitstamp.net/api/v2/ohlc/' + pair + '/?step=86400&limit=61&start=' + from
       );
       const d2 = await res2.json();
@@ -7539,29 +7552,29 @@ app.get('/api/status', (_req, res) => res.json({
   webhook: `${BASE_URL}/webhook`,
 }));
 app.get('/api/btc/tx/:txid', async (req, res) => {
-  try { res.json(await (await fetch(`https://api.blockchair.com/bitcoin/dashboards/transaction/${req.params.txid}?key=${BLOCKCHAIR_KEY}`)).json()); }
+  try { res.json(await (await fetchT(`https://api.blockchair.com/bitcoin/dashboards/transaction/${req.params.txid}?key=${BLOCKCHAIR_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/btc/address/:addr', async (req, res) => {
-  try { res.json(await (await fetch(`https://api.blockchair.com/bitcoin/dashboards/address/${req.params.addr}?key=${BLOCKCHAIR_KEY}`)).json()); }
+  try { res.json(await (await fetchT(`https://api.blockchair.com/bitcoin/dashboards/address/${req.params.addr}?key=${BLOCKCHAIR_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/eth/tx/:hash', async (req, res) => {
   try { const h = req.params.hash.startsWith('0x') ? req.params.hash : '0x' + req.params.hash;
-    res.json(await (await fetch(`https://api.blockchair.com/ethereum/dashboards/transaction/${h}?key=${BLOCKCHAIR_KEY}`)).json()); }
+    res.json(await (await fetchT(`https://api.blockchair.com/ethereum/dashboards/transaction/${h}?key=${BLOCKCHAIR_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/eth/address/:addr', async (req, res) => {
-  try { res.json(await (await fetch(`https://api.blockchair.com/ethereum/dashboards/address/${req.params.addr}?key=${BLOCKCHAIR_KEY}`)).json()); }
+  try { res.json(await (await fetchT(`https://api.blockchair.com/ethereum/dashboards/address/${req.params.addr}?key=${BLOCKCHAIR_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/eth/txlist/:addr', async (req, res) => {
   try { const { page=1, offset=20, sort='desc' } = req.query;
-    res.json(await (await fetch(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${req.params.addr}&startblock=0&endblock=latest&page=${page}&offset=${offset}&sort=${sort}&apikey=${ETHERSCAN_KEY}`)).json()); }
+    res.json(await (await fetchT(`https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${req.params.addr}&startblock=0&endblock=latest&page=${page}&offset=${offset}&sort=${sort}&apikey=${ETHERSCAN_KEY}`)).json()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/xrp/tx/:txid', async (req, res) => {
-  try { const r = await fetch(`https://api.xrpscan.com/api/v1/tx/${req.params.txid.toUpperCase()}`);
+  try { const r = await fetchT(`https://api.xrpscan.com/api/v1/tx/${req.params.txid.toUpperCase()}`);
     const t = await r.text(); if (t === 'Not found') return res.status(404).json({ error: 'Not found' }); res.json(JSON.parse(t)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -9018,7 +9031,7 @@ app.get('/api/connection/address/:addr', async (req, res) => {
     let txs = [];
     if (chain === 'eth' && ETHERSCAN_KEY) {
       const url = `https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address=${addr}&page=1&offset=10&sort=desc&apikey=${ETHERSCAN_KEY}`;
-      const j = await (await fetch(url)).json();
+      const j = await (await fetchT(url)).json();
       txs = (Array.isArray(j.result) ? j.result : []).map(t => ({
         hash: t.hash, from: t.from, to: t.to,
         value: parseFloat(t.value) / 1e18, unit: 'ETH',
@@ -9026,14 +9039,14 @@ app.get('/api/connection/address/:addr', async (req, res) => {
         direction: t.from.toLowerCase() === addr.toLowerCase() ? 'out' : 'in',
       }));
     } else if (chain === 'xrp') {
-      const j = await (await fetch(`https://api.xrpscan.com/api/v1/account/${addr}/transactions`)).json();
+      const j = await (await fetchT(`https://api.xrpscan.com/api/v1/account/${addr}/transactions`)).json();
       txs = (j.transactions || []).slice(0, 10).map(t => ({
         hash: t.hash, from: t.Account, to: t.Destination || '',
         value: (xrpAmount(t.Amount) || 0), unit: 'XRP',
         time: t.date, direction: t.Account === addr ? 'out' : 'in',
       }));
     } else if (chain === 'btc' && BLOCKCHAIR_KEY) {
-      const j = await (await fetch(`https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}&limit=10`)).json();
+      const j = await (await fetchT(`https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}&limit=10`)).json();
       const hashes = j.data?.[addr]?.transactions || [];
       txs = hashes.slice(0, 10).map(h => ({ hash: h, from: '', to: '', value: null, unit: 'BTC', time: '', direction: '' }));
     }
@@ -9368,7 +9381,7 @@ app.post('/api/connection/iap/verify', express.json(), async (req, res) => {
       return res.status(503).json({ error: 'IAP検証は準備中です（ストアアカウント承認後に有効化）' });
 
     // RevenueCat REST：subscriber 情報を取得
-    const rcRes = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, {
+    const rcRes = await fetchT(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, {
       headers: { Authorization: `Bearer ${REVENUECAT_SECRET_KEY}`, 'Content-Type': 'application/json' },
     });
     if (!rcRes.ok) return res.status(502).json({ error: '購入の確認に失敗しました' });
@@ -9479,7 +9492,7 @@ app.post('/api/bitto/orders/restore', express.json(), async (req, res) => {
     if (!REVENUECAT_SECRET_KEY)
       return res.status(503).json({ error: '購入の復元は準備中です' });
 
-    const rcRes = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, {
+    const rcRes = await fetchT(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, {
       headers: { Authorization: `Bearer ${REVENUECAT_SECRET_KEY}`, 'Content-Type': 'application/json' },
     });
     if (!rcRes.ok) return res.status(502).json({ error: '購入の確認に失敗しました' });
@@ -9532,7 +9545,7 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
     if (!REVENUECAT_SECRET_KEY)
       return res.status(503).json({ error: 'IAP検証は準備中です（ストアアカウント承認後に有効化）' });
 
-    const rcRes = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, {
+    const rcRes = await fetchT(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, {
       headers: { Authorization: `Bearer ${REVENUECAT_SECRET_KEY}`, 'Content-Type': 'application/json' },
     });
     if (!rcRes.ok) return res.status(502).json({ error: '購入の確認に失敗しました' });
