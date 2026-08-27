@@ -747,6 +747,19 @@ function hopName(i, total){
   if (i === total - 1) return `${i}次先`;
   return `${i}次先`;
 }
+/* ★別のチェーンへ渡った先を追えていたら、その続きも図に並べる。
+   追ったのに図に出さなければ、被害者には「そこで途切れた」と見える
+   （実測：XRP→TRONの調査で、渡ったことだけ出て続きが無かった）。 */
+function flowNodes(path){
+  const out = [];
+  (path || []).forEach(n => {
+    out.push(n);
+    const hops = (n.bridgeTo && n.crossChainHops) || [];
+    hops.forEach((h, k) => out.push(
+      Object.assign({}, h, { crossedTo: n.bridgeTo.chainName, crossedIdx: k + 1 })));
+  });
+  return out;
+}
 const HIGH_TX = 1000;   // これ以上の取引回数は「取引所/サービスの可能性」の手がかり（断定はしない）
 const fmtNum = n => Number(n).toLocaleString('ja-JP');
 /* 取引先分析の内訳。着金先アドレスが誰と取引しているかの割合。 */
@@ -807,7 +820,7 @@ function cpHTML(path){
   </div>`;
 }
 function flowHTML(path){
-  const nodes = path;   // 最終到達先まで全て表示（横スクロール）
+  const nodes = flowNodes(path);   // 渡り先の続きも含め、最終到達先まで全て表示
   return `<div class="flow-wrap at-start">
     <div class="flow-hint">
       <span class="fh-txt">横にスワイプすると2次先以降の経路が見られます</span>
@@ -817,7 +830,9 @@ function flowHTML(path){
     <div class="flow">` + nodes.map((n,i) => `
     ${i ? '<div class="arrow">→</div>' : ''}
     <div class="node ${nodeCls(n)}${n.afterStop ? ' after-stop' : ''}">
-      <div class="hop">${esc(hopName(i, nodes.length))}</div>
+      <div class="hop">${n.crossedTo
+        ? esc(n.crossedTo) + ' ' + n.crossedIdx + '次先'
+        : esc(hopName(i, nodes.length))}</div>
       <div class="nm">${exIcon(n)}${esc(n.label || (n.isExchange ? '取引所系ウォレット' : 'ウォレット'))}</div>
       <div class="ad">${esc(shortAddr(n.address))}</div>
       ${n.amount != null ? `<div class="am">${esc(String(n.amount).slice(0,10))}${n.token ? ' ' + esc(n.token) : ''}</div>` : ''}
