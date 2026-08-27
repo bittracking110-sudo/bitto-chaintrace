@@ -2139,13 +2139,23 @@ const BRIDGE_METHODS = {
    ★取得できなかったことと、無いことは違う。
      区別できないまま進むと、誤った結論を静かに出す。
    少し待って1度だけ取り直し、それでも駄目なら「取得できず」と分かる形で返す。 */
+/* ★TRONの取得を断られた記録。調査ごとに0に戻す。
+   断られたことを黙っていると、利用者には「送金がそこで終わった」と見える。
+   実測：この案件はTRON側1段で止まったが、原因は資金の終点ではなく
+   TronGridの 429（回数制限）だった。事実と違う結論を静かに出していた。 */
+let tronDenied = 0;
+function tronDeniedReset() { tronDenied = 0; }
+function tronDeniedCount() { return tronDenied; }
+
 async function tronJson(url) {
   for (let i = 1; i <= 2; i++) {
     try {
       const r = await fetchT(url, { headers: tronHeaders() });
       if (r.ok) return await r.json();
+      if (i === 2) tronDenied++;
       console.warn(`[TronGrid] 応答 ${r.status}${i === 1 ? '。待って取り直します' : '。諦めます'}`);
     } catch (e) {
+      if (i === 2) tronDenied++;
       console.warn(`[TronGrid] 取得失敗: ${e.message}${i === 1 ? '。取り直します' : ''}`);
     }
     if (i === 1) await new Promise(res => setTimeout(res, 1200));
@@ -4254,7 +4264,8 @@ async function investigateBTC(txid) {
      他のチェーン（ETH・TRON・XRP）は先頭に送金元を置いており、
      ★BTCだけが違う形だった。 */
   const senderDb = getLabel(senderAddr);
-  const path = [{ address: senderAddr, label: senderDb.label || '', role: 'sender' }];
+  const path = [{ address: senderAddr, label: senderDb.label || '', role: 'sender',
+                  time: tx.time }];
   const exchanges = [];
   for (const out of outputs) {
     if (changeAddrs.has(out.recipient)) continue;
@@ -4264,7 +4275,8 @@ async function investigateBTC(txid) {
     const isTok = db.type === 'token' || isTokenContract(lbl);
     const isVia = isViaService(lbl);
     const isEx = !isTok && !isVia && (db.type === 'exchange' || isExchange(lbl));
-    path.push({ address: out.recipient, label: lbl, amount: out.value/1e8, isExchange: isEx });
+    path.push({ address: out.recipient, label: lbl, amount: out.value/1e8, isExchange: isEx,
+                time: tx.time });
     if (isEx) exchanges.push({ name: lbl, address: out.recipient, amount: out.value/1e8 });
   }
   // 全ての送金先アドレスからホップ追跡（取引所が見つかっていない送金先のみ）
@@ -4365,8 +4377,8 @@ async function investigateEVM(hash, chain) {
     && (recipDb.type === 'exchange' || isExchange(recipLbl));
 
   const path = [
-    { address: tx.from,  label: senderDb.label || '', role: 'sender' },
-    { address: recipient, label: recipLbl, role: 'recipient',
+    { address: tx.from,  label: senderDb.label || '', role: 'sender', time: timeIso },
+    { address: recipient, label: recipLbl, role: 'recipient', time: timeIso,
       isExchange: isRecipEx, isToken: isRecipToken, amount, token: tokenSymbol || undefined },
   ];
   const exchanges = isRecipEx ? [{ name: recipLbl, address: recipient, amount }] : [];
@@ -4509,9 +4521,14 @@ async function investigateXRP(txid) {
   const destFetchedLabel = await fetchAddressLabel(tx.Destination, 'xrp');
   const destLbl  = destFetchedLabel || destDb.label || tx.destinationName || '';
   const isDestEx = destDb.type === 'exchange' || isExchange(destLbl);
+  /* ★先頭2つにも時刻と金額を入れる。ここが空だと、枝の探索が
+     「いつ・いくら」を知らないまま始まり、その場で行き止まりになる
+     （実測：XRPの調査で1地点だけ見て終わっていた）。
+     画面で1次先だけ金額が出ていなかったのも同じ理由。 */
   const path = [
-    { address: tx.Account,     label: senderDb.label, role: 'sender' },
-    { address: tx.Destination, label: destLbl, role: 'recipient', isExchange: isDestEx },
+    { address: tx.Account, label: senderDb.label, role: 'sender', time: tx.date },
+    { address: tx.Destination, label: destLbl, role: 'recipient', isExchange: isDestEx,
+      time: tx.date, amount: xrpAmount(tx.Amount) },
   ];
   const exchanges = isDestEx ? [{ name: destLbl, address: tx.Destination, amount: xrpAmount(tx.Amount) }] : [];
   if (!isDestEx) {
@@ -4539,10 +4556,12 @@ async function investigateTRON(txid) {
   const destDb   = getLabel(t.to);
   const destLbl  = (await fetchAddressLabel(t.to, 'tron')) || destDb.label || '';
   const isDestEx = destDb.type === 'exchange' || isExchange(destLbl);
+  const tTime = new Date(t.time).toISOString();     // ★枝の探索の起点に渡す
   const path = [
-    { address: t.from, label: senderDb.label || tronTags.get(t.from) || '', role: 'sender' },
+    { address: t.from, label: senderDb.label || tronTags.get(t.from) || '', role: 'sender',
+      time: tTime },
     { address: t.to, label: destLbl, role: 'recipient', isExchange: isDestEx,
-      amount: t.amount, token: t.token || undefined },
+      amount: t.amount, token: t.token || undefined, time: tTime },
   ];
   const exchanges = isDestEx ? [{ name: destLbl, address: t.to, amount: t.amount }] : [];
   if (!isDestEx) {
@@ -4657,6 +4676,7 @@ async function investigate(txid, chain, opts = {}) {
      ★時間切れは何も出せない＝間違った答えより悪い。
      残り時間から後段の予算を削って、必ず内側で終える。 */
   const hardDeadline = Date.now() + investigateSoftMs(opts.paid);
+  tronDeniedReset();                 // ★この調査でTRONに断られた回数を数え直す
   const ph = mkPhases(txid);
   let result;
   if (chain === 'btc') {
@@ -4736,6 +4756,7 @@ async function investigate(txid, chain, opts = {}) {
      画面の見出しや報告書の凍結要請先が出てこない。
      DEX・ブリッジ・トークン契約は着金先ではないので入れない。 */
   ph.mark('情報付け');
+  result.tronDenied = tronDeniedCount();   // ★断られた回数を説明に載せるため
   collectExchanges(result);
   attachNotes(result);
 
@@ -5479,6 +5500,14 @@ function resultNotes(result) {
       + '経由しているため確度が下がります。ただしつながり自体は記録に残っているため、'
       + '判断材料として省かずに記載しています。' : undefined));
 
+  /* ★TRONの取得を断られたなら、そう書く。黙っていると
+     「そこで送金が終わった」と読まれ、事実と違う結論になる。 */
+  if (result.tronDenied > 0) {
+    out.push(note('tron-limit', 'warn', 'TRONの照会が制限され、追跡を最後まで行えていません',
+      `TRONの取引履歴の取得を ${result.tronDenied} 回断られました（回数制限）。`
+      + 'この先に送金が無かったのではなく、確認できなかったという意味です。',
+      '時間をおいて再度お試しいただくと、続きをたどれる場合があります。'));
+  }
   const b = path.find(p => p.bridgeTo);
   if (b) {
     const t = b.bridgeTo;
@@ -9327,6 +9356,12 @@ app.listen(PORT, () => {
   console.log(`\n✅ BitTo サーバー起動完了`);
   console.log(`🌐 http://localhost:${PORT}`);
   console.log(`📡 LINE Webhook: ${BASE_URL}/webhook`);
+  /* ★追跡そのものに使う鍵を先に出す。TronGridの鍵が無いと回数制限（429）で
+     TRON側の追跡が途中で止まり、利用者には「そこで送金が終わった」と見える。
+     実測：XRP→TRONの案件で、資金の終点ではなく制限で止まっていた。 */
+  console.log(`🔑 Etherscan  : ${ETHERSCAN_KEY ? '✓' : '⚠ 未設定（EVMの追跡が止まります）'}`);
+  console.log(`🔑 TronGrid   : ${TRON_KEY ? '✓' : '⚠ 未設定（TRONの追跡が制限で止まります）'}`);
+  console.log(`🔑 MistTrack  : ${MISTTRACK_KEY ? '✓' : '⚠ 未設定（取引所名が引けません）'}`);
   console.log(`🔑 Blockchair : ${BLOCKCHAIR_KEY ? '✓' : '⚠ 未設定'}`);
   console.log(`🔑 LINE       : ${LINE_CHANNEL_ACCESS_TOKEN ? '✓' : '⚠ 未設定'}`);
   console.log(`🔑 Stripe     : ${stripe ? '✓ 本番モード' : '⚠ テストモード（決済スキップ）'}`);
