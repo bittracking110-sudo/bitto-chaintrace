@@ -3990,7 +3990,15 @@ async function investigateBTC(txid) {
   const outputs = data.outputs || [];
   const senderAddr = inputs[0]?.recipient || '不明';
   const changeAddrs = new Set(inputs.map(i => i.recipient));
-  const path = [];
+  /* ★送金元を経路の先頭に置く。
+     これが無いと、報告書は経路の1件目を「送金元」として表示するので、
+     ★受取先が送金元として出て、以降が丸ごと1段ずれる（利用者の指摘・第5-K節）。
+     実測：送金元 bc1qnsupj8… が経路から消え、受取先 bc1q3grc4… が
+     「送金元」と表示されていた。
+     他のチェーン（ETH・TRON・XRP）は先頭に送金元を置いており、
+     ★BTCだけが違う形だった。 */
+  const senderDb = getLabel(senderAddr);
+  const path = [{ address: senderAddr, label: senderDb.label || '', role: 'sender' }];
   const exchanges = [];
   for (const out of outputs) {
     if (changeAddrs.has(out.recipient)) continue;
@@ -4005,7 +4013,8 @@ async function investigateBTC(txid) {
   }
   // 全ての送金先アドレスからホップ追跡（取引所が見つかっていない送金先のみ）
   // ※ 安全のため最大10件（一括送金TXでの過負荷防止）
-  const nonExPaths = path.filter(p => !p.isExchange);
+  /* 先頭は送金元。そこから追ってはいけない（自分の出金元を追うことになる） */
+  const nonExPaths = path.filter(p => !p.isExchange && p.role !== 'sender');
   const btcDeadline = Date.now() + TRACE_BUDGET_MS;   // 全送金先の追跡を合計でこの時間内に収める
   for (const startNode of nonExPaths.slice(0, 10)) {
     if (Date.now() > btcDeadline) break;
