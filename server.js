@@ -1243,7 +1243,12 @@ function misttrackSupports(chain) { return !!MISTTRACK_COIN[chain]; }
    verified が付いているものは、ドメイン所有の確認が済んだアカウント。 */
 function xrpAccountName(j) {
   const a = (j && j.accountName) || {};
-  const name = (a.name || a.username || j.username || '').trim();
+  /* ★accountName は XRPScan 側が確認して登録した情報。実測でどれも
+     domain と twitter が付いている（Binance・Bitstamp・bitFlyer）。
+     ★一方、最上位の username は本人が名乗っただけの値で、誰でも設定できる。
+     これを取引所名として扱うと、詐欺師が「Binance」と名乗るだけで
+     凍結要請の宛先に化ける。名乗っただけの名前は採らない。 */
+  const name = (a.name || a.username || '').trim();
   return name;
 }
 
