@@ -520,7 +520,14 @@ function packRowsHTML(results) {
   return rs.map(r => {
     const p    = Array.isArray(r.path) ? r.path : [];
     const dest = p.length ? p[p.length - 1] : null;
-    const ex   = [...new Set(p.filter(n => n.isExchange && n.label).map(n => n.label))];
+    /* ★先頭は送金元。被害者自身が出金した取引所であって、到達先ではない。
+       ここを除いていなかったため、警察・取引所へ出す書類に
+       被害者自身の取引所が「到達取引所」として載っていた
+       （実測：初動パックに bitFlyer（推定）と出ていた）。
+       ★凍結要請先の一覧では除いていたが、この書類だけ揃っていなかった。 */
+    const ex   = [...new Set(p
+      .filter((n, i) => i > 0 && n.role !== 'sender' && n.isExchange && n.label)
+      .map(n => n.label))];
     const amt  = r.tokenSymbol ? `${r.tokenAmount} ${r.tokenSymbol}`
                                : `${r.amount != null ? r.amount : ''} ${r.chain || ''}`;
     return `<tr><td>${escHtml(r.chain || '')}</td><td class="mono">${escHtml(r.txid || '')}</td>`
