@@ -5469,7 +5469,8 @@ td{padding:8px 10px;border:1px solid #e2e8f0;font-size:0.85rem}
 ■ 料金
 ・送金経路・取引所特定：無料
 ・詳細調査レポート 1TXID：¥${BITTO_PRICE.toLocaleString()}（税込）
-・複数TXIDは件数 × ¥${BITTO_PRICE.toLocaleString()}
+・複数TXIDのまとめ購入もご用意しています
+・アプリ内でご購入の場合は、App Store / Google Play に表示された価格が適用されます
 
 ■ 返金について
 本サービスはデジタル調査コンテンツの提供のため、調査開始後の返金はいたしかねます。
@@ -9399,7 +9400,14 @@ app.post('/api/connection/iap/verify', express.json(), async (req, res) => {
       for (const t of (nonSubs[pid] || [])) {
         const tid = t.store_transaction_id || t.id;
         if (!tid || consumedIapTx.has(tid)) continue;
-        txList.push({ pid, tid, ms: Date.parse(t.purchase_date || '') || 0, sandbox: !!t.is_sandbox });
+        /* ★実際に支払われた額を、検証済みの応答から拾う。
+           App Store の価格は決められた価格帯からしか選べないため、
+           まとめ買いは「1件の値段×件数」ちょうどにはならない
+           （実例：10件が¥66,000ではなく¥60,000）。
+           掛け算で記録すると、売上の集計が実際と食い違う。 */
+        txList.push({ pid, tid, ms: Date.parse(t.purchase_date || '') || 0, sandbox: !!t.is_sandbox,
+                      paid: Number(t.price_in_purchased_currency) || null,
+                      cur: t.currency || 'JPY' });
       }
     }
     txList.sort((a, b) => b.ms - a.ms);
@@ -9566,7 +9574,14 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
       for (const t of (nonSubs[pid] || [])) {
         const tid = t.store_transaction_id || t.id;
         if (!tid || consumedIapTx.has(tid)) continue;
-        txList.push({ pid, tid, ms: Date.parse(t.purchase_date || '') || 0, sandbox: !!t.is_sandbox });
+        /* ★実際に支払われた額を、検証済みの応答から拾う。
+           App Store の価格は決められた価格帯からしか選べないため、
+           まとめ買いは「1件の値段×件数」ちょうどにはならない
+           （実例：10件が¥66,000ではなく¥60,000）。
+           掛け算で記録すると、売上の集計が実際と食い違う。 */
+        txList.push({ pid, tid, ms: Date.parse(t.purchase_date || '') || 0, sandbox: !!t.is_sandbox,
+                      paid: Number(t.price_in_purchased_currency) || null,
+                      cur: t.currency || 'JPY' });
       }
     }
     txList.sort((a, b) => b.ms - a.ms);
@@ -9589,6 +9604,13 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
         chosen.push(tx); units += bittoUnitsOf(tx.pid);
       }
     }
+
+    /* ★売上として記録する金額。実際に支払われた額の合計を使う。
+       取れなかったときだけ、1件の値段×件数に戻す（記録が空になるよりはよい）。
+       ※これは社内の記録用。件数の付与は上のRevenueCat検証で決まっており、
+         この金額で権利が変わることはない。 */
+    const paidSum = chosen.reduce((a, t) => a + (t.paid || 0), 0);
+    const paidTotal = paidSum > 0 ? Math.round(paidSum) : BITTO_PRICE * n;
     if (!chosen.length) return res.status(402).json({ error: '有効な購入が確認できませんでした' });
 
     chosen.forEach(tx => consumedIapTx.add(tx.tid));
@@ -9615,7 +9637,7 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
     const submittedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
     appendToSheet([
       submittedAt, name || '', phone || '', email, '', String(n),
-      String(BITTO_PRICE * n), sessionId, '', '申込済み(BitTo/IAP)',
+      String(paidTotal), sessionId, '', '申込済み(BitTo/IAP)',
     ]).catch(console.error);
 
     // 申込確認・利用規約同意メール
