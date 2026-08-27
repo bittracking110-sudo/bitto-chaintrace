@@ -3165,6 +3165,10 @@ const TRONSCAN  = 'https://apilist.tronscanapi.com';
 const TRONSCAN_NAME_TIMEOUT_MS = 2500;   // 名前の照会は短く見切る（全体を止めない）
 /* キー無しでも動く。入れると回数制限が緩む（TronGrid・TronScan共通の書式）。 */
 const TRON_KEY  = process.env.TRON_API_KEY || '';
+/* ★XRPの取引所名は xrpscan 1社に頼っている。そこが落ちた日は
+   XRPの取引所名が丸ごと出せなくなる。Bithomp を二重化として使う。
+   無料枠は1日2,000件・毎分10件。鍵が無ければ何もしない（休眠）。 */
+const BITHOMP_KEY = process.env.BITHOMP_API_KEY || '';
 const tronHeaders = () => (TRON_KEY ? { 'TRON-PRO-API-KEY': TRON_KEY } : {});
 const isTronAddr = a => /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(String(a || ''));
 
@@ -3368,6 +3372,7 @@ async function fetchAddressLabel(addr, chain) {
     } catch (e) { /* 取れなくても追跡は続ける */ }
   }
 
+
   // ⑤ XRPScan アカウント名（XRP のみ）
   if (!label && chain === 'xrp') {
     try {
@@ -3379,6 +3384,25 @@ async function fetchAddressLabel(addr, chain) {
         console.log(`[ExLabel] XRPScanラベル: ${addr.slice(0,10)}... → "${xrpName}"`);
       }
     } catch {}
+  }
+
+  /* ⑤' ★Bithomp（XRPのみ・鍵があるときだけ）。
+     XRPScan で名前が出なかったときの二重化。鍵が無ければ黙って飛ばす。
+     ★1社が落ちた日に「取引所が見つかりません」と出すより、
+     もう一方に聞く方が被害者の役に立つ。 */
+  if (!label && chain === 'xrp' && BITHOMP_KEY) {
+    try {
+      const r = await fetchT(`https://bithomp.com/api/v2/address/${encodeURIComponent(addr)}?service=true`,
+        { headers: { 'x-bithomp-token': BITHOMP_KEY } }, 2500);
+      if (r.ok) {
+        const j = await r.json();
+        const nm = String((j && j.service && j.service.name) || (j && j.username) || '').trim();
+        if (nm) {
+          label = nm;
+          console.log(`[ExLabel] Bithomp: ${addr.slice(0,10)}... → "${nm}"`);
+        }
+      }
+    } catch (e) { /* 取れなくても追跡は続ける */ }
   }
 
   labelFetchCache.set(key, label);
@@ -3399,7 +3423,77 @@ function normalizeTimeStr(t) {
    以前はその最大の出力を選んでいたので、★釣り銭＝犯人の同じ財布に
    戻る側を「次の送金先」として追っていた可能性がある。
    （ETHで直したのと同じ誤り。第4-S節。BTCには入っていなかった） */
+/* ★BTCの送金一覧を、鍵の要らない相手から取る。
+   Blockchair は住所1回＋取引8回の計9回を叩き、実測で失敗率が高い
+   （診断画面で7回中4回失敗・最長6.0秒）。
+   mempool.space は1回で50件を入出力ごと返す。鍵も要らない。
+   ★1社に依存していると、そこが落ちた日はBTCの追跡が丸ごと止まる。 */
+const MEMPOOL_API = 'https://mempool.space/api';
+const MEMPOOL_PAGES = 2;                        // 1回50件。2回で100件まで遡る
+function btcShape(list) {
+  /* Blockchair と同じ形に揃える。呼び出し側の規則を変えないため。 */
+  return list.map(t => ({
+    hash: t.txid,
+    time: t.status?.block_time ? new Date(t.status.block_time * 1000).toISOString() : null,
+    inputs:  (t.vin  || []).map(v => ({ recipient: v.prevout?.scriptpubkey_address || null })),
+    outputs: (t.vout || []).map(o => ({ recipient: o.scriptpubkey_address || null, value: o.value })),
+  })).filter(t => t.time);                      // 未確定は追跡に使わない
+}
+async function btcTxsFromMempool(addr) {
+  const out = [];
+  let last = null;
+  /* ★1回50件では足りないアドレスが実在する（実測：正解の送金が
+     75件遡っても現れなかった）。少しだけ続きを取る。
+     ★それでも見つからなければ、呼び出し側が Blockchair に切り替える。 */
+  for (let page = 0; page < MEMPOOL_PAGES; page++) {
+    const u = last
+      ? `${MEMPOOL_API}/address/${encodeURIComponent(addr)}/txs/chain/${last}`
+      : `${MEMPOOL_API}/address/${encodeURIComponent(addr)}/txs`;
+    const r = await fetchT(u, {}, 6000);
+    if (!r.ok) return out.length ? btcShape(out) : null;   // ★取得できず。無いこととは区別する
+    const j = await r.json();
+    if (!Array.isArray(j) || !j.length) break;
+    out.push(...j);
+    last = j[j.length - 1].txid;
+    if (j.length < 25) break;                   // これ以上は無い
+  }
+  return out.length ? btcShape(out) : null;
+}
+
 async function getNextTxBTC(addr, afterTime, amountIn) {
+  const refMs0 = new Date(normalizeTimeStr(afterTime)).getTime();
+  /* まず mempool.space。1回で足りるので速く、鍵も要らない。 */
+  try {
+    const txs = await btcTxsFromMempool(addr);
+    if (txs && txs.length) {
+      const cands = [];
+      for (const t of txs) {
+        if (!t.inputs.some(i => i.recipient === addr)) continue;   // 出ていく送金だけ
+        const txMs = new Date(t.time).getTime();
+        if (txMs < refMs0 - 3600000) continue;
+        /* ★釣り銭は「追跡中のアドレス自身へ戻る出力」だけ除く（第5-B節）。
+           広げると集約ウォレットで正解ごと消える。規則は Blockchair 側と同じ。 */
+        for (const o of t.outputs) {
+          if (!o.recipient || o.recipient === addr) continue;
+          const lbl = getLabel(o.recipient).label || '';
+          cands.push({
+            addr: o.recipient, amount: o.value / 1e8, time: t.time,
+            txHash: t.hash, label: lbl, txMs,
+            isExchange: isExchange(lbl) && !isViaService(lbl) && !isTokenContract(lbl),
+          });
+        }
+      }
+      if (cands.length) {
+        const chosen = pickNextHop(cands, amountIn);
+        chosen._siblings = chosen._siblings || cands.filter(c => c !== chosen).slice(0, 4);
+        console.log(`[HOP] BTC送金先: ${chosen.addr} ${chosen.amount} BTC 候補${cands.length}件`
+          + `${chosen._matched ? ' ★入金額と一致' : ''}${chosen._pooled ? ' ★合流' : ''}（mempool）`);
+        return chosen;
+      }
+    }
+  } catch (e) { console.warn('[BTC] mempool.space が応答せず、Blockchairで試します:', e.message); }
+
+  /* 取れなければ Blockchair。鍵が要るぶん確実性は高いが、遅く失敗も多い。 */
   try {
     const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
     const j = await apiJson(url);
