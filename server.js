@@ -2174,6 +2174,48 @@ function noteUnknownBridge(methodId, contract, txHash, label) {
   console.log(`[ブリッジ] 未対応の呼び出し ${methodId}（${label || contract}）通算${r.件数}件`);
 }
 
+/* ★XRPのブリッジは、渡り先をメモ欄にそのまま書いている。
+   実データ（利用者提供・XRP→TRON）：
+     {"toToken":"USDT(TRON)|…","destination":"TWgKiwJt1aCwy…", …}
+   EVMは呼び出しデータ、XRPはメモ欄。★置き場所が違うだけで、
+   「渡り先は送金する側が指定する」という点は同じ。
+   だから読める。外部サービスは要らない。
+
+   ★確かめた形以外は名乗らない。鍵の名前はブリッジごとに違うので、
+     よくあるものだけを見て、住所の形をしていなければ採用しない。 */
+const MEMO_DEST_KEYS = ['destination', 'receiver', 'recipient', 'toAddress', 'to'];
+
+function decodeBridgeMemo(memos) {
+  for (const m of (memos || [])) {
+    let raw = m?.Memo?.MemoData ?? m?.MemoData ?? '';
+    if (typeof raw !== 'string' || !raw) continue;
+    /* 記録上は16進のことがある。読めるなら文字に直す。 */
+    if (/^[0-9A-Fa-f]+$/.test(raw) && raw.length % 2 === 0 && raw.length > 20) {
+      try { raw = Buffer.from(raw, 'hex').toString('utf8'); } catch { /* そのまま使う */ }
+    }
+    let j = null;
+    try { j = JSON.parse(raw); } catch { continue; }
+    if (!j || typeof j !== 'object') continue;
+    let dest = null;
+    for (const k of MEMO_DEST_KEYS) {
+      if (typeof j[k] === 'string' && looksLikeAddress(j[k])) { dest = j[k]; break; }
+    }
+    if (!dest) continue;
+    /* 渡り先チェーンは、アドレスの形から決める。
+       通貨名の表記（"USDT(TRON)|…"）はブリッジごとに違うので当てにしない。 */
+    let chain = null;
+    if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(dest)) chain = 'tron';
+    else if (/^0x[0-9a-fA-F]{40}$/.test(dest))    chain = 'eth';
+    else if (/^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(dest)) chain = 'xrp';
+    if (!chain) continue;
+    const label = { tron: 'TRON', eth: 'Ethereum', xrp: 'XRP' }[chain];
+    return { address: dest, chainKey: chain, chainName: label,
+             bridge: 'ブリッジ（メモ欄の指定）',
+             token: typeof j.toToken === 'string' ? j.toToken.split('|')[0] : undefined };
+  }
+  return null;
+}
+
 function decodeBridgeCall(input) {
   const s = String(input || '').toLowerCase();
   const spec = BRIDGE_METHODS[s.slice(0, 10)];
@@ -2399,6 +2441,45 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   /* ★ブリッジで別のチェーンへ渡っていたら、その渡り先を取引から読む。
      読めたら、そのチェーンで追跡を続ける。
      これまでは「ここから先は追えません」で終わっていた地点（第5-C節）。 */
+  /* ★XRPのブリッジは、渡り先をメモ欄に書いている。
+     置き場所が違うだけで「渡り先は送金する側が指定する」点は同じ。
+     実データ（利用者提供・XRP→TRON）でメモから読めることを確認した。 */
+  if (chain === 'xrp') {
+    for (const n of path) {
+      if (!n.txHash || n.bridgeTo) continue;
+      if (budgetLeft(opts, 20000) < 5000) break;
+      try {
+        const r = await fetchT(`https://api.xrpscan.com/api/v1/tx/${n.txHash}`);
+        if (!r.ok) continue;
+        const t = await r.json();
+        const info = decodeBridgeMemo(t.Memos);
+        if (!info) continue;
+        n.bridgeTo = { bridge: info.bridge, chainId: null, chainName: info.chainName,
+                       address: info.address, amount: n.amount ?? null,
+                       arrivedToken: info.token || null };
+        console.log(`[ブリッジ] メモ欄から渡り先: ${info.chainName} の ${info.address}`);
+        /* 渡り先がTRONなら、そのまま追い続ける。 */
+        if (info.chainKey === 'tron') {
+          const fromMs = new Date(normalizeTimeStr(n.time || Date.now())).getTime();
+          const arr = await getBridgeArrivalTRON(info.address, Number.isFinite(fromMs) ? fromMs : Date.now());
+          if (arr) { n.bridgeTo.arrivedAmount = arr.amount; n.bridgeTo.arrivedToken = arr.token; }
+          const tHops = await traceHops(info.address, arr?.time || n.time || new Date().toISOString(),
+            'tron', 8, Date.now() + budgetLeft(opts, CROSSCHAIN_BUDGET_MS), null, arr?.amount ?? null)
+            .catch(() => []);
+          if (tHops.length) {
+            n.crossChainHops = tHops.map(h => ({
+              address: h.address, label: h.label || '', amount: h.amount, token: h.token,
+              isExchange: h.isExchange, isVia: h.isVia, time: h.time, txHash: h.txHash,
+              pooled: !!h.pooled, poolDests: h.poolDests ?? null }));
+            const ex = tHops.find(h => h.isExchange && !h.isVia && !h.isToken);
+            if (ex) n.crossChainExchange = { name: ex.label || '取引所（名称未判明）', address: ex.address };
+          }
+        }
+        break;
+      } catch (e) { console.error('[ブリッジ] メモ欄の読み取りに失敗:', e.message); }
+    }
+  }
+
   if (isEVM(chain)) {
     for (const n of path) {
       if (!n.txHash || n.bridgeTo) continue;
