@@ -3801,6 +3801,10 @@ async function getNextTxXRP(addr, afterTime, amountIn) {
       cands.push({
         addr: tx.Destination, amount: amt, time: new Date(row.ms).toISOString(),
         txHash: row.hash, label: lbl, txMs: row.ms,
+        /* ★XRPの取引所は「1つのアドレス＋宛先タグ」で利用者を区別する。
+           タグが無いと、取引所名が分かっても誰の口座か特定できず、
+           凍結要請が出せない。取引所に着いた地点ほど要る情報。 */
+        destTag: tx.DestinationTag ?? null,
         token: (tx.Amount && typeof tx.Amount === 'object') ? tx.Amount.currency : undefined,
         isExchange: isExchange(lbl) && !isViaService(lbl) && !isTokenContract(lbl),
       });
@@ -4381,6 +4385,7 @@ async function traceHops(startAddr, startTime, chain, maxHops = 10, deadline = D
     console.log(`[traceHops] ホップ${i+1}: ${next.addr.slice(0,10)}... label="${lbl}" exchange=${isEx} siblings=${siblings.length}`);
     hops.push({ address: next.addr, label: lbl, amount: next.amount,
       token: next.token || (token ? token.symbol : undefined),
+      destTag: next.destTag ?? null,          // ★XRPの口座を特定する番号
       isExchange: isEx, isToken: isTok, isVia, sameTx: !!next._sameTx,
       time: next.time, txHash: next.txHash, siblings,
       /* 合流地点は「同じ資金を追えた」とは言えない。読み手が確度を判断できるよう、
@@ -4793,6 +4798,7 @@ function collectExchanges(result) {
        ★伏せると被害者は手がかりを失うだけで、良いことは何も無い。 */
     result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address,
       amount: n.amount, afterDilution: n.afterDilution || null,
+      destTag: n.destTag ?? null,             // ★これが無いと取引所は口座を特定できない
       share: n.exploredShare ?? null, hops: n.exploredHops ?? null,
       explored: n.role === 'explored' || undefined });
   }
@@ -5621,6 +5627,14 @@ function note(kind, level, title, text, sub) {
 /* 経路の1地点に添える説明。 */
 function nodeNotes(p) {
   const out = [];
+  /* ★XRPの取引所は「1つのアドレス＋宛先タグ」で利用者を区別する。
+     取引所名が分かっても、タグが無ければ誰の口座か特定できず凍結要請が出せない。
+     ★逆に、タグがあれば要請文にそのまま書ける。いちばん実務的な情報。 */
+  if (p.destTag != null && p.isExchange) {
+    out.push(note('desttag', 'good', `宛先タグ：${p.destTag}`,
+      'XRPの取引所は、1つのアドレスを全利用者で共有し、この番号で口座を区別します。',
+      '凍結要請には、アドレスとこの番号を必ず併記してください。番号が無いと口座を特定できません。'));
+  }
   if (p.pooled) {
     const many = p.poolDests > 1;
     const keepSub = 'ただし、この先で到達した取引所は伏せずに記載しています。'

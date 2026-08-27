@@ -144,6 +144,8 @@
   /* 横スクロールできると伝わらず2次先以降を見逃されるため、
      案内文・現在地・端のぼかし・送りボタンを添えている */
   .flow-wrap{position:relative}
+.node .dtag{display:inline-block;margin:3px 0 1px;padding:2px 7px;border-radius:5px;
+  background:#1d3b5c;color:#bcd9ff;font-size:11px;font-weight:600}
 .node .exact{display:inline-block;margin:4px 0 2px;padding:2px 7px;border-radius:5px;
   background:#3DDC97;color:#08221a;font-size:11px;font-weight:700;letter-spacing:.02em}
   .flow-hint{display:flex;align-items:center;justify-content:space-between;gap:8px;
@@ -841,6 +843,7 @@ function flowHTML(path){
       <div class="nm">${exIcon(n)}${esc(n.label || (n.isExchange ? '取引所系ウォレット' : 'ウォレット'))}</div>
       <div class="ad">${esc(shortAddr(n.address))}</div>
       ${n.amount != null ? `<div class="am">${esc(String(n.amount).slice(0,10))}${n.token ? ' ' + esc(n.token) : ''}</div>` : ''}
+      ${n.destTag != null ? `<div class="dtag">宛先タグ ${esc(String(n.destTag))}</div>` : ''}
       ${Number.isFinite(n.txCount) ? `<div class="meta${n.txCount >= HIGH_TX ? ' hi' : ''}">取引 ${fmtNum(n.txCount)}回</div>` : ''}
       ${nodeBadge(n)}
       ${nodeNotesHTML(n.notes)}
