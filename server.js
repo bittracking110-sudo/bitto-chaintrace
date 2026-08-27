@@ -2754,7 +2754,11 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
           if (isExchange(info.bcLabel)) last.isExchange = true;
         }
       }
-      if (!last.label && MISTTRACK_KEY) {
+      /* ★経路が短いと last が送金元そのものになる。
+         被害者が出金した元に名前を引いても、凍結の宛先にはならない。
+         ★無料は1件あたり1回しか引けないので、ここで使うと到達先に残らない。 */
+      const lastIsSender = !last || last.role === 'sender' || last === path[0];
+      if (!last.label && MISTTRACK_KEY && !lastIsSender) {
         const known = labelCache.has(last.address.toLowerCase());
         if (known || (apiLookups < lookupBudget && labelQuotaOk(opts.paid, opts.device))) {
           if (!known) { apiLookups++; labelQuotaUse(opts.device); }
@@ -2841,7 +2845,8 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   const cpBudget = opts.paid ? MISTTRACK_CP_PAID : MISTTRACK_CP_FREE;
   const named = last && last.isExchange && last.label && !last.inferred;
   if (cpBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
-      && last && last.address && !named && !last.isVia && !last.isToken) {
+      && last && last.address && !named && !last.isVia && !last.isToken
+      && last.role !== 'sender' && last !== path[0]) {   // ★出金元には使わない
     const known = cpCache.has(last.address.toLowerCase());
     if (known || labelQuotaOk(opts.paid, opts.device)) {
       if (!known) labelQuotaUse(opts.device);
