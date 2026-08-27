@@ -144,6 +144,8 @@
   /* 横スクロールできると伝わらず2次先以降を見逃されるため、
      案内文・現在地・端のぼかし・送りボタンを添えている */
   .flow-wrap{position:relative}
+.node .exact{display:inline-block;margin:4px 0 2px;padding:2px 7px;border-radius:5px;
+  background:#3DDC97;color:#08221a;font-size:11px;font-weight:700;letter-spacing:.02em}
   .flow-hint{display:flex;align-items:center;justify-content:space-between;gap:8px;
     margin-bottom:7px;font-size:10.5px;color:var(--sub2)}
   .fh-txt{display:flex;align-items:center;gap:5px}
@@ -819,6 +821,8 @@ function cpHTML(path){
     <div class="note" style="margin-top:8px">このアドレスが実際にやり取りしている相手の割合です。取引所の入金用アドレスは名前が登録されていないことが多いため、取引先から着金先を推定しています。<b>確定ではありません。</b></div>
   </div>`;
 }
+/* ★「ここまでは金額が一致している」＝ご依頼の資金だと言い切れる地点。
+   凍結要請・被害届でまず示すべき地点なので、枠の中で目立たせる。 */
 function flowHTML(path){
   const nodes = flowNodes(path);   // 渡り先の続きも含め、最終到達先まで全て表示
   return `<div class="flow-wrap at-start">
@@ -833,6 +837,7 @@ function flowHTML(path){
       <div class="hop">${n.crossedTo
         ? esc(n.crossedTo) + ' ' + n.crossedIdx + '次先'
         : esc(hopName(i, nodes.length))}</div>
+      ${n.amountExactUpToHere ? '<div class="exact">金額が一致する最終地点</div>' : ''}
       <div class="nm">${exIcon(n)}${esc(n.label || (n.isExchange ? '取引所系ウォレット' : 'ウォレット'))}</div>
       <div class="ad">${esc(shortAddr(n.address))}</div>
       ${n.amount != null ? `<div class="am">${esc(String(n.amount).slice(0,10))}${n.token ? ' ' + esc(n.token) : ''}</div>` : ''}

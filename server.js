@@ -2331,16 +2331,28 @@ function isNamedExchange(label, isEx) {
   return !!(isEx && l && !isViaService(l) && !isTokenContract(l));
 }
 
-async function exploreArrivals(start, chain, deadline) {
+/* ★渡り先（ブリッジの先）では、もっと深く広く探す。
+   薄まったことを理由に打ち切ると、取引所に着かないまま終わる。
+   利用者から繰り返し指示：大きな流れに飲まれても、取引所までは出す。
+   薄まりは「出さない理由」ではなく「添える説明」として扱う。 */
+const EXPLORE_WIDE = { maxVisits: 40, maxDepth: 8, minShare: 0.001,
+                       nameLookups: 30, nameMinShare: 0.001 };
+
+async function exploreArrivals(start, chain, deadline, tune = {}) {
+  const maxVisits    = tune.maxVisits    ?? EXPLORE_MAX_VISITS;
+  const maxDepth     = tune.maxDepth     ?? EXPLORE_MAX_DEPTH;
+  const minShare     = tune.minShare     ?? EXPLORE_MIN_SHARE;
+  const nameCap      = tune.nameLookups  ?? EXPLORE_NAME_LOOKUPS;
+  const nameMinShare = tune.nameMinShare ?? EXPLORE_NAME_MIN_SHARE;
   const seen = new Set([String(start.address).toLowerCase()]);
   const queue = [{ address: start.address, time: start.time, amount: start.amount,
                    share: 1, depth: 0, trail: [] }];
   const arrivals = [], dead = [];
   let visits = 0, nameLookups = 0;
-  while (queue.length && visits < EXPLORE_MAX_VISITS && Date.now() < deadline - 3000) {
+  while (queue.length && visits < maxVisits && Date.now() < deadline - 3000) {
     queue.sort((a, b) => b.share - a.share);       // 割合の大きい枝から
     const cur = queue.shift();
-    if (cur.depth >= EXPLORE_MAX_DEPTH) continue;
+    if (cur.depth >= maxDepth) continue;
     visits++;
     const cands = await nextCandidatesAny(cur.address, cur.time, cur.amount, chain);
     if (!cands.length) { if (cur.share >= 0.05) dead.push(cur); continue; }
@@ -2352,7 +2364,7 @@ async function exploreArrivals(start, chain, deadline) {
       const frac = (Number.isFinite(c.amount) && Number.isFinite(cur.amount) && cur.amount > 0)
         ? Math.min(1, c.amount / cur.amount) : 1;
       const share = cur.share * frac;
-      if (share < EXPLORE_MIN_SHARE) continue;
+      if (share < minShare) continue;
       seen.add(k);
       const trail = cur.trail.concat([c.address]);
 
@@ -2361,8 +2373,8 @@ async function exploreArrivals(start, chain, deadline) {
          すでに他の場所で使っている無料の口を、ここでも使う。
          引いた結果は覚えるので、同じアドレスに何度も当たらない。 */
       let label = c.label, isEx = c.isExchange;
-      if (!label && nameLookups < EXPLORE_NAME_LOOKUPS
-          && share >= EXPLORE_NAME_MIN_SHARE && Date.now() < deadline - 4000) {
+      if (!label && nameLookups < nameCap
+          && share >= nameMinShare && Date.now() < deadline - 4000) {
         nameLookups++;
         label = await Promise.race([
           fetchAddressLabel(c.address, chain).catch(() => ''),
@@ -2385,6 +2397,83 @@ async function exploreArrivals(start, chain, deadline) {
   console.log(`[枝の探索] ${visits}地点を確認、名前を引いた ${nameLookups}件、`
     + `取引所に到達 ${arrivals.length}件`);
   return { arrivals, dead, visits };
+}
+
+/* 渡り先（TRON）でのたどり方。★XRPのメモ橋とEVMのcalldata橋の
+   2箇所から呼ぶ。以前は同じ処理を2箇所に書いていて、片方だけに
+   薄まりの印を足し、もう片方が古いまま残っていた。 */
+const CROSSCHAIN_MAX_HOPS = 8;
+
+async function followTronArrival(n, destAddr, arr, opts) {
+  const startTime = arr?.time || n.time || new Date().toISOString();
+  const arrived   = arr?.amount ?? null;
+
+  const tHops = await traceHops(destAddr, startTime, 'tron', CROSSCHAIN_MAX_HOPS,
+    Date.now() + budgetLeft(opts, CROSSCHAIN_BUDGET_MS), null, arrived).catch(() => []);
+
+  if (tHops.length) {
+    /* ★渡り先でも「どれだけ薄まったか」を段ごとに持たせる。
+       実測（利用者提供・XRP→TRON）：5,498USDT で入ったのに
+       2段目で117,495USDT の流れに合流し、3段目では100USDTへ分割、
+       最後は890,000USDT。着金額の162倍。
+       ★黙って8段並べると、全部が本件の資金の行き先に見える。
+       経路は切り落とさず、薄まったことを段ごとに書く（第4-Z節）。 */
+    let prevAmt = arrived;
+    n.crossChainHops = tHops.map(h => {
+      const x = (Number.isFinite(prevAmt) && prevAmt > 0 && Number.isFinite(h.amount))
+        ? h.amount / prevAmt : null;
+      const row = {
+        address: h.address, label: h.label || '', amount: h.amount, token: h.token,
+        isExchange: h.isExchange, isVia: h.isVia, time: h.time, txHash: h.txHash,
+        pooled: !!h.pooled, poolDests: h.poolDests ?? null,
+        /* 合流＝他人の資金が混ざった倍率。分割＝この先へ渡った割合。 */
+        mergedX: (x != null && x > 1.05) ? Math.round(x * 10) / 10 : null,
+        keptShare: (x != null && x < 0.95) ? x : null,
+        fromArrivedX: (Number.isFinite(arrived) && arrived > 0 && Number.isFinite(h.amount))
+          ? Math.round((h.amount / arrived) * 10) / 10 : null };
+      prevAmt = h.amount;
+      return row;
+    });
+
+    /* ★金額が一致している最後の地点に印を付ける。
+       ここまでは、ご依頼の資金だと言い切れる。
+       凍結要請・被害届でまず示すべきはこの地点（利用者の指示）。 */
+    let lastExact = -1;
+    for (const [i, h] of n.crossChainHops.entries()) {
+      if (h.mergedX || h.keptShare != null) break;
+      lastExact = i;
+    }
+    if (lastExact >= 0) n.crossChainHops[lastExact].amountExactUpToHere = true;
+
+    /* ★渡った先が「大量に混ぜる場所」なら、それ自体が伝えるべき事実。
+       出せないことを黙るより、規模を数で示す方が捜査の役に立つ。 */
+    const spread = tHops.filter(h => h.poolDests > 1).map(h => h.poolDests);
+    if (spread.length) n.crossChainSpread = spread;
+
+    const ex = tHops.find(h => h.isExchange && !h.isVia && !h.isToken);
+    if (ex) {
+      n.crossChainExchange = { name: ex.label || '取引所（名称未判明）', address: ex.address };
+      console.log(`[ブリッジ] 渡った先で取引所に到達: ${ex.label || '名称未判明'}`);
+    }
+  }
+
+  /* ★1本だけ追うと、大きな流れに飲まれた時点で行き先が分からなくなる。
+     実測（利用者提供・XRP→TRON）：8段追っても取引所に届かなかった。
+     2段目で21倍の流れに合流し、そこから先は本線の選び方が任意になる。
+     ★薄まっても取引所までは出す（利用者から繰り返し指示・第4-Z節）。
+     割合を持った枝の探索を渡り先でも走らせ、着いた取引所を全部出す。 */
+  if (budgetLeft(opts, 20000) > 6000) {
+    const found = await exploreArrivals({ address: destAddr, time: startTime, amount: arrived },
+      'tron', Date.now() + budgetLeft(opts, opts.paid ? 60000 : 22000), EXPLORE_WIDE)
+      .catch(() => ({ arrivals: [], dead: [] }));
+    if (found.arrivals.length) {
+      n.crossChainArrivals = found.arrivals;
+      console.log(`[渡り先の枝] 取引所に到達 ${found.arrivals.length}件`);
+      if (!n.crossChainExchange) {
+        n.crossChainExchange = { name: found.arrivals[0].label, address: found.arrivals[0].address };
+      }
+    }
+  }
 }
 
 async function enrichPathWithAddressInfo(path, chain, opts = {}) {
@@ -2522,36 +2611,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
           const fromMs = new Date(normalizeTimeStr(n.time || Date.now())).getTime();
           const arr = await getBridgeArrivalTRON(info.address, Number.isFinite(fromMs) ? fromMs : Date.now());
           if (arr) { n.bridgeTo.arrivedAmount = arr.amount; n.bridgeTo.arrivedToken = arr.token; }
-          const tHops = await traceHops(info.address, arr?.time || n.time || new Date().toISOString(),
-            'tron', 8, Date.now() + budgetLeft(opts, CROSSCHAIN_BUDGET_MS), null, arr?.amount ?? null)
-            .catch(() => []);
-          if (tHops.length) {
-            /* ★渡り先でも「どれだけ薄まったか」を段ごとに持たせる。
-               実測（利用者提供・XRP→TRON）：5,498USDT で入ったのに
-               2段目で117,495USDT の流れに合流し、3段目では100USDTへ分割、
-               最後は890,000USDT。1段目に対して162倍の流れになっていた。
-               ★これを黙って8段並べると、全部が本件の資金の行き先に見える。
-               経路は切り落とさず、薄まったことを段ごとに書く。 */
-            const arrived = arr?.amount ?? null;
-            let prevAmt = arrived;
-            n.crossChainHops = tHops.map(h => {
-              const x = (Number.isFinite(prevAmt) && prevAmt > 0 && Number.isFinite(h.amount))
-                ? h.amount / prevAmt : null;
-              const row = {
-                address: h.address, label: h.label || '', amount: h.amount, token: h.token,
-                isExchange: h.isExchange, isVia: h.isVia, time: h.time, txHash: h.txHash,
-                pooled: !!h.pooled, poolDests: h.poolDests ?? null,
-                /* 合流＝他人の資金が混ざった倍率。分割＝この先へ渡った割合。 */
-                mergedX: (x != null && x > 1.05) ? Math.round(x * 10) / 10 : null,
-                keptShare: (x != null && x < 0.95) ? x : null,
-                fromArrivedX: (Number.isFinite(arrived) && arrived > 0 && Number.isFinite(h.amount))
-                  ? Math.round((h.amount / arrived) * 10) / 10 : null };
-              prevAmt = h.amount;
-              return row;
-            });
-            const ex = tHops.find(h => h.isExchange && !h.isVia && !h.isToken);
-            if (ex) n.crossChainExchange = { name: ex.label || '取引所（名称未判明）', address: ex.address };
-          }
+          await followTronArrival(n, info.address, arr, opts);
         }
         break;
       } catch (e) { console.error('[ブリッジ] メモ欄の読み取りに失敗:', e.message); }
@@ -2593,27 +2653,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
           /* ★時間の取り合いに注意。参考経路と足すと持ち時間（75秒）を超え、
              実測で「時間内に完了しませんでした」になった。
              渡り先を追えたなら参考経路は要らないので、その分をこちらに回す。 */
-          const tHops = await traceHops(info.address, arr?.time || n.time || new Date().toISOString(),
-            'tron', 8, Date.now() + budgetLeft(opts, CROSSCHAIN_BUDGET_MS), null, arr?.amount ?? null).catch(() => []);
-          if (tHops.length) {
-            n.crossChainHops = tHops.map(h => ({
-              address: h.address, label: h.label || '', amount: h.amount, token: h.token,
-              isExchange: h.isExchange, isVia: h.isVia, time: h.time, txHash: h.txHash,
-              pooled: !!h.pooled, poolDests: h.poolDests ?? null,
-            }));
-            /* ★渡った先が「大量に混ぜる場所」なら、それ自体が伝えるべき事実。
-               実測：この先は1段で送金先9箇所、2段で26箇所、3段で36箇所に分かれ、
-               扱う額も被害額の数百倍だった。個人の財布ではない。
-               ここから1本に絞って取引所名を出すのは、根拠のない断定になる。
-               ★出せないことを黙るより、規模を数で示す方が捜査の役に立つ。 */
-            const spread = tHops.filter(h => h.poolDests > 1).map(h => h.poolDests);
-            if (spread.length) n.crossChainSpread = spread;
-            const ex = tHops.find(h => h.isExchange && !h.isVia && !h.isToken);
-            if (ex) {
-              n.crossChainExchange = { name: ex.label || '取引所（名称未判明）', address: ex.address };
-              console.log(`[ブリッジ] 渡った先で取引所に到達: ${ex.label || '名称未判明'}`);
-            }
-          }
+          await followTronArrival(n, info.address, arr, opts);
         }
         break;                                     // ブリッジは1件読めれば足りる
       } catch (e) { console.error('[ブリッジ] 読み取り失敗:', e.message); }
@@ -2920,6 +2960,73 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
       }
     }
   }
+
+  await enrichCrossChain(path, opts);
+}
+
+/* ★別のチェーンへ渡っていたら、外部照会はそちら側に使う。
+   実測（利用者提供・XRP→TRON／TXID DAC0198…）：資金はTRONへ移っているのに、
+   XRPはMistTrackの対象外なので、この調査では照会が1回も行われなかった。
+   ★被害者が知りたいのは換金先。資金がある側を調べなければ意味がない。
+
+   ★取引所の入金アドレスには公開タグが付かない（実測：TronScanで
+     この経路の20地点すべてタグ無し）。無料の情報源では原理的に名前が出ない。
+     取引先の割合から推定するのが、ここでの唯一の手立て。
+   ★大きな流れに飲まれても、取引所までは出す（利用者から繰り返し指示）。
+     推定であることは名前に添えて書く。伏せることはしない。 */
+async function enrichCrossChain(path, opts = {}) {
+  if (!MISTTRACK_KEY) return;
+  /* ★出金元には使わない。渡り先は別のチェーンなので普通は重ならないが、
+     枠を使う場所すべてに同じ守りを置く（第5-K節）。 */
+  const originAddr = String((path || [])[0]?.address || '').toLowerCase();
+  const isOrigin = a => !!originAddr && String(a || '').toLowerCase() === originAddr;
+  for (const n of (path || [])) {
+    const t = n.bridgeTo;
+    if (!t || !t.chainName) continue;
+    const cxChain = String(t.chainName).toLowerCase();
+    if (!misttrackSupports(cxChain)) continue;
+    if (budgetLeft(opts, 20000) < 4000) return;
+
+    /* 調べる順番。★金額が一致している最後の地点が最優先。
+       そこは「ご依頼の資金が届いた」と言い切れる唯一の地点。 */
+    const hops = n.crossChainHops || [];
+    const exact = hops.find(h => h.amountExactUpToHere);
+    const targets = [];
+    if (exact) targets.push(exact);
+    for (const a of (n.crossChainArrivals || []).slice(0, 2)) targets.push(a);
+    if (!targets.length && hops.length) targets.push(hops[0]);
+
+    const cap = opts.paid ? 3 : 1;                 // 無料は1回だけ引ける
+    let used = 0;
+    for (const c of targets) {
+      if (used >= cap) break;
+      const addr = c.address;
+      if (!addr || c.label) continue;              // 名前が既にあれば要らない
+      if (isOrigin(addr)) continue;                // ★出金元には使わない
+      if (budgetLeft(opts, 20000) < 4000) return;
+
+      const known = cpCache.has(String(addr).toLowerCase());
+      if (!known && !labelQuotaOk(opts.paid, opts.device)) return;
+      if (!known) { labelQuotaUse(opts.device); used++; }
+
+      const cp = await lookupCounterpartyAPI(addr, cxChain).catch(() => []);
+      if (!cp.length) continue;
+      c.counterparty = cp;
+      const hit = exchangeFromCounterparty(cp);
+      if (hit) {
+        c.label      = `${hit.name}（取引先から推定）`;
+        c.isExchange = true;
+        c.cpInferred = true;
+        c.cpPercent  = hit.percent;
+        if (!n.crossChainExchange) {
+          n.crossChainExchange = { name: c.label, address: addr, inferred: true };
+        }
+        console.log(`[渡り先の照会] ${String(addr).slice(0,10)}… を ${hit.name} と推定（取引の${hit.percent}%）`);
+      } else {
+        console.log('[渡り先の照会] 取引所と言える相手は見つかりませんでした');
+      }
+    }
+  }
 }
 
 // ══ チェーン自動判定 ══════════════════════════════════════════
@@ -2971,6 +3078,7 @@ function detectChain(input) {
 const TRON_USDT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 const TRONGRID  = 'https://api.trongrid.io';
 const TRONSCAN  = 'https://apilist.tronscanapi.com';
+const TRONSCAN_NAME_TIMEOUT_MS = 2500;   // 名前の照会は短く見切る（全体を止めない）
 /* キー無しでも動く。入れると回数制限が緩む（TronGrid・TronScan共通の書式）。 */
 const TRON_KEY  = process.env.TRON_API_KEY || '';
 const tronHeaders = () => (TRON_KEY ? { 'TRON-PRO-API-KEY': TRON_KEY } : {});
@@ -3152,6 +3260,28 @@ async function fetchAddressLabel(addr, chain) {
       label = tronTags.get(addr);
       console.log(`[ExLabel] TronScanタグ: ${addr.slice(0,10)}... → "${label}"`);
     }
+  }
+
+  /* ④' ★TronScanにアドレスを直接聞く（TRON のみ・無料）。
+     これまでTRONの名前は「最初のTXIDの応答に付いてきた分」しか持っておらず、
+     追跡の途中で出てきたアドレスには一切名前が付かなかった。
+     自前DBのTRON登録は0件なので、枝の探索が取引所を1つも見つけられなかった
+     （実測：利用者提供のXRP→TRON案件で、8地点を調べて到達0件）。
+     ★取引所の入金アドレスには addressTag が付いている（例：Binance-Hot 4）。
+     引けた名前は覚えるので、次回以降は問い合わせずに済む。 */
+  if (!label && chain === 'tron') {
+    try {
+      const r = await fetchT(`${TRONSCAN}/api/account?address=${addr}`, {}, TRONSCAN_NAME_TIMEOUT_MS);
+      if (r.ok) {
+        const j = await r.json();
+        const tag = String((j && (j.addressTag || j.publicTag)) || '').trim();
+        if (tag) {
+          label = tag;
+          rememberTronTags({ [addr]: tag });      // 覚える（次回は無料で即答）
+          console.log(`[ExLabel] TronScanアドレス照会: ${addr.slice(0,10)}... → "${tag}"`);
+        }
+      }
+    } catch (e) { /* 取れなくても追跡は続ける */ }
   }
 
   // ⑤ XRPScan アカウント名（XRP のみ）
@@ -4668,6 +4798,20 @@ function collectExchanges(result) {
       amount: n.bridgeTo?.amount ?? null, chain: n.bridgeTo?.chainName || null, viaBridge: true });
   }
 
+  /* ★渡り先で枝をたどって着いた取引所も、割合を添えて全部載せる。
+     ★大きな流れに飲まれても、取引所までは出す（利用者から繰り返し指示）。
+     割合は「その枝がどれだけ本件の資金を運んだか」の目安であって断定ではない。
+     断定でないことは説明に書く。載せること自体はやめない。 */
+  for (const n of (result.path || [])) {
+    for (const a of (n.crossChainArrivals || [])) {
+      if (!a.address || isOrigin(a.address)) continue;
+      if (result.exchanges.some(e => String(e.address || '').toLowerCase() === a.address.toLowerCase())) continue;
+      result.exchanges.push({ name: a.label || '取引所（名称未判明）', address: a.address,
+        amount: a.amount, chain: n.bridgeTo?.chainName || null,
+        viaBridge: true, explored: true, share: a.share ?? null, hops: a.hops ?? null });
+    }
+  }
+
 }
 
 /* 調査1件ごとの「どの段に何秒かかったか」。直近だけ残す。
@@ -5507,6 +5651,21 @@ function nativeUnit(chain) {
 /* 渡り先でたどった段に添える説明。★合流と分割を、その場で書く。 */
 function crossHopNotes(h) {
   const out = [];
+  /* ★ここまでは金額が一致している＝ご依頼の資金だと言い切れる地点。
+     凍結要請・被害届でまず示すべきはここ（利用者の指示）。 */
+  if (h.amountExactUpToHere) {
+    out.push(note('cross-exact', 'good', 'ここまでは金額が一致しています',
+      'ご依頼の資金がここに届いたことは、記録の上で確かめられます。'
+      + 'この先は他の資金と混ざるため、まずこの地点を凍結要請・被害届に記載してください。'));
+  }
+  /* ★取引所の入金アドレスには公開タグが付かない。取引先の割合から推定する。
+     推定であることを名前の横に必ず書く。断定に見せない。 */
+  if (h.cpInferred) {
+    out.push(note('cross-cp', 'info', `${String(h.label).replace('（取引先から推定）', '')} への入金アドレスと推定しています`,
+      `このアドレスがやり取りしている相手の約${h.cpPercent}%が同じ取引所です。`
+      + '取引所の入金用アドレスには公開の名前が付かないため、取引の相手から推定しています。',
+      '断定ではありません。凍結要請の際は、推定である旨を添えてご相談ください。'));
+  }
   if (h.mergedX) {
     out.push(note('cross-merged', 'warn', `約${h.mergedX}倍の流れに合流しています`,
       'ここから先に出てくる送金先は、ご依頼の資金が届いたものとは断定できません。',
@@ -5574,6 +5733,13 @@ function resultNotes(result) {
                     : '')).join('　')
           : '')
       + (b.crossChainExchange ? `　到達した取引所：${b.crossChainExchange.name}（${b.crossChainExchange.address}）` : '')
+      /* ★大きな流れに飲まれても、枝をたどって着いた取引所は必ず出す。
+         割合は目安であって断定ではない。断定でないことは書くが、伏せない。 */
+      + ((b.crossChainArrivals || []).length
+          ? `　${t.chainName} 側で枝をたどって到達した取引所：`
+            + b.crossChainArrivals.map(a =>
+                `${a.label}（${a.address}／この枝が運んだ割合 約${(a.share * 100).toFixed(1)}%・${a.hops}段先）`).join('　')
+          : '')
       /* ★どこから先が本件の資金と言えなくなるかを、はっきり書く。 */
       + ((b.crossChainHops || []).findIndex(h => h.mergedX || h.keptShare != null) >= 0
           ? `　※${(b.crossChainHops || []).findIndex(h => h.mergedX || h.keptShare != null) + 1}段目から先は`
