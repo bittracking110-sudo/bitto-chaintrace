@@ -2721,7 +2721,14 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
         && (isLastNode || inferExchangeByBehavior(node))) {
       const known = labelCache.has(node.address.toLowerCase());
       const budgetOk = isLastNode ? apiLookups < lookupBudget : apiLookups < lookupBudget - 1;
-      if (known || (budgetOk && labelQuotaOk(opts.paid, opts.device))) {
+      /* ★名前を引く時間で、残りのノードの情報付けを潰さない。
+         1件あたり最大6秒かかる。無料も3回引くようにしたので、
+         最悪18秒＝この段の予算（15秒）を丸ごと使い切りうる。
+         使い切ると残りのノードは取引回数が分からず unverified になり、
+         確定した経路として出せなくなる（第4-X節の判定ができない）。
+         ★キャッシュ済みなら通信しないので、この見切りは要らない。 */
+      const timeOk = known || Date.now() < deadline - 7000;
+      if (known || (budgetOk && timeOk && labelQuotaOk(opts.paid, opts.device))) {
         if (!known) { apiLookups++; labelQuotaUse(opts.device); }
         const api = await lookupLabelAPI(node.address, chain);
         if (api.name) {
@@ -3054,11 +3061,16 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
      （第5-K節）。★構造上安全でも、改修で壊れたときに気づけない。 */
   const originAddr0 = String((path || [])[0]?.address || '').toLowerCase();
   const notOrigin = a => !originAddr0 || String(a || '').toLowerCase() !== originAddr0;
+  /* ★すでに引いたアドレスなら、枠を使わない。
+     ここだけ known を見ておらず、キャッシュ済みでも1回減らしていた。
+     無料は1調査1回だったので、この1回が丸ごと無駄になっていた
+     （他の7箇所はすべて known を見ている・第5-K節）。 */
+  const unnamedKnown = unnamed && labelCache.has(String(unnamed.reachedAddress || '').toLowerCase());
   if (unnamed && MISTTRACK_KEY && misttrackSupports(chain)   // ★対象外に投げない
       && notOrigin(unnamed.reachedAddress)
-      && labelQuotaOk(opts.paid, opts.device)) {
+      && (unnamedKnown || labelQuotaOk(opts.paid, opts.device))) {
     try {
-      labelQuotaUse(opts.device);
+      if (!unnamedKnown) labelQuotaUse(opts.device);
       const api = await lookupLabelAPI(unnamed.reachedAddress, chain);
       if (api.name) {
         unnamed.reachedExchange = api.name;
@@ -5138,7 +5150,7 @@ function collectExchanges(result) {
        薄まったことは印として添え、判断は読み手に委ねる。
        ★伏せると被害者は手がかりを失うだけで、良いことは何も無い。 */
     result.exchanges.push({ name: n.label || '取引所（名称未判明）', address: n.address,
-      amount: n.amount, afterDilution: n.afterDilution || null,
+      amount: n.amount, token: n.token || null, afterDilution: n.afterDilution || null,
       destTag: n.destTag ?? null,             // ★これが無いと取引所は口座を特定できない
       share: n.exploredShare ?? null, hops: n.exploredHops ?? null,
       explored: n.role === 'explored' || undefined,
@@ -5157,7 +5169,7 @@ function collectExchanges(result) {
       if (!e.address || isOrigin(e.address)) continue;   // 出金元は要請先ではない
       if (result.exchanges.some(x => String(x.address || '').toLowerCase() === e.address.toLowerCase())) continue;
       result.exchanges.push({ name: e.label || '取引所（名称未判明）', address: e.address,
-        amount: e.amount, sameHop: true });
+        amount: e.amount, token: e.token || null, sameHop: true });
     }
   }
 
@@ -5169,7 +5181,9 @@ function collectExchanges(result) {
     if (!ex || !ex.address || isOrigin(ex.address)) continue;   // 出金元は要請先ではない
     if (result.exchanges.some(e => String(e.address || '').toLowerCase() === ex.address.toLowerCase())) continue;
     result.exchanges.push({ name: ex.name, address: ex.address,
-      amount: n.bridgeTo?.amount ?? null, chain: n.bridgeTo?.chainName || null, viaBridge: true });
+      amount: n.bridgeTo?.arrivedAmount ?? n.bridgeTo?.amount ?? null,
+      token: n.bridgeTo?.arrivedToken || null,
+      chain: n.bridgeTo?.chainName || null, viaBridge: true });
   }
 
   /* ★渡り先で枝をたどって着いた取引所も、割合を添えて全部載せる。
@@ -5181,7 +5195,8 @@ function collectExchanges(result) {
       if (!a.address || isOrigin(a.address)) continue;
       if (result.exchanges.some(e => String(e.address || '').toLowerCase() === a.address.toLowerCase())) continue;
       result.exchanges.push({ name: a.label || '取引所（名称未判明）', address: a.address,
-        amount: a.amount, chain: n.bridgeTo?.chainName || null,
+        amount: a.amount, token: n.bridgeTo?.arrivedToken || null,
+        chain: n.bridgeTo?.chainName || null,
         viaBridge: true, explored: true, share: a.share ?? null, hops: a.hops ?? null });
     }
   }
@@ -5265,7 +5280,7 @@ function mergeFindings(txid, result, paid) {
     /* 名前や着金額は後から付くことがある。判明した順番は変えずに、
        欠けていた項目だけ埋める。 */
     if (isUnnamedEx(prev.name) && !isUnnamedEx(e.name)) { prev.name = e.name; findingsDirty = true; }
-    for (const key of ['amount', 'chain', 'share', 'hops', 'destTag', 'viaBridge',
+    for (const key of ['amount', 'token', 'chain', 'share', 'hops', 'destTag', 'viaBridge',
                        'sameHop', 'explored', 'afterDilution', 'viaSibling']) {
       if (prev[key] == null && e[key] != null) { prev[key] = e[key]; findingsDirty = true; }
     }
@@ -6390,6 +6405,82 @@ function attachNotes(result) {
   return result;
 }
 
+/* 凍結要請の文面。★到達した取引所ごとに同じ形で作る。
+   1件目にだけ作っていたころは、2件目以降は利用者が書き写していた。
+   文面を2箇所に書くと必ず片方が古くなるので、ここ1つにまとめる。 */
+const CHAIN_FULL_NAME = { BTC: 'Bitcoin', ETH: 'Ethereum', XRP: 'XRP Ledger',
+                          TRON: 'TRON', POLYGON: 'Polygon', ARBITRUM: 'Arbitrum' };
+/* トークンの規格。★チェーンごとに違う。ここを ERC-20 で固定していたため、
+   TRONの着金先へ「USDT（ERC-20）」と書いた要請文を出しかけていた。
+   規格が違えば取引所は該当の入金を見つけられない。 */
+const TOKEN_STANDARD = { ETH: 'ERC-20', POLYGON: 'ERC-20', ARBITRUM: 'ERC-20', TRON: 'TRC-20' };
+
+function freezeLetterText(ex, r, customerName, issuedAt) {
+  /* ★ブリッジを渡った先の取引所は、元のチェーンとは別のチェーンにある。
+     チェーン名を間違えると、取引所は該当の入金を見つけられない。 */
+  const chainKey  = String(ex.chain || r.chain || '').toUpperCase();
+  const full      = CHAIN_FULL_NAME[chainKey];
+  const chainLine = full && full !== chainKey ? `${chainKey}（${full}）` : (chainKey || '不明');
+  /* ★当初の送金の規格は【元のチェーン】で決まる。着金先のチェーンで決めると、
+     ETHから渡った資金に「USDT（TRC-20）」と書いてしまう。 */
+  const sentStd = TOKEN_STANDARD[String(r.chain || '').toUpperCase()];
+
+  const sent = (r.tokenSymbol && r.tokenAmount > 0)
+    ? `${r.tokenAmount.toFixed(6)} ${r.tokenSymbol}${sentStd ? `（${sentStd}）` : ''}`
+    : `${(r.amount != null && !isNaN(r.amount)) ? r.amount.toFixed(8) : '不明'}${r.chain ? ' ' + r.chain : ''}`;
+  /* ★当該アドレスへの着金額は、当初の送金額とは違うことがある
+     （途中で分かれる・ブリッジで通貨が変わる）。分けて書く。
+     同じ数字を「送金額」として書くと、取引所は該当の入金を探せない。 */
+  /* ★単位は、その地点で実際に動いた通貨だけを書く。
+     推測してはいけない。当初の送金が 1.379 ETH でも、途中でスワップされて
+     いれば着金先は 5340 USDT であり、「5340 ETH」と書くと
+     事実と違う額面になって取引所は該当の入金を探せない（実測で発生）。
+     ★分からないときは単位を書かず、貴社の記録で確認してもらう。 */
+  const unit = ex.token || '';
+  const arrived = (ex.amount != null && !isNaN(ex.amount))
+    ? `
+■ 当該アドレスへの着金額（当社追跡値）：${Number(ex.amount).toFixed(8)}${unit ? ' ' + unit : ''}`
+      + (unit ? '' : '（通貨は貴社の記録にてご確認ください）') : '';
+
+  return `【${ex.name || '取引所'} サポートチームへ】
+
+件名：不正送金に関する緊急凍結要請
+
+拝啓
+
+不正な仮想通貨送金について、緊急のご対応をお願いいたします。
+
+■ 依頼者情報
+氏名：${customerName}
+発行日：${issuedAt}
+
+■ トランザクションID（TXID・当初の送金）
+${r.txid}
+
+■ 当初の送金日時（JST）：${fmtDate(r.blockTime)}
+■ 当初の送金額：${sent}
+
+■ 貴社にあると考えられる着金先
+　 チェーン：${chainLine}
+　 アドレス：${ex.address}${ex.destTag != null ? `
+　 宛先タグ（Destination Tag）：${ex.destTag}
+　 ※ このタグが無いと、貴社は該当の口座を特定できません。` : ''}${arrived}
+
+上記は詐欺被害に起因する不正送金の疑いがあります。
+以下について緊急のご対応をお願い申し上げます。
+
+① 上記アドレスの即時凍結措置
+② 関連する取引情報・KYC情報の保全
+③ 当局への情報提供へのご協力
+
+なお、当社の追跡は公開されているブロックチェーン上の記録に基づくものです。
+経路の途中で他の資金と混ざっている場合、着金額が当初の送金額と一致しないこと、
+また当該資金が本件の被害資金であると断定できない場合があります。
+貴社にてご確認のうえ、ご判断をお願いいたします。
+
+敬具`;
+}
+
 /* ★どうやって見つけた取引所かを、必ず添える。
    これまで「本線で到達した」「同じ地点から分岐して到達した」
    「ブリッジを渡った先で到達した」を区別せず、すべて同じ確度に見せていた。
@@ -6780,45 +6871,44 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
           対応するかどうかは事業者の判断になります。</p>
         </div>`}`;
 
-      tplHTML = `
-        <h3>📝 取引所への要請テンプレート</h3>
-        <p style="font-size:0.85em;color:#94a3b8;margin:0 0 8px">下記は、上記「申請アドバイス」に沿って取引所へそのまま送付できる要請文です。</p>
-        <div class="template-box">【${ex.name || '取引所'} サポートチームへ】
+      /* ★到達した取引所ごとに要請文を作る。
+         以前は1件目にしか作っていなかった。こちらで
+         「凍結要請は複数の取引所へ同時に出せます」と案内しているのに、
+         2件目以降は利用者が自分で書き写すことになっていた。 */
+      const named = r.exchanges.filter(e => e && e.name && e.address);
+      const boxes = named.map(e => {
+        const c = getExchangeContact(e.name);
+        return `<p style="font-size:0.9em;margin:14px 0 6px"><strong>No.${escHtml(String(e.foundNo ?? '-'))}　${escHtml(e.name)}</strong> 宛
+          ${c ? `<span style="font-size:0.85em;color:#94a3b8">／ 窓口：<a href="${escHtml(c.support || c.url)}">${escHtml(c.support || c.url)}</a></span>` : ''}
+          ${e.fromEarlier ? '<span style="font-size:0.85em;color:#c9a96e">／ このTXIDの過去の調査で判明</span>' : ''}</p>
+        <div class="template-box">${escHtml(freezeLetterText(e, r, customerName, issuedAt))}</div>`;
+      }).join('');
 
-件名：不正送金に関する緊急凍結要請
+      tplHTML = boxes ? `
+        <h3>📝 取引所への要請テンプレート（${named.length}件）</h3>
+        <p style="font-size:0.85em;color:#94a3b8;margin:0 0 8px">下記は、取引所へそのまま送付できる要請文です。
+        ${named.length > 1 ? '<strong>到達した取引所ごとに用意しています。凍結要請は複数の取引所へ同時に出せます。</strong>' : ''}</p>
+        ${boxes}` : '';
 
-拝啓
-
-不正な仮想通貨送金について、緊急のご対応をお願いいたします。
-
-■ 依頼者情報
-氏名：${customerName}
-発行日：${issuedAt}
-
-■ トランザクションID（TXID）
-${r.txid}
-
-■ チェーン：${r.chain}（${chainFull[r.chain] || r.chain}）
-■ 送金日時（JST）：${fmtDate(r.blockTime)}
-■ 送金額：${(r.tokenSymbol && r.tokenAmount > 0) ? `${r.tokenAmount.toFixed(6)} ${r.tokenSymbol}（ERC-20）` : `${(r.amount != null && !isNaN(r.amount)) ? r.amount.toFixed(8) : '不明'} ${r.chain}`}
-■ 着金アドレス：${ex.address}
-
-上記は詐欺被害に起因する不正送金の疑いがあります。
-以下について緊急のご対応をお願い申し上げます。
-
-① 上記アドレスの即時凍結措置
-② 関連する取引情報・KYC情報の保全
-③ 当局への情報提供へのご協力
-
-敬具</div>`;
-
-      // AI生成の要請文があれば上書き
+      // AI生成の要請文があれば、1件目の文面として使う
       const aiReq = (aiData.requests || [])[idx];
-      if (aiReq) {
+      if (aiReq && named.length) {
+        const first = named[0];
+        const c0 = getExchangeContact(first.name);
         tplHTML = `
-        <h3>📝 取引所への要請テンプレート</h3>
-        <p style="font-size:0.85em;color:#94a3b8;margin:0 0 8px">下記は、上記「申請アドバイス」に沿って取引所へそのまま送付できる要請文です。</p>
-        <div class="template-box">${aiReq}</div>`;
+        <h3>📝 取引所への要請テンプレート（${named.length}件）</h3>
+        <p style="font-size:0.85em;color:#94a3b8;margin:0 0 8px">下記は、上記「申請アドバイス」に沿って取引所へそのまま送付できる要請文です。
+        ${named.length > 1 ? '<strong>到達した取引所ごとに用意しています。凍結要請は複数の取引所へ同時に出せます。</strong>' : ''}</p>
+        <p style="font-size:0.9em;margin:14px 0 6px"><strong>No.${escHtml(String(first.foundNo ?? '-'))}　${escHtml(first.name)}</strong> 宛
+          ${c0 ? `<span style="font-size:0.85em;color:#94a3b8">／ 窓口：<a href="${escHtml(c0.support || c0.url)}">${escHtml(c0.support || c0.url)}</a></span>` : ''}</p>
+        <div class="template-box">${aiReq}</div>`
+        + named.slice(1).map(e => {
+          const c = getExchangeContact(e.name);
+          return `<p style="font-size:0.9em;margin:14px 0 6px"><strong>No.${escHtml(String(e.foundNo ?? '-'))}　${escHtml(e.name)}</strong> 宛
+            ${c ? `<span style="font-size:0.85em;color:#94a3b8">／ 窓口：<a href="${escHtml(c.support || c.url)}">${escHtml(c.support || c.url)}</a></span>` : ''}
+            ${e.fromEarlier ? '<span style="font-size:0.85em;color:#c9a96e">／ このTXIDの過去の調査で判明</span>' : ''}</p>
+          <div class="template-box">${escHtml(freezeLetterText(e, r, customerName, issuedAt))}</div>`;
+        }).join('');
       }
     }
 
