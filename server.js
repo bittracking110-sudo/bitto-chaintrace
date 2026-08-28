@@ -5117,6 +5117,36 @@ function collectExchanges(result) {
 const findingsStore = new Map();     // txid(小文字) → { seq, byAddr: Map }
 const FINDINGS_MAX  = 300;
 
+/* ★ディスクに残す。Railway は push のたびに再起動するので、
+   メモリだけに置くと再デプロイで台帳が消える。
+   ★消えると「無料で判明したものが有料で消えない」という
+     この仕組みそのものが、いちばん要る場面で効かない。 */
+const FINDINGS_FILE = path.join(DATA_DIR, 'findings.json');
+try {
+  const saved = JSON.parse(fs.readFileSync(FINDINGS_FILE, 'utf8'));
+  for (const [txid, f] of Object.entries(saved)) {
+    findingsStore.set(txid, {
+      seq: Number(f.seq) || 0,
+      byAddr: new Map(Object.entries(f.byAddr || {})),
+      routes: Array.isArray(f.routes) ? f.routes : [],
+    });
+  }
+  console.log(`[台帳] ${findingsStore.size}件のTXIDを読み込み`);
+} catch { /* 初回は無い */ }
+
+let findingsDirty = false;
+function saveFindings() {
+  if (!findingsDirty) return;
+  findingsDirty = false;
+  const out = {};
+  for (const [txid, f] of findingsStore) {
+    out[txid] = { seq: f.seq, byAddr: Object.fromEntries(f.byAddr), routes: f.routes || [] };
+  }
+  fsp.writeFile(FINDINGS_FILE, JSON.stringify(out), 'utf8')
+    .catch(e => console.error('[台帳] 保存失敗:', e.message));
+}
+setInterval(saveFindings, 8000);
+
 const FINDINGS_ROUTES_MAX = 5;       // 1つのTXIDについて覚えておく経路の本数
 
 function findingsFor(txid) {
@@ -5143,14 +5173,15 @@ function mergeFindings(txid, result, paid) {
     const prev = f.byAddr.get(k);
     if (!prev) {
       f.byAddr.set(k, { ...e, foundNo: ++f.seq, foundPaid: !!paid, foundAt: Date.now() });
+      findingsDirty = true;
       continue;
     }
     /* 名前や着金額は後から付くことがある。判明した順番は変えずに、
        欠けていた項目だけ埋める。 */
-    if (isUnnamedEx(prev.name) && !isUnnamedEx(e.name)) prev.name = e.name;
+    if (isUnnamedEx(prev.name) && !isUnnamedEx(e.name)) { prev.name = e.name; findingsDirty = true; }
     for (const key of ['amount', 'chain', 'share', 'hops', 'destTag', 'viaBridge',
                        'sameHop', 'explored', 'afterDilution', 'viaSibling']) {
-      if (prev[key] == null && e[key] != null) prev[key] = e[key];
+      if (prev[key] == null && e[key] != null) { prev[key] = e[key]; findingsDirty = true; }
     }
   }
 
@@ -5183,6 +5214,7 @@ function mergeFindings(txid, result, paid) {
           address: p.address, label: p.label || '', amount: p.amount,
           token: p.token, isExchange: !!p.isExchange })) });
       while (f.routes.length > FINDINGS_ROUTES_MAX) f.routes.splice(1, 1);  // 最初の1本は残す
+      findingsDirty = true;
     }
     result.otherRoutes = f.routes.filter(r => r.sig !== sig);
   }
