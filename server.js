@@ -9634,12 +9634,18 @@ app.post('/api/connection/iap/verify', express.json(), async (req, res) => {
     });
     const formUrl = `${BASE_URL}/txid-form/${formToken}`;
 
+    /* ★試験購入（Sandbox）は、本物の売上と見分けが付く形で記録する。
+       Apple/Google の試験アカウントでは実際の支払いが発生しない。
+       同じ形で記録すると、帳簿に架空の売上が混ざる。 */
+    const isSandbox = chosen.some(c => c.sandbox);
     // 申込記録
     const submittedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
     appendToSheet([
       submittedAt, name || '', phone || '', email, '', String(n),
-      String(CONNECTION_PRICE * n), sessionId, '', '申込済み(Connection/IAP)',
+      isSandbox ? '0' : String(CONNECTION_PRICE * n), sessionId, '',
+      isSandbox ? '★試験購入(Connection/IAP・課金なし)' : '申込済み(Connection/IAP)',
     ]).catch(console.error);
+    if (isSandbox) console.log('[IAP] ★試験購入（Sandbox）として記録しました');
 
     // 申込確認・利用規約同意メール
     sendEmail(email, '【Connection】お申し込みを受け付けました（正式調査報告書）',
@@ -9817,12 +9823,18 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
     });
     const formUrl = `${BASE_URL}/txid-form/${formToken}`;
 
+    /* ★試験購入（Sandbox）は、本物の売上と見分けが付く形で記録する。
+       Apple/Google の試験アカウントでは実際の支払いが発生しない。
+       同じ形で記録すると、帳簿に架空の売上が混ざる。 */
+    const isSandbox = chosen.some(c => c.sandbox);
     // 申込記録
     const submittedAt = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
     appendToSheet([
       submittedAt, name || '', phone || '', email, '', String(n),
-      String(paidTotal), sessionId, '', '申込済み(BitTo/IAP)',
+      isSandbox ? '0' : String(paidTotal), sessionId, '',
+      isSandbox ? '★試験購入(BitTo/IAP・課金なし)' : '申込済み(BitTo/IAP)',
     ]).catch(console.error);
+    if (isSandbox) console.log('[IAP] ★試験購入（Sandbox）として記録しました');
 
     // 申込確認・利用規約同意メール
     sendEmail(email, '【BitTo】お申し込みを受け付けました（正式調査報告書）',
