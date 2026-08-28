@@ -9795,17 +9795,21 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
       }
     }
 
-    /* ★売上として記録する金額。実際に支払われた額の合計を使う。
-       取れなかったときだけ、1件の値段×件数に戻す（記録が空になるよりはよい）。
-       ※これは社内の記録用。件数の付与は上のRevenueCat検証で決まっており、
-         この金額で権利が変わることはない。 */
-    const paidSum = chosen.reduce((a, t) => a + (t.paid || 0), 0);
-    const paidTotal = paidSum > 0 ? Math.round(paidSum) : BITTO_PRICE * n;
     if (!chosen.length) return res.status(402).json({ error: '有効な購入が確認できませんでした' });
 
     chosen.forEach(tx => consumedIapTx.add(tx.tid));
     // 実際に購入が確認できた分だけを付与する（クライアントの申告では増やせない）
     const n = units;
+
+    /* ★売上として記録する金額。実際に支払われた額の合計を使う。
+       取れなかったときだけ、1件の値段×件数に戻す（記録が空になるよりはよい）。
+       ※これは社内の記録用。件数の付与は上のRevenueCat検証で決まっており、
+         この金額で権利が変わることはない。
+       ★n（件数）より後ろに置くこと。前に置くと
+       「Cannot access 'n' before initialization」で購入が丸ごと失敗する
+       （実際に起きた。利用者には意味の分からない文言だけが出た）。 */
+    const paidSum = chosen.reduce((a, t) => a + (t.paid || 0), 0);
+    const paidTotal = paidSum > 0 ? Math.round(paidSum) : BITTO_PRICE * n;
 
     // TXID入力フォームのトークンを発行（brand=bitto）
     const formToken = crypto.randomUUID();
