@@ -588,13 +588,23 @@ function addMe(text){
   chat.appendChild(d); scrollDown();
 }
 const hasCard = html => /class="card"/.test(String(html));
+/* ★カードで組んだ吹き出しの目印。文章には絶対に出てこない印だけを見る。
+   中身から「それらしさ」で判定してはいけない（文章にも <b> は入っており、
+   rich にすると段落の切れ目まで消える）。 */
+const CARD_MARK = /data-(?:report|pack|form)-url=|class="filecard"|class="fc-acts"/;
+/* 吹き出しに付ける印。★新規と差し替えで同じ判断をする。
+   片方だけだと、そこだけ見た目が変わる。 */
+const bubbleCls = (html, rich) => {
+  const h = String(html);
+  return (hasCard(h) ? ' wide' : '') + ((rich === true || CARD_MARK.test(h)) ? ' rich' : '');
+};
 /* rich: HTMLで組んだ吹き出し。
    .bubble は既定で white-space:pre-wrap（素の文章の改行をそのまま出すため）だが、
    HTMLで組むとテンプレート文字列の改行とインデントまで描画され、
    間延びして文頭が字下げされる。組み立て側が分かっているので明示で切り替える。 */
 function addAi(html, {typing=false, rich=false} = {}){
   const d = document.createElement('div'); d.className = 'row ai';
-  const cls = 'bubble' + (!typing && hasCard(html) ? ' wide' : '') + (rich ? ' rich' : '');
+  const cls = 'bubble' + (typing ? '' : bubbleCls(html, rich));
   d.innerHTML = `${AI_AVATAR}<div style="flex:1;min-width:0"><div class="who">BitTo AI</div>
     <div class="${cls}">${typing ? '<div class="dots"><i></i><i></i><i></i></div>' : html}</div></div>`;
   chat.appendChild(d); scrollDown(); return d;
@@ -633,11 +643,12 @@ function initFlowScroll(root){
 }
 const setBubble = (row, html) => {
   const b = row.querySelector('.bubble');
-  b.classList.toggle('wide', hasCard(html));
   /* 結果カードはHTMLで組む。素の文章と違い、テンプレート文字列の改行まで
      描画されると間延びするので、カードを含むときは pre-wrap を切る。
      エラー文（\n で改行している）はカードを含まないので影響しない。 */
-  b.classList.toggle('rich', hasCard(html));
+  const cls = bubbleCls(html);
+  b.classList.toggle('wide', cls.includes('wide'));
+  b.classList.toggle('rich', cls.includes('rich'));
   b.innerHTML = html; initFlowScroll(b); scrollDown();
 };
 
@@ -811,7 +822,9 @@ function splitHTML(path){
         ? `<div class="sp-hit">🏦 ${sb.reached.map(r => `<b>${esc(r.name)}</b>（${r.hops}段先）`).join("・")}</div>`
         : sb.searched
           ? `<div class="sp-miss">追跡しましたが、取引所には届いていません</div>`
-          : `<div class="sp-miss">時間の都合で追跡できていません。下のTXIDを貼ると調べられます</div>`;
+          /* ★返したあとも追い続けている。無料調査は2分以内に返す約束のため、
+             途中でお戻ししているだけで、追跡は止まっていない。 */
+          : `<div class="sp-miss">追跡を続けています。しばらくして同じTXIDを調べ直すと結果が出ます</div>`;
       rows.push(`<div class="sp-row">
         <div class="sp-a">${esc(shortAddr(sb.address))}${sb.label ? " <b>" + esc(sb.label) + "</b>" : ""}
           ${sb.amount != null ? `<span class="sp-am">${esc(String(sb.amount).slice(0,12))} ${esc(sb.token || "")}</span>` : ""}</div>
@@ -827,6 +840,8 @@ function splitHTML(path){
     <div class="note" style="margin-bottom:8px">資金が複数に分かれています。上の経路は<b>そのうちの1本</b>で、これが被害資金の主要な流れとは限りません。
     <b>分かれた宛先はこちらですべて追跡しました。</b>${hit ? `そのうち<b>${hit}件</b>が取引所に到達しています。` : ""}
     さらにご自身で追いたい場合は、下のTXIDをコピーして調査欄に貼り付けてください。</div>
+    <div class="note" style="margin-bottom:8px;color:var(--teal)">※ <b>有料調査では、分散された追跡経路はすべて記載されます。</b>
+    無料調査で時間内に追いきれなかった枝も、報告書には残らず記載します。</div>
     ${rows.join("")}
   </div>`;
 }

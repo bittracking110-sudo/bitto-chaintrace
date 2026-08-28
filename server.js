@@ -1206,9 +1206,16 @@ function cachedLabelName(lo) {
 const MISTTRACK_KEY  = process.env.MISTTRACK_API_KEY || '';
 const MISTTRACK_BASE = process.env.MISTTRACK_BASE_URL || 'https://openapi.misttrack.io/v1';
 const MISTTRACK_PAID_LOOKUPS = Number(process.env.MISTTRACK_PAID_LOOKUPS ?? 5);   // 有料レポート1件あたり（枝を追うぶん増やした）
-const MISTTRACK_FREE_LOOKUPS = Number(process.env.MISTTRACK_FREE_LOOKUPS ?? 1);   // 無料の追跡1件あたり（0で無料は呼ばない）
-const MISTTRACK_DAILY_CAP    = Number(process.env.MISTTRACK_DAILY_CAP ?? 5);      // 1日の上限（無料）
-const MISTTRACK_MONTH_CAP    = Number(process.env.MISTTRACK_MONTH_CAP ?? 15);     // 1か月の上限
+/* ★無料も3回まで引く（2026-08-28・利用者の判断）。
+   1回だと最終到達先しか名前を引けず、途中の取引所候補を素通りしていた。
+   3回なら「最終到達先に1回＋途中の候補に2回」に配れる
+   （最後の1回は必ず着金先に残す作りになっている）。
+   ★1調査あたりの回数を増やすだけでは効かない。
+     日・月の上限が同じままだと、1件目で使い切って2件目以降は0回になる。
+     上限も同じ倍率で上げる。★これは前払い分を実際に多く使う変更。 */
+const MISTTRACK_FREE_LOOKUPS = Number(process.env.MISTTRACK_FREE_LOOKUPS ?? 3);   // 無料の追跡1件あたり（0で無料は呼ばない）
+const MISTTRACK_DAILY_CAP    = Number(process.env.MISTTRACK_DAILY_CAP ?? 15);     // 1日の上限（無料）＝1日5件ぶん
+const MISTTRACK_MONTH_CAP    = Number(process.env.MISTTRACK_MONTH_CAP ?? 45);     // 1か月の上限＝月15件ぶん
 const MISTTRACK_TOTAL_CAP    = Number(process.env.MISTTRACK_TOTAL_CAP ?? 100);    // 購入した総回数（使い切ったら止まる）
 /* 有料の報告書のために取っておく回数。無料の追跡はここに手を付けない。
    代金をいただいた調査で「名前が引けませんでした」となるのが最悪のため。 */
@@ -1284,8 +1291,9 @@ function labelQuotaUse(device) {
    逆に利用者ごとの上限だけでは、人数が増えた分だけ購入分が減るので守れない。
    ★両方が要る。全体＝買った分を守る。利用者ごと＝1人の使い占めを防ぐ。 */
 const DEVICE_USAGE_FILE = path.join(REPORTS_DIR, 'label-usage-device.json');
-const MISTTRACK_USER_DAILY = Number(process.env.MISTTRACK_USER_DAILY ?? 5);
-const MISTTRACK_USER_MONTH = Number(process.env.MISTTRACK_USER_MONTH ?? 15);
+/* 1調査3回に合わせる。1人あたり1日3件・1か月10件ぶん。 */
+const MISTTRACK_USER_DAILY = Number(process.env.MISTTRACK_USER_DAILY ?? 9);
+const MISTTRACK_USER_MONTH = Number(process.env.MISTTRACK_USER_MONTH ?? 30);
 let deviceUsage = {};   // 端末ID → { day, count, month, monthCount }
 try {
   if (fs.existsSync(DEVICE_USAGE_FILE)) {
@@ -2518,6 +2526,58 @@ async function exploreArrivals(start, chain, deadline, tune = {}) {
   return { arrivals, dead, visits, searchedSeeds: [...startedSeeds] };
 }
 
+/* ══ 返したあとも、追い続ける ═══════════════════════════════
+   ★利用者の問い：「時間切れで追えなかった枝は、時間切れにならないように
+     するにはどうすればいいですか？」
+
+   締切があるのは【利用者が画面の前で待っているから】であって、
+   調べられないからではない。無料調査は2分以内に返すと案内している。
+   ★答えは「待たせる時間を延ばす」ではなく「返してから続ける」。
+
+   続きで見つけた取引所は台帳に足す。だから、
+   ・同じTXIDをもう一度調べると、続きの結果が出る
+   ・有料の報告書には必ず載る（報告書は台帳の全件を出すため）
+   ★この探索は無料の情報源しか使わない。前払いの回数は減らない。 */
+const SWEEP_BG_MS  = 240000;   // 返したあとに追い続ける上限（4分）
+const SWEEP_BG_MAX = 3;        // 同時に走らせる本数（サーバーを占有させない）
+const sweepRunning = new Set();
+
+function continueSweepInBackground(txid, chain, seeds, path) {
+  if (!txid || !chain || !seeds || !seeds.length) return;
+  const key = String(txid).toLowerCase();
+  if (sweepRunning.has(key)) return;                       // 同じTXIDを二重に走らせない
+  if (sweepRunning.size >= SWEEP_BG_MAX) {
+    console.log('[枝の続き] 同時実行が上限のため見送ります');
+    return;
+  }
+  sweepRunning.add(key);
+  const originLo = String((path || [])[0]?.address || '').toLowerCase();
+  (async () => {
+    try {
+      const found = await exploreArrivals(seeds, chain, Date.now() + SWEEP_BG_MS, EXPLORE_SPLIT);
+      const add = found.arrivals
+        /* 送金元は凍結を要請する相手ではない。台帳に入れる前に外す
+           （枠を使う場所すべてに同じ守りを置く・第5-K節）。 */
+        .filter(a => a.address && String(a.address).toLowerCase() !== originLo)
+        .map(a => ({ name: a.label || UNNAMED_EX, address: a.address, amount: a.amount,
+                     share: a.share ?? null, hops: a.hops ?? null,
+                     explored: true, viaSibling: a.seed || null }));
+      if (!add.length) {
+        console.log('[枝の続き] 続きを追いましたが、取引所には届きませんでした');
+        return;
+      }
+      /* 経路は渡さない。渡すと「別経路」として記録され、
+         実際にはたどっていない経路が報告書に並ぶ。 */
+      mergeFindings(txid, { exchanges: add, path: [] }, false);
+      console.log(`[枝の続き] 取引所に到達 ${add.length}件。台帳に足しました`);
+    } catch (e) {
+      console.error('[枝の続き] 失敗:', e.message);
+    } finally {
+      sweepRunning.delete(key);
+    }
+  })();
+}
+
 /* 渡り先（TRON）でのたどり方。★XRPのメモ橋とEVMのcalldata橋の
    2箇所から呼ぶ。以前は同じ処理を2箇所に書いていて、片方だけに
    薄まりの印を足し、もう片方が古いまま残っていた。 */
@@ -2925,6 +2985,13 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
           const k = String(sb.address || '').toLowerCase();
           if (!sb.reached && searched.has(k)) sb.searched = true;
         }
+      }
+      /* ★締切に間に合わなかった起点を残しておく。
+         締切があるのは「利用者が画面の前で待っているから」であって、
+         調べられないからではない。結果を返したあと、続きを追う。 */
+      path.pendingSeeds = seeds.filter(x => !searched.has(String(x.address).toLowerCase()));
+      if (path.pendingSeeds.length) {
+        console.log(`[枝の探索] ${path.pendingSeeds.length}件は締切に間に合わず。返したあとに続きを追います`);
       }
     } catch (e) { console.error('[枝の探索] 失敗:', e.message); }
   }
@@ -5357,6 +5424,12 @@ async function investigate(txid, chain, opts = {}) {
   result.tronDenied = tronDeniedCount();   // ★断られた回数を説明に載せるため
   finalizeResult(txid, result, !!opts.paid);
 
+  /* ★締切に間に合わなかった枝は、返したあとに追い続ける。
+     有料は最初から5分あり、そこで追い切る前提なので走らせない。 */
+  if (!opts.paid) {
+    continueSweepInBackground(txid, chain, (result.path || []).pendingSeeds, result.path);
+  }
+
   /* ★取引所が出なかったとき、「見つからなかった」で終わらせない。
      詐欺の資金が現金化のため取引所へ届くまでは1週間以内のことが多い
      （運営の実感・記録：第4-Z節）。送金からまだ日が浅いなら、
@@ -6278,10 +6351,14 @@ function resultNotes(result) {
               + sb.reached.map(r => `${r.name}（${r.hops}段先）`).join('・')).join('　')
         : '取引所に到達した枝はありませんでした。')
       + (miss.length ? `　${miss.length}件は追跡しましたが、取引所には届いていません。` : '')
-      + (notYet ? `　${notYet}件は時間の都合で追跡できていません。` : ''),
+      + (notYet ? `　${notYet}件は、この結果をお返ししたあとも追跡を続けています。` : ''),
       '資金が複数に分かれている場合、追跡した1本が本命とは限りません。'
       + 'そのため、分かれた宛先はこちらですべて追っています。'
-      + (notYet ? '追跡できなかった分は、そのTXIDを調査欄に貼るとその枝から調べ直せます。' : '')));
+      /* ★締切があるのは利用者を待たせないためで、調べられないからではない。
+         返したあとも追い、見つかったものは台帳に足す（第5-M節）。 */
+      + (notYet ? '無料調査は2分以内にお返しするため、途中でお戻ししています。'
+                + 'その後も追跡は続いており、しばらくしてから同じTXIDを調べ直すと'
+                + '続きの結果が出ます。★有料調査の報告書には、分散した経路をすべて記載します。' : '')));
   }
 
   if ((result.otherRoutes || []).length) {
@@ -6419,7 +6496,7 @@ function splitSweepHTML(path) {
              <br><span class="mono" style="font-size:0.72rem">${escHtml(rr.address)}</span>`).join('<br>')
           : sb.searched
             ? '<span style="color:var(--r-ink2)">追跡しましたが、取引所には届いていません。</span>'
-            : '<span style="color:#fbbf24">時間の都合で追跡できていません。下のTXIDを調査欄に貼ると、この枝から調べ直せます。</span>'}
+            : '<span style="color:#fbbf24">この枝は追跡を継続中です。下のTXIDを調査欄に貼ると、この枝から直接たどれます。</span>'}
         ${sb.txHash ? `<br><span class="mono" style="font-size:0.7rem;color:var(--r-ink2)">${escHtml(sb.txHash)}</span>` : ''}</td></tr>`).join('')}
     </table>
     <p class="ref-warn" style="margin-top:10px"><strong>この欄の読み方</strong><br>
