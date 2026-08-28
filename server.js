@@ -9713,17 +9713,33 @@ app.post('/api/connection/iap/verify', express.json(), async (req, res) => {
    他人の申込を引き出せないようにするため。 */
 app.post('/api/bitto/orders/restore', express.json(), async (req, res) => {
   try {
-    const { appUserId } = req.body || {};
-    if (!appUserId) return res.status(400).json({ error: '購入情報が不足しています' });
+    /* ★識別子は2種類ある。購入時は getAppUserID（いまの識別子）で申込を作り、
+       取得時は originalAppUserId（最初の識別子）で探していた。
+       この2つが違うと申込が見つからず、報告書が完成していても届かない
+       （実測：報告書は完成していたのに、アプリに出なかった）。
+       ★どちらで来ても拾えるように、送られた分をすべて試す。 */
+    const body = req.body || {};
+    const ids = [...new Set([body.appUserId, body.originalAppUserId, body.currentAppUserId]
+      .filter(x => typeof x === 'string' && x.trim()))];
+    if (!ids.length) return res.status(400).json({ error: '購入情報が不足しています' });
     if (!REVENUECAT_SECRET_KEY)
       return res.status(503).json({ error: '購入の復元は準備中です' });
 
-    const rcRes = await fetchT(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, {
-      headers: { Authorization: `Bearer ${REVENUECAT_SECRET_KEY}`, 'Content-Type': 'application/json' },
-    });
-    if (!rcRes.ok) return res.status(502).json({ error: '購入の確認に失敗しました' });
-    const rcData = await rcRes.json();
-    const nonSubs = (rcData.subscriber && rcData.subscriber.non_subscriptions) || {};
+    const nonSubs = {};
+    let anyOk = false;
+    for (const id of ids) {
+      const r = await fetchT(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(id)}`, {
+        headers: { Authorization: `Bearer ${REVENUECAT_SECRET_KEY}`, 'Content-Type': 'application/json' },
+      });
+      if (!r.ok) continue;                       // 片方が空でも、もう片方で見つかることがある
+      anyOk = true;
+      const d = await r.json();
+      const ns = (d.subscriber && d.subscriber.non_subscriptions) || {};
+      for (const [pid, list] of Object.entries(ns)) {
+        nonSubs[pid] = (nonSubs[pid] || []).concat(list || []);
+      }
+    }
+    if (!anyOk) return res.status(502).json({ error: '購入の確認に失敗しました' });
 
     // このユーザーが実際に持っているBitTo商品のトランザクションIDを集める
     const owned = new Set();
