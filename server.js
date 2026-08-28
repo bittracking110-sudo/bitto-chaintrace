@@ -2418,21 +2418,38 @@ function isNamedExchange(label, isEx) {
 const EXPLORE_WIDE = { maxVisits: 40, maxDepth: 8, minShare: 0.001,
                        nameLookups: 30, nameMinShare: 0.001 };
 
+/* ★分かれた宛先を全部たどるときの設定。
+   一覧に出した枝を追い切れないと「出したのに調べていない」ことになる。
+   時間は締切で守られているので、回数の上限は広く取ってよい。 */
+const EXPLORE_SPLIT = { maxVisits: 60, maxDepth: 7, minShare: 0.01,
+                        nameLookups: 24, nameMinShare: 0.01 };
+
 async function exploreArrivals(start, chain, deadline, tune = {}) {
   const maxVisits    = tune.maxVisits    ?? EXPLORE_MAX_VISITS;
   const maxDepth     = tune.maxDepth     ?? EXPLORE_MAX_DEPTH;
   const minShare     = tune.minShare     ?? EXPLORE_MIN_SHARE;
   const nameCap      = tune.nameLookups  ?? EXPLORE_NAME_LOOKUPS;
   const nameMinShare = tune.nameMinShare ?? EXPLORE_NAME_MIN_SHARE;
-  const seen = new Set([String(start.address).toLowerCase()]);
-  const queue = [{ address: start.address, time: start.time, amount: start.amount,
-                   share: 1, depth: 0, trail: [] }];
+  /* ★起点は複数取れる。資金が分かれた地点の宛先を「一覧に出すだけ」で
+     終わらせず、出したものは全部ここから追う（利用者の指示・第5-M節）。
+     枝ごとの割合は seedShare に持ち、枝の中の割合と分けて数える。
+     分けないと、細い枝は最初の1手で足切りされて一度も追われない。 */
+  const seeds = (Array.isArray(start) ? start : [start]).filter(x => x && x.address);
+  const seen = new Set(seeds.map(x => String(x.address).toLowerCase()));
+  const queue = seeds.map(x => ({
+    address: x.address, time: x.time, amount: x.amount,
+    share: 1,                                             // その枝の中での割合
+    seedShare: Number.isFinite(x.share) ? x.share : 1,    // 元の資金に対する枝の割合
+    seed: x.address, depth: 0, trail: [] }));
   const arrivals = [], dead = [];
+  const startedSeeds = new Set();      // 実際に1手でも進めた起点
   let visits = 0, nameLookups = 0;
   while (queue.length && visits < maxVisits && Date.now() < deadline - 3000) {
-    queue.sort((a, b) => b.share - a.share);       // 割合の大きい枝から
+    // 元の資金に対して大きい枝から見る（枝の割合 × 枝の中の割合）
+    queue.sort((a, b) => (b.seedShare * b.share) - (a.seedShare * a.share));
     const cur = queue.shift();
     if (cur.depth >= maxDepth) continue;
+    if (cur.depth === 0) startedSeeds.add(String(cur.seed || '').toLowerCase());
     visits++;
     const cands = await nextCandidatesAny(cur.address, cur.time, cur.amount, chain);
     if (!cands.length) { if (cur.share >= 0.05) dead.push(cur); continue; }
@@ -2464,19 +2481,22 @@ async function exploreArrivals(start, chain, deadline, tune = {}) {
       }
 
       if (isNamedExchange(label, isEx)) {
-        arrivals.push({ address: c.address, label, share,
-                        amount: c.amount, hops: cur.depth + 1, trail });
+        arrivals.push({ address: c.address, label, share: cur.seedShare * share,
+                        amount: c.amount, hops: cur.depth + 1, trail, seed: cur.seed });
         continue;                                  // 着いたらその枝は止める
       }
       queue.push({ address: c.address, time: c.time, amount: c.amount,
-                   share, depth: cur.depth + 1, trail });
+                   share, seedShare: cur.seedShare, seed: cur.seed,
+                   depth: cur.depth + 1, trail });
     }
   }
   arrivals.sort((a, b) => b.share - a.share);
   dead.sort((a, b) => b.share - a.share);
   console.log(`[枝の探索] ${visits}地点を確認、名前を引いた ${nameLookups}件、`
     + `取引所に到達 ${arrivals.length}件`);
-  return { arrivals, dead, visits };
+  /* ★時間切れで一度も見ずに終わった起点がある。
+     「調べたが出なかった」と混同しないよう、実際に進めた起点だけ返す。 */
+  return { arrivals, dead, visits, searchedSeeds: [...startedSeeds] };
 }
 
 /* 渡り先（TRON）でのたどり方。★XRPのメモ橋とEVMのcalldata橋の
@@ -2819,17 +2839,41 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   const first = (path || [])[1];
   if (first && first.address && budgetLeft(opts, 40000) > 8000) {
     try {
-      const budget = budgetLeft(opts, opts.paid ? 90000 : 25000);
-      const found = await exploreArrivals(
-        { address: first.address, time: first.time || path[0]?.time, amount: first.amount },
-        chain, Date.now() + budget);
+      const budget = budgetLeft(opts, opts.paid ? 90000 : 40000);
+
+      /* ★分かれた宛先は、画面に一覧で出している（「同じ地点から出た、別の送金先」）。
+         出しておいて調べていないのでは、利用者は自分で1件ずつ貼り直すしかない。
+         実際そうされていた（利用者報告・2026-08-28）。
+         ★一覧に出すものは、無料調査の時点で全部こちらから追う。
+         起点は本線の1次先と、経路上のすべての分岐先。 */
+      const onPath = new Set((path || []).map(p => String(p.address || '').toLowerCase()));
+      const base   = Number.isFinite(first.amount) && first.amount > 0 ? first.amount : null;
+      const seeds  = [{ address: first.address, time: first.time || path[0]?.time,
+                        amount: first.amount, share: 1 }];
+      const seedSeen = new Set([String(first.address).toLowerCase()]);
+      for (const n of (path || [])) {
+        for (const sb of (n.siblings || [])) {
+          const k = String(sb.address || '').toLowerCase();
+          if (!k || onPath.has(k) || seedSeen.has(k)) continue;
+          seedSeen.add(k);
+          /* 元の資金に対するこの枝の割合。出せないときは1として扱い、
+             断定でないことは説明側に書く（伏せて追わない方が損失が大きい）。 */
+          const sh = (base && Number.isFinite(sb.amount) && sb.amount > 0)
+            ? Math.min(1, sb.amount / base) : 1;
+          seeds.push({ address: sb.address, time: sb.time || n.time, amount: sb.amount, share: sh });
+        }
+      }
+      if (seeds.length > 1) console.log(`[枝の探索] 起点 ${seeds.length}件（分岐先 ${seeds.length - 1}件を含む）`);
+
+      const found = await exploreArrivals(seeds, chain, Date.now() + budget,
+        seeds.length > 1 ? EXPLORE_SPLIT : {});
       if (found.arrivals.length) {
         path.exploredArrivals = found.arrivals;      // 経路と一緒に持ち回る
         for (const a of found.arrivals) {
           if (!path.some(p => String(p.address).toLowerCase() === String(a.address).toLowerCase())) {
             path.push({ address: a.address, label: a.label, amount: a.amount,
               isExchange: true, exploredShare: a.share, exploredHops: a.hops,
-              role: 'explored' });
+              exploredSeed: a.seed || null, role: 'explored' });
           } else {
             const n = path.find(p => String(p.address).toLowerCase() === String(a.address).toLowerCase());
             if (n && n.exploredShare == null) n.exploredShare = a.share;
@@ -2837,6 +2881,32 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
         }
       }
       path.exploredDead = found.dead.slice(0, 3);
+
+      /* ★どの枝から取引所に着いたかを、その枝の行に書き戻す。
+         画面の「同じ地点から出た、別の送金先」の各行に到達先が並ぶ。
+         一覧を見た人が、自分で貼り直さなくても行き先が分かる。 */
+      const bySeed = new Map();
+      for (const a of found.arrivals) {
+        const k = String(a.seed || '').toLowerCase();
+        if (!k) continue;
+        if (!bySeed.has(k)) bySeed.set(k, []);
+        bySeed.get(k).push({ name: a.label, address: a.address, hops: a.hops, share: a.share });
+      }
+      for (const n of (path || [])) {
+        for (const sb of (n.siblings || [])) {
+          const hit = bySeed.get(String(sb.address || '').toLowerCase());
+          if (hit && hit.length) sb.reached = hit.slice(0, 3);
+        }
+      }
+      /* 追ったのに取引所に着かなかった枝も、そう書く。
+         ★「調べていない」と「調べたが出なかった」は別のこと（第5-K-2節）。 */
+      const searched = new Set(found.searchedSeeds || []);
+      for (const n of (path || [])) {
+        for (const sb of (n.siblings || [])) {
+          const k = String(sb.address || '').toLowerCase();
+          if (!sb.reached && searched.has(k)) sb.searched = true;
+        }
+      }
     } catch (e) { console.error('[枝の探索] 失敗:', e.message); }
   }
 
@@ -4985,7 +5055,9 @@ function collectExchanges(result) {
       amount: n.amount, afterDilution: n.afterDilution || null,
       destTag: n.destTag ?? null,             // ★これが無いと取引所は口座を特定できない
       share: n.exploredShare ?? null, hops: n.exploredHops ?? null,
-      explored: n.role === 'explored' || undefined });
+      explored: n.role === 'explored' || undefined,
+      /* どの分岐から着いたか。報告書で「本線」と「分かれた枝」を書き分ける */
+      viaSibling: n.exploredSeed || null });
   }
 
   /* ★経路の途中で「同じ地点から取引所へも送られていた」場合も載せる。
@@ -5028,6 +5100,102 @@ function collectExchanges(result) {
     }
   }
 
+}
+
+/* ══ 判明したことを、調査をまたいで積み上げる ═══════════════════
+   ★実測（利用者報告・2026-08-28）：無料調査では Binance に到達したのに、
+     同じTXIDの有料報告書には「既知の取引所DBに一致しませんでした」と出た。
+     分岐点でどちらを選ぶかは、その時に取れたデータで変わる。
+     だから調べ直すたびに違う経路を追い、前に判明したものが消える。
+
+   ★経路の選び方を直すのではなく、【判明したことを捨てない】。
+     同じTXIDで一度でも取引所に到達したら、台帳に残す。
+     無料で判明したものが有料で消えることは、これで無くなる。
+
+   ★番号は「判明した順」。報告書もこの順に載せる（利用者の指示）。
+     No.1 は最初に判明した取引所であって、最重要という意味ではない。 */
+const findingsStore = new Map();     // txid(小文字) → { seq, byAddr: Map }
+const FINDINGS_MAX  = 300;
+
+const FINDINGS_ROUTES_MAX = 5;       // 1つのTXIDについて覚えておく経路の本数
+
+function findingsFor(txid) {
+  const k = String(txid || '').toLowerCase();
+  let f = findingsStore.get(k);
+  if (!f) { f = { seq: 0, byAddr: new Map(), routes: [] }; findingsStore.set(k, f); capMap(findingsStore, FINDINGS_MAX); }
+  if (!f.routes) f.routes = [];
+  return f;
+}
+
+const UNNAMED_EX = '取引所（名称未判明）';
+const isUnnamedEx = n => !n || String(n) === UNNAMED_EX;
+
+/* 今回判明した分を台帳に足し、台帳の全件を結果へ書き戻す。
+   ★何度呼んでも同じ結果になること（呼ぶ回数で番号が動かない）。
+     調査の途中と返す直前の2回呼ばれるため、ここが崩れると番号が毎回ずれる。 */
+function mergeFindings(txid, result, paid) {
+  if (!txid || !result) return;
+  const f = findingsFor(txid);
+
+  for (const e of (result.exchanges || [])) {
+    const k = String(e.address || '').toLowerCase();
+    if (!k) continue;
+    const prev = f.byAddr.get(k);
+    if (!prev) {
+      f.byAddr.set(k, { ...e, foundNo: ++f.seq, foundPaid: !!paid, foundAt: Date.now() });
+      continue;
+    }
+    /* 名前や着金額は後から付くことがある。判明した順番は変えずに、
+       欠けていた項目だけ埋める。 */
+    if (isUnnamedEx(prev.name) && !isUnnamedEx(e.name)) prev.name = e.name;
+    for (const key of ['amount', 'chain', 'share', 'hops', 'destTag', 'viaBridge',
+                       'sameHop', 'explored', 'afterDilution', 'viaSibling']) {
+      if (prev[key] == null && e[key] != null) prev[key] = e[key];
+    }
+  }
+
+  /* ★台帳の全件を返す。今回の経路には出てこなかったものも含める。
+     利用者の指示：無料で追ってチャットに出していない分も、報告書には必ず載せる。 */
+  /* ★「今回の経路で出たもの」だけを数える。
+     この関数は1回の調査で2回呼ばれる（調査の中と、返す直前）。
+     台帳から書き戻した分まで「今回出た」と数えると、
+     2回目で fromEarlier の印が消え、前回判明した分が
+     今回の到達先として出てしまう。 */
+  const nowAddrs = new Set((result.exchanges || [])
+    .filter(e => !e.fromEarlier)
+    .map(e => String(e.address || '').toLowerCase()));
+  result.exchanges = [...f.byAddr.values()]
+    .sort((a, b) => a.foundNo - b.foundNo)
+    .map(e => nowAddrs.has(String(e.address).toLowerCase())
+      ? { ...e }
+      : { ...e, fromEarlier: true });   // 今回の経路には出ていない＝前回までに判明した分
+
+  /* ★たどった経路そのものも覚えておく。
+     分岐点でどちらを選ぶかは、その時に取れたデータで変わるため、
+     同じTXIDでも調べるたびに別の経路になる。
+     ★「前と違う経路が出た」ではなく「どちらも実在する経路」だと示す。
+     無料調査で見えていた経路が、有料の報告書から消えないようにする。 */
+  const sig = (result.path || []).map(p => String(p.address || '').toLowerCase()).join('>');
+  if (sig) {
+    if (!f.routes.some(r => r.sig === sig)) {
+      f.routes.push({ sig, no: f.routes.length + 1, paid: !!paid, at: Date.now(),
+        nodes: (result.path || []).map(p => ({
+          address: p.address, label: p.label || '', amount: p.amount,
+          token: p.token, isExchange: !!p.isExchange })) });
+      while (f.routes.length > FINDINGS_ROUTES_MAX) f.routes.splice(1, 1);  // 最初の1本は残す
+    }
+    result.otherRoutes = f.routes.filter(r => r.sig !== sig);
+  }
+}
+
+/* 調査結果を仕上げる（一覧づくり → 台帳と突き合わせ → 説明の組み立て）。
+   ★3箇所で同じ3行を書いていた。順番を1箇所でも間違えると、
+     説明文が台帳を反映しないまま返る。1つにまとめる。 */
+function finalizeResult(txid, result, paid) {
+  collectExchanges(result);
+  mergeFindings(txid, result, paid);
+  attachNotes(result);
+  return result;
 }
 
 /* 調査1件ごとの「どの段に何秒かかったか」。直近だけ残す。
@@ -5136,8 +5304,7 @@ async function investigate(txid, chain, opts = {}) {
      DEX・ブリッジ・トークン契約は着金先ではないので入れない。 */
   ph.mark('情報付け');
   result.tronDenied = tronDeniedCount();   // ★断られた回数を説明に載せるため
-  collectExchanges(result);
-  attachNotes(result);
+  finalizeResult(txid, result, !!opts.paid);
 
   /* ★取引所が出なかったとき、「見つからなかった」で終わらせない。
      詐欺の資金が現金化のため取引所へ届くまでは1週間以内のことが多い
@@ -6010,6 +6177,71 @@ function resultNotes(result) {
       + '断定はできませんが、★どの取引所へ多く流れたかの目安になります。'
       + '凍結要請は複数の取引所へ同時に出せます。'));
   }
+  /* ★到達した取引所を、判明した順に番号を振って一覧で出す（利用者の指示）。
+     同じTXIDを調べ直しても番号は変わらない。番号は台帳が持っている。
+     ★これが無いと、無料調査の画面と報告書で並び順が違って見え、
+       「別の調査結果」と受け取られる。 */
+  const exList = (result.exchanges || []).filter(e => e.address);
+  if (exList.length) {
+    const how = e =>
+        e.viaBridge ? 'ブリッジを渡った先'
+      : e.viaSibling ? '分かれた枝をたどって'
+      : e.sameHop   ? '同じ地点から分岐して'
+      : e.explored  ? '枝をたどって'
+      : '本線をたどって';
+    const lines = exList.map(e =>
+      `No.${e.foundNo ?? '-'} ${e.name}`
+      + `（${e.address}`
+      + (e.chain ? `／${e.chain}` : '')
+      + (e.destTag != null ? `／宛先タグ ${e.destTag}` : '')
+      + `／${how(e)}到達`
+      + (e.share != null ? `・この枝が運んだ割合 約${(e.share * 100).toFixed(1)}%` : '')
+      + (e.fromEarlier ? '・前回までの調査で判明' : '')
+      + '）').join('　');
+    out.push(note('exchange-list', 'good', `到達した取引所の一覧（判明した順・${exList.length}件）`,
+      lines,
+      '番号は判明した順で、重要度の順ではありません。'
+      + '同じTXIDを調べ直しても番号は変わりません。'
+      + (exList.some(e => e.fromEarlier)
+          ? '★このTXIDの過去の調査で判明したものも含めています。'
+            + '調べ直すたびに経路の選び方が変わるため、'
+            + '一度判明したものが次の調査で消えないようにしています。'
+          : '')
+      + '凍結要請は複数の取引所へ同時に出せます。'));
+  }
+
+  /* ★分かれた宛先を、こちらから全部追ったことを書く。
+     追った結果が無いのか、そもそも追っていないのかは、
+     被害者にとって意味がまったく違う（第5-K-2節と同じ考え方）。 */
+  const sibs = [];
+  for (const n of path) for (const sb of (n.siblings || [])) if (sb.address) sibs.push(sb);
+  if (sibs.length) {
+    const hit  = sibs.filter(sb => (sb.reached || []).length);
+    const miss = sibs.filter(sb => !(sb.reached || []).length && sb.searched);
+    const notYet = sibs.length - hit.length - miss.length;
+    out.push(note('split-swept', hit.length ? 'good' : 'info',
+      `分かれた送金先 ${sibs.length}件を、こちらで追跡しました`,
+      (hit.length
+        ? `そのうち ${hit.length}件が取引所に到達しました。`
+          + hit.map(sb => `${sb.address} → `
+              + sb.reached.map(r => `${r.name}（${r.hops}段先）`).join('・')).join('　')
+        : '取引所に到達した枝はありませんでした。')
+      + (miss.length ? `　${miss.length}件は追跡しましたが、取引所には届いていません。` : '')
+      + (notYet ? `　${notYet}件は時間の都合で追跡できていません。` : ''),
+      '資金が複数に分かれている場合、追跡した1本が本命とは限りません。'
+      + 'そのため、分かれた宛先はこちらですべて追っています。'
+      + (notYet ? '追跡できなかった分は、そのTXIDを調査欄に貼るとその枝から調べ直せます。' : '')));
+  }
+
+  if ((result.otherRoutes || []).length) {
+    out.push(note('routes', 'info',
+      `このTXIDでは、過去の調査が別の経路もたどっています（${result.otherRoutes.length}本）`,
+      '資金が分かれている地点では、どの宛先を追うかがその時に取得できたデータで変わります。'
+      + 'そのため同じTXIDでも、調査のたびに別の経路をたどることがあります。'
+      + 'どちらか一方が誤りということではなく、いずれも実在する送金の記録です。',
+      '過去の調査で判明した取引所は、上の一覧にすべて含めています。'
+      + '一度判明したものが、次の調査で消えることはありません。'));
+  }
   if (result.stillMoving) {
     out.push(note('moving', 'warn', 'まだ資金が動いている最中かもしれません',
       stillMovingText(result.stillMoving)));
@@ -6071,20 +6303,105 @@ function exProvenanceHTML(ex) {
   return '';
 }
 
-/* 2件目以降も、見つけ方を添えて並べる。1件目だけ出して他を伏せない。 */
-function exOthersHTML(list) {
-  const rest = (list || []).slice(1);
-  if (!rest.length) return '';
-  return `<h4 style="margin:18px 0 10px">🏦 このほかに到達した取引所</h4>
+/* どうやって到達したかの一言。一覧・本文の両方で同じ言い方にする。
+   ★2箇所に書くと片方だけ古くなる（CLAUDE.md の約束）。 */
+function exHowText(e) {
+  if (!e) return '';
+  if (e.viaBridge)  return 'ブリッジを渡った先で到達';
+  if (e.viaSibling) return '分かれた枝をたどって到達（本件の資金と断定はできません）';
+  if (e.sameHop)    return '同じ地点から分岐して到達（本件の資金と断定はできません）';
+  if (e.explored)   return '枝をたどって到達';
+  return '経路をたどって到達';
+}
+
+/* ★到達した取引所を、判明した順に番号つきで並べる（利用者の指示）。
+   番号は台帳が持っているので、同じTXIDを調べ直しても変わらない。
+   ★これが無いと、無料調査の画面と報告書で並び順が食い違い、
+     別の調査結果に見える（利用者報告・2026-08-28）。 */
+function exNumberedHTML(list) {
+  const all = (list || []).filter(e => e && e.address);
+  if (!all.length) return '';
+  return `<h4 style="margin:18px 0 10px">🏦 到達した取引所の一覧（判明した順・${all.length}件）</h4>
     <table class="info-table">
-      ${rest.map(e => `<tr><th>${escHtml(e.name || '取引所')}</th><td>
-        <span class="mono">${escHtml(e.address)}</span>
+      <tr><th style="width:4em">番号</th><th>取引所</th><th>着金アドレス／到達のしかた</th></tr>
+      ${all.map(e => `<tr>
+        <th>No.${escHtml(String(e.foundNo ?? '-'))}</th>
+        <th>${escHtml(e.name || '取引所')}</th>
+        <td><span class="mono">${escHtml(e.address)}</span>
         ${e.chain ? `<br><span style="font-size:0.9em">チェーン：${escHtml(e.chain)}</span>` : ''}
-        <br><span style="font-size:0.9em;color:#aaa">${
-          e.viaBridge ? 'ブリッジを渡った先で到達'
-          : e.sameHop ? '同じ地点から分岐して到達（本件の資金と断定はできません）'
-          : '経路をたどって到達'}</span></td></tr>`).join('')}
-    </table>`;
+        ${e.destTag != null ? `<br><span style="font-size:0.9em">宛先タグ：<strong>${escHtml(String(e.destTag))}</strong></span>` : ''}
+        <br><span style="font-size:0.9em;color:#aaa">${escHtml(exHowText(e))}${
+          e.share != null ? `／この枝が運んだ割合 約${(e.share * 100).toFixed(1)}%` : ''}</span>
+        ${e.fromEarlier ? `<br><span style="font-size:0.9em;color:#c9a96e">※ このTXIDの過去の調査で判明した分です。今回の経路には出ていませんが、記録として実在するため記載しています。</span>` : ''}
+        </td></tr>`).join('')}
+    </table>
+    <p style="font-size:0.85em;color:#aaa;margin:8px 0 0">※ 番号は<strong>判明した順</strong>であり、重要度の順ではありません。
+    同じTXIDを調べ直しても番号は変わりません。凍結要請は複数の取引所へ同時に出せます。</p>`;
+}
+
+/* ★資金が分かれた地点の宛先を、こちらで追った結果ごと載せる。
+   一覧に出すだけでは、読み手が1件ずつ自分で調べ直すことになる。
+   実際そうされていた（利用者報告・2026-08-28）。
+   ★無料調査の画面に出し切れなかった分も、ここには必ず残す（利用者の指示）。 */
+function splitSweepHTML(path) {
+  const rows = [];
+  for (const n of (path || [])) {
+    for (const sb of (n.siblings || [])) {
+      if (sb && sb.address) rows.push(sb);
+    }
+  }
+  if (!rows.length) return '';
+  const hit = rows.filter(sb => (sb.reached || []).length).length;
+  return `<h3>🔀 分かれた送金先と、その追跡結果（${rows.length}件）</h3>
+    <p style="font-size:0.86rem;margin:0 0 10px">経路上で資金が複数に分かれています。
+    上の経路図は<strong>そのうちの1本</strong>で、これが被害資金の主要な流れとは限りません。
+    <strong>分かれた宛先は当社ですべて追跡しました。</strong>
+    ${hit ? `そのうち <strong>${hit}件</strong>が取引所に到達しています。` : '取引所に到達した枝はありませんでした。'}</p>
+    <table class="info-table">
+      <tr><th style="width:9em">分かれた送金先</th><th>その先の追跡結果</th></tr>
+      ${rows.map(sb => `<tr>
+        <th><span class="mono" style="font-size:0.78rem">${escHtml(sb.address)}</span>
+        ${sb.label ? `<br><b>${escHtml(sb.label)}</b>` : ''}
+        ${sb.amount != null ? `<br><span style="font-size:0.78rem;color:var(--r-ink2)">${escHtml(String(sb.amount).slice(0, 14))} ${escHtml(sb.token || '')}</span>` : ''}</th>
+        <td>${(sb.reached || []).length
+          ? (sb.reached || []).map(rr => `🏦 <strong>${escHtml(rr.name)}</strong>（${rr.hops}段先）
+             <br><span class="mono" style="font-size:0.72rem">${escHtml(rr.address)}</span>`).join('<br>')
+          : sb.searched
+            ? '<span style="color:var(--r-ink2)">追跡しましたが、取引所には届いていません。</span>'
+            : '<span style="color:#fbbf24">時間の都合で追跡できていません。下のTXIDを調査欄に貼ると、この枝から調べ直せます。</span>'}
+        ${sb.txHash ? `<br><span class="mono" style="font-size:0.7rem;color:var(--r-ink2)">${escHtml(sb.txHash)}</span>` : ''}</td></tr>`).join('')}
+    </table>
+    <p class="ref-warn" style="margin-top:10px"><strong>この欄の読み方</strong><br>
+    分かれた宛先のどれが本件の資金かを、一つに<strong>断定することはできません</strong>。
+    ただし<strong>送金の記録はいずれも実在します</strong>。
+    凍結要請は複数の取引所へ同時に出せるため、判断材料として省かずに記載しています。</p>`;
+}
+
+/* ★同じTXIDで、過去の調査がたどった別の経路。
+   実測（利用者報告・2026-08-28）：無料調査では Binance に着いたのに、
+   同じTXIDの有料報告書では取引所が出なかった。
+   分岐点の選び方が調査ごとに変わるためで、どちらの経路も記録としては実在する。
+   ★「前と違う」ではなく「どちらも実在する」と示す。無料で見えたものを消さない。 */
+function otherRoutesHTML(r) {
+  const rs = (r && r.otherRoutes) || [];
+  if (!rs.length) return '';
+  return `<h3>🧭 このTXIDで、過去の調査がたどった別の経路（${rs.length}本）</h3>
+    <p style="font-size:0.86rem;margin:0 0 10px">資金が分かれている地点では、
+    <strong>どの宛先を追うかがその時に取得できたデータで変わります</strong>。
+    そのため同じTXIDでも、調査のたびに別の経路をたどることがあります。
+    <strong>どちらか一方が誤りということではなく、いずれも実在する送金の記録です。</strong>
+    無料調査でご覧になった経路が本書から抜け落ちないよう、ここに併記します。</p>
+    ${rs.map(rt => `<div style="margin:0 0 14px">
+      <p style="font-size:0.86rem;margin:0 0 6px"><strong>経路 ${rt.no}</strong>
+      （${rt.paid ? '詳細調査' : '無料調査'}・${escHtml(fmtDate(new Date(rt.at).toISOString()))}）</p>
+      <table class="info-table">
+        ${rt.nodes.map((nd, i) => `<tr>
+          <th style="width:6em">${i === 0 ? '送金元' : i + '次先'}</th>
+          <td><span class="mono" style="font-size:0.78rem">${escHtml(nd.address)}</span>
+          ${nd.label ? `<br><b>${escHtml(nd.label)}</b>` : ''}
+          ${nd.isExchange ? ' 🏦' : ''}
+          ${nd.amount != null ? `<br><span style="font-size:0.78rem;color:var(--r-ink2)">${escHtml(String(nd.amount).slice(0, 14))} ${escHtml(nd.token || '')}</span>` : ''}</td></tr>`).join('')}
+      </table></div>`).join('')}`;
 }
 
 function traceCaveatHTML(path) {
@@ -6305,13 +6622,14 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       const contact = getExchangeContact(ex.name);
 
       exHTML = `
+        ${exNumberedHTML(r.exchanges)}
         ${exProvenanceHTML(ex)}
+        <h4 style="margin:18px 0 10px">🏦 No.${escHtml(String(ex.foundNo ?? 1))} の詳細</h4>
         <table class="info-table">
           <tr><th>取引所名</th><td>${ex.name || '特定済み'}</td></tr>
           <tr><th>着金アドレス</th><td class="mono">${ex.address}</td></tr>
           <tr><th>着金額</th><td>${(ex.amount != null && !isNaN(ex.amount)) ? ex.amount.toFixed(8) : '不明'} ${ex.chain || r.chain}</td></tr>
         </table>
-        ${exOthersHTML(r.exchanges)}
         ${contact ? `
         <h4 style="margin:18px 0 10px">📞 取引所連絡先・対応窓口</h4>
         <table class="info-table">
@@ -6694,6 +7012,9 @@ ${r.txid}
         凍結の要請先にはなりません。ブリッジを通っている場合、資金は<strong>別のチェーンへ移動している可能性</strong>があります。
         <strong>🔁 スワップ／トークン</strong>＝そこで別の通貨（USDT等）に交換された地点です。</p>` : ''}
         <p class="flow-note">※「残高」は各アドレスに<strong>現在入っている総額</strong>（照会時点）です。最終到達先が取引所の場合、その残高は取引所ウォレット全体の合算額で、他の利用者の資産も含みます。<strong>お客様の被害額そのものではありません。</strong></p>
+
+        ${splitSweepHTML(r.path)}
+        ${otherRoutesHTML(r)}
 
         <h3>🏦 取引所判定</h3>
         ${exHTML}
@@ -7808,11 +8129,13 @@ app.post('/api/admin/generate-report', requireAdmin, express.json(), async (req,
           result = await investigate(txid, chain, { paid: true });
           /* ★情報付けが締切をまたいで終わることがある。返す直前にもう一度
            一覧を作り直す。何度呼んでも同じ結果になる作りにしてある。 */
-        collectExchanges(result);
-  attachNotes(result);
+        finalizeResult(cacheKey, result, !!paidRun);
         txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
   capMap(txidCache, TXID_MAX);
         }
+      /* ★保存済みの結果を使い回すときも台帳と突き合わせる。
+         別の調査で新しく判明した取引所が、こちらにも反映される。 */
+        mergeFindings(cacheKey, result, !!paidRun);
         list.push({ txid, chain, result });
         console.log(`[Admin] 調査完了: ${txid}`);
       } catch (e) {
@@ -8653,11 +8976,13 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
             result = await investigate(item.txid, item.chain, { paid: true });
             /* ★情報付けが締切をまたいで終わることがある。返す直前にもう一度
            一覧を作り直す。何度呼んでも同じ結果になる作りにしてある。 */
-        collectExchanges(result);
-  attachNotes(result);
+        finalizeResult(cacheKey, result, !!paidRun);
         txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
   capMap(txidCache, TXID_MAX);
           }
+      /* ★保存済みの結果を使い回すときも台帳と突き合わせる。
+         別の調査で新しく判明した取引所が、こちらにも反映される。 */
+          mergeFindings(cacheKey, result, !!paidRun);
           list.push({ txid: item.txid, chain: item.chain, result });
         } catch (e) {
           console.error(`[Submit] 調査失敗: ${item.txid}`, e.message);
@@ -9197,11 +9522,13 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
         ]);
         /* ★情報付けが締切をまたいで終わることがある。返す直前にもう一度
            一覧を作り直す。何度呼んでも同じ結果になる作りにしてある。 */
-        collectExchanges(result);
-  attachNotes(result);
+        finalizeResult(cacheKey, result, !!paidRun);
         txidCache.set(cacheKey, { result, investigatedAt: Date.now(), paid: !!paidRun });
   capMap(txidCache, TXID_MAX);
       }
+      /* ★保存済みの結果を使い回すときも台帳と突き合わせる。
+         別の調査で新しく判明した取引所が、こちらにも反映される。 */
+      mergeFindings(cacheKey, result, !!paidRun);
       const job = connectionJobs.get(jobId);
       if (job) { job.status = 'done'; job.result = result; }
     } catch (e) {

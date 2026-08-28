@@ -223,6 +223,8 @@
   .sp-row:last-of-type{border-bottom:none}
   .sp-a{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
   .sp-am{color:var(--sub);font-size:11.5px}
+  .sp-hit{color:var(--green);font-size:11.5px;margin-top:3px}
+  .sp-miss{color:var(--sub);font-size:11.5px;margin-top:3px}
   .sp-tx{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;color:var(--teal);
          word-break:break-all;margin-top:3px;cursor:pointer;user-select:all;-webkit-user-select:all}
   .pf-bad{background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.45);border-radius:8px;padding:11px 13px;margin-bottom:4px}
@@ -799,21 +801,32 @@ function profileHTML(path){
    これを貼り直せばその先を追える。 */
 function splitHTML(path){
   const rows = [];
+  let hit = 0;
   (path || []).forEach((n, i) => {
     (n.siblings || []).forEach(sb => {
       if (!sb || !sb.address) return;
+      /* ★この枝の先をサーバーが追った結果。一覧に出しておいて調べていないと、
+         利用者は1件ずつ自分で貼り直すことになる（実際そうされていた）。 */
+      const 追跡結果 = (sb.reached || []).length
+        ? `<div class="sp-hit">🏦 ${sb.reached.map(r => `<b>${esc(r.name)}</b>（${r.hops}段先）`).join("・")}</div>`
+        : sb.searched
+          ? `<div class="sp-miss">追跡しましたが、取引所には届いていません</div>`
+          : `<div class="sp-miss">時間の都合で追跡できていません。下のTXIDを貼ると調べられます</div>`;
       rows.push(`<div class="sp-row">
         <div class="sp-a">${esc(shortAddr(sb.address))}${sb.label ? " <b>" + esc(sb.label) + "</b>" : ""}
           ${sb.amount != null ? `<span class="sp-am">${esc(String(sb.amount).slice(0,12))} ${esc(sb.token || "")}</span>` : ""}</div>
+        ${追跡結果}
         ${sb.txHash ? `<div class="sp-tx" data-tx="${esc(sb.txHash)}" title="タップでコピー">${esc(sb.txHash)}</div>` : ""}
       </div>`);
+      if ((sb.reached || []).length) hit++;
     });
   });
   if (!rows.length) return '';
   return `<div class="cp">
     <div class="cp-h">同じ地点から出た、別の送金先（${rows.length}件）</div>
     <div class="note" style="margin-bottom:8px">資金が複数に分かれています。上の経路は<b>そのうちの1本</b>で、これが被害資金の主要な流れとは限りません。
-    別の経路を調べたい場合は、下のTXIDをコピーして調査欄に貼り付けてください。</div>
+    <b>分かれた宛先はこちらですべて追跡しました。</b>${hit ? `そのうち<b>${hit}件</b>が取引所に到達しています。` : ""}
+    さらにご自身で追いたい場合は、下のTXIDをコピーして調査欄に貼り付けてください。</div>
     ${rows.join("")}
   </div>`;
 }
@@ -878,7 +891,16 @@ function resultCard(results){
     if (isBridgeLike(n))      viaNodes.push(n);
     else if (n.isExchange)    exNodes.push(n);
   }));
-  const exNames = [...new Set(exNodes.map(n => n.label).filter(Boolean))];
+  const namedNodes = exNodes.filter(n => n.label);
+  /* ★サーバーの一覧には、過去の同じTXIDの調査で判明した取引所も入る。
+     経路図には出てこないが、判明した事実なので数にも見出しにも入れる。
+     ここを経路図だけで数えていたため、無料で判明したものが消えて見えた。 */
+  const exServer = [].concat(...results.map(r => r.exchanges || []))
+    .map(e => e && e.name).filter(Boolean)
+    .filter(name => !hasKey(name, BRIDGE_KEYS) && !hasKey(name, MIXER_KEYS));
+  const exNames = [...new Set(namedNodes.map(n => n.label).concat(exServer))];
+  const exCount = Math.max(exNodes.length, exNames.length);
+  const inferredCount = Math.max(0, exNodes.length - namedNodes.length);
   /* ★ブリッジで別チェーンへ渡ったことは、ラベルでは分からない。
      取引の中身から復元しているので、そちらを見て判定する。 */
   const crossed = [].concat(...paths).filter(n => n && n.bridgeTo);
@@ -910,7 +932,7 @@ function resultCard(results){
   <div class="card"><h4>調査サマリー</h4><div class="stats">
     <div class="stat"><div class="k">🔗 追跡TXID数</div><div class="v">${results.length}件</div><div class="n">解析完了</div></div>
     <div class="stat"><div class="k">📍 追跡アドレス数</div><div class="v">${addrs.size}件</div><div class="n">経路上のアドレス</div></div>
-    <div class="stat"><div class="k">🏦 取引所候補</div><div class="v">${exNodes.length}件</div><div class="n">${noLabelInfo ? 'ラベル情報なし' : `判明${exNames.length}／推定${exNodes.length - exNames.length}`}</div></div>
+    <div class="stat"><div class="k">🏦 取引所候補</div><div class="v">${exCount}件</div><div class="n">${(noLabelInfo && !exNames.length) ? 'ラベル情報なし' : `判明${exNames.length}／推定${inferredCount}`}</div></div>
     <div class="stat"><div class="k">💰 追跡総額</div><div class="v" style="font-size:14px">${esc(amountText)}</div><div class="n">オンチェーン値</div></div>
   </div></div>`;
 
@@ -937,13 +959,15 @@ function resultCard(results){
     const p = r.path || [];
     const hiTx = p.filter(n => Number.isFinite(n.txCount) && n.txCount >= HIGH_TX);
     // サーバーの exchanges は {name,address,amount} の配列。名称だけを取り出して判定・表示する
-    const ex = [...new Set((r.exchanges || [])
-      .map(n => n && n.name)
-      .filter(name => name && !hasKey(name, BRIDGE_KEYS) && !hasKey(name, MIXER_KEYS)))];
+    /* ★番号は「判明した順」。サーバーが持っている台帳の番号をそのまま出す。
+       報告書も同じ番号で載るので、画面と書面で並びが食い違わない。 */
+    const ex = (r.exchanges || [])
+      .filter(e => e && e.name && !hasKey(e.name, BRIDGE_KEYS) && !hasKey(e.name, MIXER_KEYS))
+      .map(e => `No.${e.foundNo ?? "-"} ${e.name}${e.fromEarlier ? "（前回までの調査で判明）" : ""}`);
     return `
     <div class="card"><h4>資金フロー（概要）${results.length>1 ? ` ${i+1}/${results.length}` : ''} — ${esc(r.chain)}</h4>
       ${flowHTML(p)}
-      ${ex.length ? `<div class="note">到達した取引所：${esc(ex.join('、'))}</div>` : ''}
+      ${ex.length ? `<div class="note">到達した取引所（判明した順）：${esc(ex.join('、'))}</div>` : ''}
       ${notesHTML(r.notes)}
       ${bridgeStopHTML(p)}
       ${refTraceHTML(p)}
