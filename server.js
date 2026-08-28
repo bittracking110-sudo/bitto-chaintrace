@@ -110,12 +110,31 @@ const txidCache       = new Map();
    無料調査は外部ラベルを1回しか引かず、素性もAMLスコアも付けない。
    それをそのまま納品すると、代金をいただいた方に無料品質を渡すことになる。
    有料が要るときは、無料で作った結果を捨てて調べ直す。 */
+/* ★取引所が出なかった結果は、そのまま使い回さない。
+   分岐点でどちらを追うかは、その時に取得できたデータで変わる。
+   実測（2026-08-28）：同じTXIDで maskex に着く回と、
+   6段目で止まって何も出ない回があった。
+   使い回すと、たまたま外れた1回がそのTXIDの答えとして固定されてしまう。
+   ★見つかったものは台帳に積み上がるので、調べ直しても減ることはない。
+   外部の回数を使い切らないよう、調べ直す回数には上限を置く。 */
+const EMPTY_RETRY_MAX = 3;
+const emptyRetries    = new Map();   // txid（小文字） → 調べ直した回数
+
 function cachedResult(key, wantPaid) {
   const c = txidCache.get(key);
   if (!c) return null;
   if (wantPaid && !c.paid) {
     console.log('[Cache] 無料で調べた結果のため、有料レポート用に調べ直します');
     return null;
+  }
+  if (!((c.result && c.result.exchanges) || []).length) {
+    const n = emptyRetries.get(key) || 0;
+    if (n < EMPTY_RETRY_MAX) {
+      emptyRetries.set(key, n + 1);
+      capMap(emptyRetries, TXID_MAX);
+      console.log(`[Cache] 取引所が出ていない結果のため調べ直します（${n + 1}/${EMPTY_RETRY_MAX}回目）`);
+      return null;
+    }
   }
   return c.result;
 } // txid（小文字）→ { result, investigatedAt }
