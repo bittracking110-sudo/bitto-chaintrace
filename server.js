@@ -7944,6 +7944,30 @@ app.post('/api/admin/labels/delete', requireAdmin, express.urlencoded({ extended
   return res.redirect(`/api/admin/labels?t=${t}&msg=${encodeURIComponent('削除しました')}`);
 });
 
+/* ★申込がいまどこで止まっているかを見る。
+   これが無いと「報告書が届かない」を毎回推測で追うことになる。
+   実際に追えず、原因の切り分けに時間を使った。
+   ★氏名・メール・TXIDは出さない。状態を知るのに要らない。 */
+app.get('/api/admin/orders', requireAdmin, (req, res) => {
+  const rows = [];
+  for (const [token, v] of txidFormTokens.entries()) {
+    rows.push({
+      申込: token.slice(0, 8) + '…',
+      作成: v.createdAt ? new Date(v.createdAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '',
+      件数: v.count || 1,
+      状態: v.status || (v.used ? 'investigating' : 'paid_waiting_txid'),
+      TXID入力済み: !!v.used,
+      報告書: v.report ? '完成' : 'まだ',
+      報告書URL: v.report ? v.report.reportUrl : null,
+      試験購入: !!(v.iap && v.iap.sandbox),
+      購入の識別: v.iap ? String(v.iap.appUserId || '').slice(0, 12) + '…' : null,
+      取引ID数: v.iap ? (v.iap.transactionIds || []).length : 0,
+    });
+  }
+  rows.sort((a, b) => String(b.作成).localeCompare(String(a.作成)));
+  res.json({ 件数: rows.length, 申込: rows.slice(0, 50) });
+});
+
 app.get('/api/admin/timing', requireAdmin, (req, res) => {
   const esc = x => String(x ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const byHost = {};
