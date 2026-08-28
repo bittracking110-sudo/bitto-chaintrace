@@ -2041,7 +2041,12 @@ const TRACE_BUDGET_MS = 27000;   // トークン契約・ブリッジを通過�
 /* 予算の合計が INVESTIGATE_HARD_TIMEOUT_MS を超えると、
    利用者には「時間内に完了しませんでした」としか出ない（実測で62秒→失敗）。
    TRACE 27 + ENRICH 15 + CALLS 6 = 48秒に収め、上限側にも余裕を持たせる。 */
-const ENRICH_BUDGET_MS = 15000;   // 混雑したコントラクトはBlockchairの応答が遅い。ここで足りないと経路を確かめられない
+/* 混雑したコントラクトはBlockchairの応答が遅い。ここで足りないと経路を確かめられない。
+   ★無料も名前を3回引くようにしたので、この段の使い道が増えた。
+   実測せずに動かすと第5-G節の繰り返しになるため、既定値は据え置き、
+   環境変数で調整できるようにしておく（デプロイ不要で戻せる）。
+   足りているかは /api/admin/timing の「情報付け」で見る。 */
+const ENRICH_BUDGET_MS = Number(process.env.ENRICH_BUDGET_MS ?? 15000);
 // investigateETH の内部呼び出し(calls)ラベル取得の時間予算。
 const CALLS_BUDGET_MS = 6000;
 /* ブリッジを渡った先（TRON）を追う時間。参考経路と同時には使わない。

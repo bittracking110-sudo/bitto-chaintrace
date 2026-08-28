@@ -915,7 +915,10 @@ function resultCard(results){
     .filter(name => !hasKey(name, BRIDGE_KEYS) && !hasKey(name, MIXER_KEYS));
   const exNames = [...new Set(namedNodes.map(n => n.label).concat(exServer))];
   const exCount = Math.max(exNodes.length, exNames.length);
-  const inferredCount = Math.max(0, exNodes.length - namedNodes.length);
+  /* ★「判明＋推定」は必ず件数に一致させる。
+     経路の名無しノードに後から名前が付くと、同じ1件を
+     「判明1／推定1」と二重に数えて、合計が件数を超えていた。 */
+  const inferredCount = Math.max(0, exCount - exNames.length);
   /* ★ブリッジで別チェーンへ渡ったことは、ラベルでは分からない。
      取引の中身から復元しているので、そちらを見て判定する。 */
   const crossed = [].concat(...paths).filter(n => n && n.bridgeTo);
