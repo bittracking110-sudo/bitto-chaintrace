@@ -8219,7 +8219,23 @@ h1{color:#34d399;font-size:1.4rem;margin:12px 0 8px}.icon{font-size:3rem;margin-
     ✅ 入力後の変更・キャンセルはできません<br>
     ✅ フォームURLは1回のみ使用可能です
   </div>
-</div></body></html>`));
+  <a href="/bitto" style="display:block;margin-top:18px;background:#34E1C8;color:#04231F;font-weight:700;
+     text-decoration:none;border-radius:10px;padding:14px 18px">チャットに戻る</a>
+</div>
+<script>
+/* ★sid をこの端末に残す。/bitto は同じオリジンなので読み取れる。
+   これが無いと、web で買った方は「メールが届かなければ終わり」になる。
+   アプリで直したのと同じ問題（第5-M節）。 */
+try {
+  var sid = new URLSearchParams(location.search).get('sid');
+  if (sid) {
+    var k = 'bitto_web_orders_v1';
+    var a = JSON.parse(localStorage.getItem(k) || '[]');
+    if (a.indexOf(sid) < 0) { a.push(sid); localStorage.setItem(k, JSON.stringify(a.slice(-20))); }
+  }
+} catch (e) {}
+</script>
+</body></html>`));
 
 app.get('/payment/cancel', (_req, res) => res.send(`<!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -9165,6 +9181,33 @@ app.get('/api/txid-form-result/:token', (req, res) => {
 });
 
 // TXID送信・調査開始API
+/* ★web で買った方が、チャットに戻ってきたときに申込を見つけられるようにする。
+   web は決済のあと Stripe から /payment/success?sid=… に戻ってくる。
+   この sid（当社が発行したもの）は、webhook が作る申込にも保存してある。
+   ★これまでは web の画面が申込を知る手段が無く、導線はメールだけだった。
+   迷惑メールに入ると受け取れない（アプリで同じ問題を直したのと同じ構図）。
+
+   ★返すのは状態と入口だけ。氏名・メールは返さない（/api/admin/orders と同じ方針）。 */
+app.get('/api/bitto/order-by-sid/:sid', (req, res) => {
+  const sid = String(req.params.sid || '');
+  if (!sid) return res.status(400).json({ error: 'sid がありません' });
+  for (const [token, d] of txidFormTokens) {
+    if (d.sessionId !== sid) continue;
+    return res.json({
+      found: true,
+      status: d.status || (d.used ? 'investigating' : 'paid_waiting_txid'),
+      count: d.count || 1,
+      formUrl: `${BASE_URL}/txid-form/${token}`,
+      reportUrl: d.report?.reportUrl || null,
+      issuedAt: d.report?.issuedAt || null,
+      errorMsg: d.errorMsg || null,
+    });
+  }
+  /* まだ webhook が届いていないことがある（決済直後）。
+     ★「無い」と「まだ来ていない」を区別する。前者だと利用者は諦めてしまう。 */
+  res.json({ found: false, pending: true });
+});
+
 app.post('/api/submit-txids', express.json(), async (req, res) => {
   const { token, txids } = req.body;
   const formData = txidFormTokens.get(token);

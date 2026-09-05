@@ -582,10 +582,18 @@ function extractTxids(text){
 /* ── メッセージ描画 ── */
 const AI_AVATAR = `<div class="avatar logo-img"></div>`;
 
-function addMe(text){
+/* ★会話を端末に残す。web はタブを閉じると全部消えていた。
+   購入した方が報告書の導線を失うのが最悪なので、アプリと同じ作りにする。
+   保存先はこの端末のブラウザだけ。サーバーには送らない。 */
+const CHATLOG_KEY = 'bitto_web_chatlog_v1';
+let chatLog = [];
+const saveChatLog = () => { try{ localStorage.setItem(CHATLOG_KEY, JSON.stringify(chatLog.slice(-60))); }catch(_){} };
+
+function addMe(text, opt){
   const d = document.createElement('div'); d.className = 'row me';
   d.innerHTML = `<div><div class="who">自分</div><div class="bubble">${esc(text)}</div></div>`;
   chat.appendChild(d); scrollDown();
+  if (!(opt && opt.restore)){ chatLog.push({ r:'me', h: esc(text) }); saveChatLog(); }
 }
 const hasCard = html => /class="card"/.test(String(html));
 /* ★カードで組んだ吹き出しの目印。文章には絶対に出てこない印だけを見る。
@@ -602,12 +610,39 @@ const bubbleCls = (html, rich) => {
    .bubble は既定で white-space:pre-wrap（素の文章の改行をそのまま出すため）だが、
    HTMLで組むとテンプレート文字列の改行とインデントまで描画され、
    間延びして文頭が字下げされる。組み立て側が分かっているので明示で切り替える。 */
-function addAi(html, {typing=false, rich=false} = {}){
+function addAi(html, {typing=false, rich=false, restore=false} = {}){
   const d = document.createElement('div'); d.className = 'row ai';
   const cls = 'bubble' + (typing ? '' : bubbleCls(html, rich));
   d.innerHTML = `${AI_AVATAR}<div style="flex:1;min-width:0"><div class="who">BitTo AI</div>
     <div class="${cls}">${typing ? '<div class="dots"><i></i><i></i><i></i></div>' : html}</div></div>`;
-  chat.appendChild(d); scrollDown(); return d;
+  chat.appendChild(d); scrollDown();
+  if (!restore){
+    /* 「解析中…」は内容が確定していない。setBubble で確定したときに記録する。 */
+    if (typing) d.dataset.logIdx = '';
+    else { chatLog.push({ r:'ai', h: html, rich: rich || undefined }); d.dataset.logIdx = String(chatLog.length - 1); saveChatLog(); }
+  }
+  return d;
+}
+
+/* 起動時に保存済みの会話を描き直す。★アプリと同じ判断で印を付ける（bubbleCls）。 */
+function restoreChatLog(){
+  try { chatLog = JSON.parse(localStorage.getItem(CHATLOG_KEY) || '[]'); } catch(_) { chatLog = []; }
+  if (!Array.isArray(chatLog) || !chatLog.length) { chatLog = []; return false; }
+  chatLog.forEach(m => {
+    const d = document.createElement('div');
+    if (m.r === 'me'){
+      d.className = 'row me';
+      d.innerHTML = `<div><div class="who">自分</div><div class="bubble">${m.h}</div></div>`;
+    } else {
+      d.className = 'row ai';
+      d.innerHTML = `${AI_AVATAR}<div style="flex:1;min-width:0"><div class="who">BitTo AI</div>
+        <div class="bubble${bubbleCls(m.h, m.rich)}">${m.h}</div></div>`;
+    }
+    chat.appendChild(d);
+    initFlowScroll(d);
+  });
+  scrollDown();
+  return true;
 }
 /* 資金フローの横スクロールに、現在地・端のぼかし・送りボタンを連動させる。
    イベントは要素に紐づくため、HTMLを差し替えるたびに呼ぶ必要がある */
@@ -641,7 +676,8 @@ function initFlowScroll(root){
     update();
   });
 }
-const setBubble = (row, html) => {
+/* log:false → 進捗表示など一時的な更新。履歴には残さない */
+const setBubble = (row, html, {log=true} = {}) => {
   const b = row.querySelector('.bubble');
   /* 結果カードはHTMLで組む。素の文章と違い、テンプレート文字列の改行まで
      描画されると間延びするので、カードを含むときは pre-wrap を切る。
@@ -650,6 +686,13 @@ const setBubble = (row, html) => {
   b.classList.toggle('wide', cls.includes('wide'));
   b.classList.toggle('rich', cls.includes('rich'));
   b.innerHTML = html; initFlowScroll(b); scrollDown();
+  if (!log) return;
+  /* ★「解析中…」の吹き出しが、結果に差し替わった時点で履歴に確定する。
+     経過秒数の更新まで毎回書くと保存が無駄に増えるので log:false を使う。 */
+  const i = row.dataset.logIdx;
+  if (i === '') { chatLog.push({ r:'ai', h: html }); row.dataset.logIdx = String(chatLog.length - 1); }
+  else if (i != null && chatLog[Number(i)]) chatLog[Number(i)] = { r:'ai', h: html };
+  saveChatLog();
 };
 
 /* 打ち切った先を「最後まで追った場合」として出す。
@@ -1509,7 +1552,10 @@ async function openInitialPack(){
         files: [new File([new Blob(['x'])], 'x.pdf', { type:'application/pdf' })] }));
     } catch(_) { canShare = false; }
 
-    const card = addAi(`<b>初動パックができました。</b>
+    /* ★URLを吹き出しのHTMLに持たせる。会話を保存するようにしたので、
+       作成時にボタンへ結び付けると、履歴から戻したときに押せなくなる。
+       （アプリで実際に起きた・第5-L節） */
+    const card = addAi(`<div data-pack-url="${esc(packUrl)}" data-pack-name="${esc(name)}"><b>初動パックができました。</b>
       <div style="font-size:12.5px;color:var(--sub);margin-top:6px;line-height:1.75">
       ${n ? `解析した${n}件のTXIDを差し込んであります。` : ''}証拠保全チェックリスト・時系列メモ・取引所への連絡文が入っています。</div>
       <div class="filecard" data-pack="open" role="button" tabindex="0">
@@ -1524,25 +1570,7 @@ async function openInitialPack(){
       </div>
       <div style="font-size:11.5px;color:var(--sub);margin-top:8px;line-height:1.7">
       ${canShare ? '「保存・共有」から<b>ファイルに保存</b>、メールやLINEで送ることもできます。<br>' : ''}
-      印刷して警察や弁護士にそのままお渡しいただけます。空欄はご自身で書き込んでください。</div>`, { rich:true });
-
-    card.querySelectorAll('[data-pack]').forEach(b => b.addEventListener('click', async () => {
-      const act = b.dataset.pack;
-      // 普通のURLに遷移させる。iOSでもそのままPDFが開く
-      if (act === 'open'){ window.open(packUrl, '_blank'); return; }
-      if (act === 'save'){ window.location.href = packUrl + '?dl=1'; return; }
-      // 共有シートを開く。iOSはここの「ファイルに保存」が保存の正規ルート
-      b.disabled = true;
-      try{
-        const f = await fetch(packUrl);
-        const blob = await f.blob();
-        await navigator.share({
-          files:[new File([blob], name, { type:'application/pdf' })],
-          title:'BitTo 初動パック',
-        });
-      }catch(_){ /* 利用者が閉じただけのこともあるので何も言わない */ }
-      finally { b.disabled = false; }
-    }));
+      印刷して警察や弁護士にそのままお渡しいただけます。空欄はご自身で書き込んでください。</div></div>`, { rich:true });
   }catch(e){
     typing.remove();
     addAi('<b>初動パックを作成できませんでした。</b><div style="margin-top:8px;font-size:12.5px;line-height:1.75">通信を確認して、もう一度お試しください。</div>', { rich:true });
@@ -1550,6 +1578,117 @@ async function openInitialPack(){
     busy = false;
     showTab('chat');
   }
+}
+
+/* ══ 購入と報告書を、チャットに残す ═══════════════════════════
+   ★これまで web は、購入したあとの導線がメールだけだった。
+     迷惑メールに入ると受け取れない。アプリで直したのと同じ問題（第5-M節）。
+     決済後に /payment/success が sid をこの端末に残すので、それを手掛かりに
+     申込の状態を引き、チャットにカードとして出す。 */
+const WEB_ORDERS_KEY  = 'bitto_web_orders_v1';
+const WEB_SEEN_KEY    = 'bitto_web_seen_v1';
+/* getJSON は解析履歴の側で既に定義済み。★同じものを2つ作らない。 */
+const setJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(_) {} };
+
+/* ★ボタンは画面全体で受ける。作成時に結び付けると、
+   履歴から戻したときに押せなくなる（アプリで実際に起きた）。 */
+document.addEventListener('click', e => {
+  const b = e.target && e.target.closest && e.target.closest('[data-report]');
+  if (!b) return;
+  const holder = b.closest('[data-report-url]');
+  const url = holder && holder.dataset.reportUrl;
+  if (!url) return;
+  e.preventDefault();
+  /* 「PDFで保存」と書いてHTMLを開くと、保存できると思った人が保存できない。
+     報告書の本体はHTML、PDFは別に用意してある。 */
+  window.open(b.dataset.report === 'pdf' ? url + '.pdf' : url, '_blank');
+});
+document.addEventListener('click', e => {
+  const b = e.target && e.target.closest && e.target.closest('[data-form]');
+  if (!b) return;
+  const holder = b.closest('[data-form-url]');
+  const url = holder && holder.dataset.formUrl;
+  if (!url) return;
+  e.preventDefault();
+  window.open(url, '_blank');
+});
+document.addEventListener('click', async e => {
+  const b = e.target && e.target.closest && e.target.closest('[data-pack]');
+  if (!b) return;
+  const holder = b.closest('[data-pack-url]');
+  const url  = holder && holder.dataset.packUrl;
+  const name = (holder && holder.dataset.packName) || 'BitTo_初動パック.pdf';
+  if (!url) return;
+  e.preventDefault();
+  const act = b.dataset.pack;
+  if (act === 'open'){ window.open(url, '_blank'); return; }
+  if (act === 'save'){ window.location.href = url + '?dl=1'; return; }
+  b.disabled = true;
+  try{
+    const blob = await (await fetch(url)).blob();
+    await navigator.share({ files:[new File([blob], name, { type:'application/pdf' })], title:'BitTo 初動パック' });
+  }catch(_){ /* 利用者が閉じただけのこともあるので何も言わない */ }
+  finally { b.disabled = false; }
+});
+
+function addPurchasedCard(o){
+  const n = o.count || 1;
+  addAi(`<div data-form-url="${esc(o.formUrl)}">
+    <b>ご購入ありがとうございます。</b>
+    <div style="font-size:12.5px;color:var(--sub);margin-top:6px;line-height:1.75">
+    正式調査報告書（${n}件）を承りました。<b>調査するTXIDのご入力</b>をお願いします。
+    ご入力後、調査を開始します。</div>
+    <div class="fc-acts"><button class="fc-b prime" data-form="open">TXIDを入力する</button></div>
+    <div style="font-size:11.5px;color:var(--sub);margin-top:8px;line-height:1.7">
+    ※ この画面を閉じても、<b>同じブラウザで開き直せば</b>ここから入力できます。<br>
+    ご入力後、報告書ができあがりましたらこのチャットにお届けします。
+    同じ内容をご登録のメールアドレスにもお送りします。</div>
+  </div>`, { rich:true });
+}
+
+function addReportCard(o){
+  const nm = `BitTo_調査報告書_${new Date(o.at || Date.now()).toISOString().slice(0,10)}`;
+  addAi(`<div data-report-url="${esc(o.reportUrl)}">
+    <b>正式調査報告書ができあがりました。</b>
+    <div style="font-size:12.5px;color:var(--sub);margin-top:6px;line-height:1.75">
+    警察・弁護士・取引所へのご相談に、そのままお使いいただけます。</div>
+    <div class="filecard" data-report="open" role="button" tabindex="0">
+      <div class="fc-ic">報告書</div>
+      <div class="fc-body"><div class="fc-t">${esc(nm)}</div><div class="fc-d">タップで開く</div></div>
+    </div>
+    <div class="fc-acts">
+      <button class="fc-b prime" data-report="open">開く</button>
+      <button class="fc-b" data-report="pdf">PDFで保存</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--sub);margin-top:8px;line-height:1.7">
+    「開く」は画面で読む形、「PDFで保存」は印刷・提出用のファイルです。<br>
+    同じ内容をご登録のメールアドレスにもお送りしています。</div>
+  </div>`, { rich:true });
+}
+
+/* 保存してある申込を順に見て、まだ出していないカードだけ出す。
+   ★同じカードを何度も出さない。開くたびに増えると読めなくなる。 */
+async function checkWebOrders(){
+  const sids = getJSON(WEB_ORDERS_KEY);
+  if (!sids.length) return;
+  const seen = new Set(getJSON(WEB_SEEN_KEY));
+  let changed = false;
+  for (const sid of sids){
+    try{
+      const r = await fetch(`${API}/api/bitto/order-by-sid/${encodeURIComponent(sid)}`);
+      if (!r.ok) continue;
+      const o = await r.json();
+      if (!o.found) continue;                       // 決済直後で webhook が未着
+      if (o.reportUrl && !seen.has(o.reportUrl)){
+        addReportCard({ reportUrl: o.reportUrl, at: o.issuedAt });
+        seen.add(o.reportUrl); changed = true;
+      } else if (!o.reportUrl && o.formUrl && !seen.has(sid)){
+        addPurchasedCard({ formUrl: o.formUrl, count: o.count });
+        seen.add(sid); changed = true;
+      }
+    }catch(_){ /* 通信の失敗で普通の利用を妨げない */ }
+  }
+  if (changed) setJSON(WEB_SEEN_KEY, [...seen].slice(-50));
 }
 
 /* ── 初動ナビのロジック ── */
@@ -1694,21 +1833,33 @@ function openShield(){
   fit();
 })();
 
-/* ── 初回メッセージ ── */
+/* ── 初回メッセージ ──
+   ★保存された会話があれば、挨拶とナビカードは出さない。
+     毎回いちばん上に挨拶が積み上がると、続きが読みにくくなる。 */
+if (!restoreChatLog()){
 addAi(`こんにちは。<b>BitTo</b> の調査AIです。\n\n調べたい送金の <b>トランザクションID（TXID）</b> を貼り付けて送信してください。ビットコイン・イーサリアム・XRP・USDT（TRON）に対応しています。\n\n資金がどのアドレスを経由し、どの取引所に到達したかを追跡して表示します。<span class="greet-note">※ TXIDが分からない場合は、送金履歴の画面を撮った<b>画像をお送りいただいても調査できます</b>（入力欄の左の画像ボタン）。</span><span class="mono">（追跡は無料です）</span>`);
 
 /* 挨拶の下に初動ナビのカテゴリーカード（控えめ・B案） */
-(function(){
-  const nc = document.createElement('button');
-  nc.className = 'navicard';
-  nc.addEventListener('click', goNaviTab);
-  nc.innerHTML = `<span class="nc-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15.6 8.4l-2.1 5.1-5.1 2.1 2.1-5.1z"/></svg></span><span class="nc-body"><span class="nc-t">詐欺被害にあってしまったら｜今後の対処法</span><span class="nc-d">状況を選ぶだけで「緊急度・これからやること・相談先の順番」を表示します。</span></span><span class="nc-arw">›</span>`;
-  chat.appendChild(nc);
-})();
-
-/* 起動時はAI調査チャットを表示（初動ナビは挨拶下のカードから入る）。
+(function(){
+  const nc = document.createElement('button');
+  nc.className = 'navicard';
+  nc.addEventListener('click', goNaviTab);
+  nc.innerHTML = `<span class="nc-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15.6 8.4l-2.1 5.1-5.1 2.1 2.1-5.1z"/></svg></span><span class="nc-body"><span class="nc-t">詐欺被害にあってしまったら｜今後の対処法</span><span class="nc-d">状況を選ぶだけで「緊急度・これからやること・相談先の順番」を表示します。</span></span><span class="nc-arw">›</span>`;
+  chat.appendChild(nc);
+})();
+
+/* 起動時はAI調査チャットを表示（初動ナビは挨拶下のカードから入る）。
    ?only=navi のときだけナビを開いたままにする（アプリのカードからの遷移先）。 */
+}
+
 showTab(NAVI_ONLY ? 'navi' : 'chat');
+
+/* ★購入と報告書をチャットに出す。開いた瞬間と、タブに戻ってきたときに見に行く。
+   報告書は数時間後にできるので、1回だけの確認では受け取れない。 */
+checkWebOrders();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') checkWebOrders();
+});
 </script>
 </body>
 </html>
