@@ -2138,7 +2138,9 @@ async function getAddressInfoFresh(addr, chain) {
     }
     if (chain === 'btc') {
       const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-      const j = await apiJson(url);
+      /* ★Blockchair に apiJson（Etherscan用・6秒×2回）を使わない。
+         空振り1回が約13秒になる。見切りは2500msで揃える（上の実測より）。 */
+      const j = await (await fetchT(url, {}, BLOCKCHAIR_TIMEOUT_MS)).json();
       const d = j.data?.[addr]?.address;
       if (!d) return null;
       const balNative = parseFloat(d.balance || 0) / 1e8;
@@ -3535,7 +3537,13 @@ async function fetchAddressLabel(addr, chain) {
       const chain2 = chain === 'btc' ? 'bitcoin' : 'ethereum';
       const addrKey = chain === 'eth' ? addr.toLowerCase() : addr;
       const url = `https://api.blockchair.com/${chain2}/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-      const j = await apiJson(url);
+      /* ★apiJson は Etherscan 用で、6秒待って失敗したらもう一度やり直す。
+         1回の空振りが約13秒になる（6秒＋1.2秒＋6秒）。
+         実測（診断画面 2026-09-05）：この口だけ apiJson のままで、
+         21回中17回が6秒の時間切れ。1件の報告書188秒のうち約100秒を
+         ここで捨てていた。他の2箇所は既に2500msへ下げてあったのに漏れていた。
+         ★名前は「あれば嬉しい」情報。長く待つ価値がない。やり直しもしない。 */
+      const j = await (await fetchT(url, {}, BLOCKCHAIR_TIMEOUT_MS)).json();
       const d = j.data?.[addrKey]?.address;
       const bcLbl = d?.label || d?.contract_name || '';
       if (bcLbl) {
@@ -3701,7 +3709,9 @@ async function getNextTxBTC(addr, afterTime, amountIn) {
   /* 取れなければ Blockchair。鍵が要るぶん確実性は高いが、遅く失敗も多い。 */
   try {
     const url = `https://api.blockchair.com/bitcoin/dashboards/address/${addr}?key=${BLOCKCHAIR_KEY}`;
-    const j = await apiJson(url);
+    /* ★Blockchair に apiJson（Etherscan用・6秒×2回）を使わない。
+       空振り1回が約13秒になる。見切りは2500msで揃える。 */
+    const j = await (await fetchT(url, {}, BLOCKCHAIR_TIMEOUT_MS)).json();
     const txHashes = j.data?.[addr]?.transactions || [];
     const refMs = new Date(normalizeTimeStr(afterTime)).getTime();
     const cands = [];
@@ -4259,7 +4269,9 @@ async function getNextTxTRON(addr, afterTime, amountIn) {
 async function getSwapOutputETH(routerAddr, txHash, prevAddr) {
   if (!txHash) return null;
   try {
-    const j = await apiJson(`https://api.blockchair.com/ethereum/dashboards/transaction/${txHash}?key=${BLOCKCHAIR_KEY}`);
+    /* ★Blockchair に apiJson（Etherscan用・6秒×2回）を使わない。
+       空振り1回が約13秒になる。見切りは2500msで揃える。 */
+    const j = await (await fetchT(`https://api.blockchair.com/ethereum/dashboards/transaction/${txHash}?key=${BLOCKCHAIR_KEY}`, {}, BLOCKCHAIR_TIMEOUT_MS)).json();
     const data = j.data?.[String(txHash).toLowerCase()];
     if (!data) return null;
     const router = String(routerAddr).toLowerCase();
