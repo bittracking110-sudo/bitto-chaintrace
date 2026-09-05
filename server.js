@@ -5344,7 +5344,7 @@ function mergeFindings(txid, result, paid) {
 function finalizeResult(txid, result, paid) {
   collectExchanges(result);
   mergeFindings(txid, result, paid);
-  attachNotes(result);
+  attachNotes(result, paid);
   return result;
 }
 
@@ -6254,7 +6254,7 @@ function crossHopNotes(h) {
 }
 
 /* 調査全体に添える説明。 */
-function resultNotes(result) {
+function resultNotes(result, paid) {
   const path = result.path || [];
   const out = [];
   const stop = path.find(p => p.traceStop);
@@ -6406,11 +6406,37 @@ function resultNotes(result) {
     out.push(note('moving', 'warn', 'まだ資金が動いている最中かもしれません',
       stillMovingText(result.stillMoving)));
   }
+
+  /* ★有料調査を申し込む前に、申し込んだあと何が起きるかを見せる。
+     電話営業は「これから何をされるか」が分からないまま契約させる。
+     先に全部書いておくのが、いちばん強い差になる（利用者の原案・2026-09-06）。
+     ★購入済みの人には出さない。もう買った人に購入前の案内は不要。
+     ★アプリ側に手を入れずに出せる。notesHTML は種類を見ずに描画するため、
+     公開中の 1.8 にそのまま出る（ビルドもストア審査も要らない）。
+     ★改行について：.card * が white-space:normal なので、公開中の 1.8 では
+     改行が詰まって1段落になる。①〜⑤ を行頭に置いてあるので、
+     詰まっても読める文にしてある。web と次の版（1.9）は改行のまま出る。 */
+  if (!paid) {
+    out.push(note('afterbuy', 'good', 'ご購入後の流れ',
+      '① TXIDをこの画面からご入力いただきます（数分で終わります）' + '\n'
+      + '② 当社が調査します（1件あたり5分〜）' + '\n'
+      + '③ 報告書ができたら、このチャットにお届けします。アプリでは左上の ☰ →「レポート」からいつでも開けます。'
+      + '同じものをご登録のメールにもお送りします（迷惑メールに入っていることがあるのでご確認ください）' + '\n'
+      /* ★「取引所ごとの要請文が入っています」と言い切ると、到達しなかった時に約束が破れる。
+         後半が本体：特定できなくても何が残るかを先に書く。 */
+      + '④ 到達した取引所が判明した場合、取引所ごとの凍結要請文が入っています。そのまま取引所へお送りいただけます。'
+      + '判明しなかった場合も、追跡した経路と、追えなくなった理由を記載します' + '\n'
+      + '⑤ 報告書はPDFで保存・印刷できます。警察や弁護士へのご相談にそのままお使いください',
+      '※ 調査は公開されているブロックチェーンの記録に基づくものです' + '\n'
+      + '※ 資産の回復・犯人の特定を保証するものではありません' + '\n'
+      + '※ 凍結するかどうかは取引所の判断です' + '\n'
+      + '取引所からの返答も、証拠資料として警察にお見せください'));
+  }
   return out;
 }
 
 /* 結果に説明文を載せる。何度呼んでも同じになるようにする。 */
-function attachNotes(result) {
+function attachNotes(result, paid) {
   if (!result) return result;
   for (const p of (result.path || [])) {
     p.notes = nodeNotes(p);
@@ -6418,7 +6444,7 @@ function attachNotes(result) {
        薄まった先まで本件の資金の行き先に見える。 */
     for (const h of (p.crossChainHops || [])) h.notes = crossHopNotes(h);
   }
-  result.notes = resultNotes(result);
+  result.notes = resultNotes(result, paid);
   return result;
 }
 
@@ -8387,6 +8413,11 @@ app.post('/api/admin/generate-report', requireAdmin, express.json(), async (req,
       /* ★保存済みの結果を使い回すときも台帳と突き合わせる。
          別の調査で新しく判明した取引所が、こちらにも反映される。 */
         mergeFindings(cacheKey, result, !!paidRun);
+        /* ★保存済みの結果を返すときは finalizeResult を通らないため、
+           説明文が台帳の更新前のまま返っていた。attachNotes は何度呼んでも
+           同じ結果になる作りなので、ここで作り直す。
+           ★これが無いと、再訪した利用者に新しい説明文が出ない。 */
+        attachNotes(result, !!paidRun);
         list.push({ txid, chain, result });
         console.log(`[Admin] 調査完了: ${txid}`);
       } catch (e) {
@@ -9261,6 +9292,11 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
       /* ★保存済みの結果を使い回すときも台帳と突き合わせる。
          別の調査で新しく判明した取引所が、こちらにも反映される。 */
           mergeFindings(cacheKey, result, !!paidRun);
+          /* ★保存済みの結果を返すときは finalizeResult を通らないため、
+             説明文が台帳の更新前のまま返っていた。attachNotes は何度呼んでも
+             同じ結果になる作りなので、ここで作り直す。
+             ★これが無いと、再訪した利用者に新しい説明文が出ない。 */
+          attachNotes(result, !!paidRun);
           list.push({ txid: item.txid, chain: item.chain, result });
         } catch (e) {
           console.error(`[Submit] 調査失敗: ${item.txid}`, e.message);
@@ -9807,6 +9843,11 @@ app.post('/api/connection/investigate', express.json(), async (req, res) => {
       /* ★保存済みの結果を使い回すときも台帳と突き合わせる。
          別の調査で新しく判明した取引所が、こちらにも反映される。 */
       mergeFindings(cacheKey, result, !!paidRun);
+      /* ★保存済みの結果を返すときは finalizeResult を通らないため、
+         説明文が台帳の更新前のまま返っていた。attachNotes は何度呼んでも
+         同じ結果になる作りなので、ここで作り直す。
+         ★これが無いと、再訪した利用者に新しい説明文が出ない。 */
+      attachNotes(result, !!paidRun);
       const job = connectionJobs.get(jobId);
       if (job) { job.status = 'done'; job.result = result; }
     } catch (e) {

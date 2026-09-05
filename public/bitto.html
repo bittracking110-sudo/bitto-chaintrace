@@ -197,6 +197,10 @@
             background:rgba(255,255,255,.03);font-size:12.5px;line-height:1.85;color:var(--sub)}
   .srv-note b{font-size:13px}
   .srv-note .sub{color:var(--sub2);font-size:12px}
+  /* ★サーバーの説明文に含まれる改行をそのまま出す。
+     .srv-note 全体に掛けるとテンプレート側の改行まで描画されて既存の注記が崩れるので、
+     本文だけを包む。 */
+  .srv-note .txt{white-space:pre-line}
   /* 確度が下がる区間。消さずに、薄くして区別する */
   .node.after-stop{opacity:.62;border-style:dashed}
   .caveat{margin-top:10px;font-size:11.5px;line-height:1.75;color:var(--sub);
@@ -785,8 +789,8 @@ function notesHTML(notes, tone){
   return notes.map(n => `<div class="srv-note ${esc(n.level || 'info')}"
     style="border-left-color:${color[n.level] || color.info}">
     ${n.title ? `<b style="color:${color[n.level] || color.info}">${esc(n.title)}</b><br>` : ''}
-    ${esc(n.text || '')}
-    ${n.sub ? `<br><span class="sub">${esc(n.sub)}</span>` : ''}
+    <span class="txt">${esc(n.text || '')}</span>
+    ${n.sub ? `<br><span class="sub txt">${esc(n.sub)}</span>` : ''}
   </div>`).join('');
 }
 /* 経路の1地点に添える説明。短く出す（枠が狭いため） */
@@ -1840,15 +1844,24 @@ if (!restoreChatLog()){
 addAi(`こんにちは。<b>BitTo</b> の調査AIです。\n\n調べたい送金の <b>トランザクションID（TXID）</b> を貼り付けて送信してください。ビットコイン・イーサリアム・XRP・USDT（TRON）に対応しています。\n\n資金がどのアドレスを経由し、どの取引所に到達したかを追跡して表示します。<span class="greet-note">※ TXIDが分からない場合は、送金履歴の画面を撮った<b>画像をお送りいただいても調査できます</b>（入力欄の左の画像ボタン）。</span><span class="mono">（追跡は無料です）</span>`);
 
 /* 挨拶の下に初動ナビのカテゴリーカード（控えめ・B案） */
-(function(){
-  const nc = document.createElement('button');
-  nc.className = 'navicard';
-  nc.addEventListener('click', goNaviTab);
-  nc.innerHTML = `<span class="nc-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15.6 8.4l-2.1 5.1-5.1 2.1 2.1-5.1z"/></svg></span><span class="nc-body"><span class="nc-t">詐欺被害にあってしまったら｜今後の対処法</span><span class="nc-d">状況を選ぶだけで「緊急度・これからやること・相談先の順番」を表示します。</span></span><span class="nc-arw">›</span>`;
-  chat.appendChild(nc);
-})();
-
-/* 起動時はAI調査チャットを表示（初動ナビは挨拶下のカードから入る）。
+(function(){
+
+  const nc = document.createElement('button');
+
+  nc.className = 'navicard';
+
+  nc.addEventListener('click', goNaviTab);
+
+  nc.innerHTML = `<span class="nc-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15.6 8.4l-2.1 5.1-5.1 2.1 2.1-5.1z"/></svg></span><span class="nc-body"><span class="nc-t">詐欺被害にあってしまったら｜今後の対処法</span><span class="nc-d">状況を選ぶだけで「緊急度・これからやること・相談先の順番」を表示します。</span></span><span class="nc-arw">›</span>`;
+
+  chat.appendChild(nc);
+
+})();
+
+
+
+/* 起動時はAI調査チャットを表示（初動ナビは挨拶下のカードから入る）。
+
    ?only=navi のときだけナビを開いたままにする（アプリのカードからの遷移先）。 */
 }
 
