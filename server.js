@@ -10526,6 +10526,9 @@ app.listen(PORT, () => {
   console.log(`🔑 TronGrid   : ${TRON_KEY ? '✓' : '⚠ 未設定（TRONの追跡が制限で止まります）'}`);
   console.log(`🔑 MistTrack  : ${MISTTRACK_KEY ? '✓' : '⚠ 未設定（取引所名が引けません）'}`);
   console.log(`🔑 Blockchair : ${BLOCKCHAIR_KEY ? '✓' : '⚠ 未設定'}`);
+  /* ★Bithomp は XRP の取引所名の二重化。鍵が無ければ黙って飛ぶ実装なので、
+     登録し忘れ・名前の打ち間違いに気づけるよう起動時に出す。 */
+  console.log(`🔑 Bithomp    : ${BITHOMP_KEY ? '✓（XRPの取引所名を二重化）' : '⚠ 未設定（XRPはXRPScanのみ）'}`);
   console.log(`🔑 LINE       : ${LINE_CHANNEL_ACCESS_TOKEN ? '✓' : '⚠ 未設定'}`);
   console.log(`🔑 Stripe     : ${stripe ? '✓ 本番モード' : '⚠ テストモード（決済スキップ）'}`);
   console.log(`🔑 Sheets     : ${GOOGLE_SHEET_ID && process.env.GOOGLE_SERVICE_ACCOUNT_KEY ? '✓' : '⚠ 未設定'}`);
