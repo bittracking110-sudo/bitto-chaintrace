@@ -421,6 +421,68 @@ try {
   }
 } catch (e) { console.error('[Hearing] 復元失敗:', e.message); }
 
+/* ══ 進捗の記録 ═══════════════════════════════════════════════
+   ★取引所は被害者の依頼だけでは凍結しない（Binance公式・警察庁の要請文書とも同旨）。
+   実際に動くのは【警察 → 取引所】の照会で、しかも取引所は結果を被害者に伝えない
+   （Binance："will not be able to share any of this information with you"）。
+   ★だから「返答が来ない」は失敗ではなく通常の経過。そう書いておかないと、
+   お客様は当社が何もしなかったと受け取る。
+
+   ここは2本立てで記録する：警察の手続と、取引所ごとの状況。
+   ヒアリングと同じく、氏名や受理番号を含むので永続ボリュームに置き、
+   トークン付きURLでのみ開ける（外から一覧できるルートは作らない）。 */
+const PROGRESS_FILE = path.join(REPORTS_DIR, 'progress.json');
+const progressRecs  = new Map();   // progressId → { token, reportId, police, exchanges[], updatedAt }
+try {
+  if (fs.existsSync(PROGRESS_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'));
+    for (const [k, v] of Object.entries(saved)) progressRecs.set(k, v);
+    console.log(`[Progress] ${progressRecs.size}件を復元`);
+  }
+} catch (e) { console.error('[Progress] 復元失敗:', e.message); }
+
+function saveProgress() {
+  fsp.writeFile(PROGRESS_FILE, JSON.stringify(Object.fromEntries(progressRecs)), 'utf8')
+    .catch(e => console.error('[Progress] 保存失敗:', e.message));
+}
+
+/* 取引所ごとの状態。★「返答なし」を異常扱いしない並びにしてある。 */
+const EX_STATES = [
+  { k: 'none',     label: '未報告' },
+  { k: 'reported', label: '報告した' },
+  { k: 'docs',     label: '追加資料を求められた' },
+  { k: 'police',   label: '警察経由を指示された' },
+  { k: 'held',     label: '一時保全された' },
+  { k: 'silent',   label: '返答なし（通常の経過です）' },
+  { k: 'refused',  label: '断られた' },
+];
+/* 状態ごとの次の一手。★ここが「送ったあとの導線」の本体。 */
+const EX_NEXT = {
+  none:     '報告は今日中に出してください。受理までに時間がかかっても、報告した記録が残ることに意味があります。',
+  reported: '警察への相談・被害届に進んでください。受理された番号が出たら、この画面に記録して取引所へ写しを提出します。',
+  docs:     '求められた資料を確認してください。多くは「TXID・着金アドレス・被害の経緯・本人確認書類」です。報告書の該当ページをそのまま添付できます。',
+  police:   '想定どおりの対応です。取引所は警察からの照会にしか応じられません。警察に「この取引所へ捜査関係事項照会を出してほしい」と伝えてください。報告書の警察提出用サマリーをお使いください。',
+  held:     '警察の手続を止めないでください。一時保全は正式な照会が無ければ解除されます。',
+  silent:   '★これは失敗ではありません。取引所は被害者に経過を伝えられない決まりです（守秘）。警察の手続を進めてください。取引所は警察には応じます。',
+  refused:  '断られた理由を記録してください。多くは「法執行機関からの正式な照会が必要」です。その場合は警察経由に切り替えます。',
+};
+/* 警察側の段階。★被害届は警察署の窓口でしか出せず、その場で受理されない
+   ことがある。相談だけの段階も正式な段階として持つ。 */
+const POLICE_STATES = [
+  { k: 'none',      label: 'まだ相談していない' },
+  { k: 'consulted', label: '相談した（被害届はこれから）' },
+  { k: 'filed',     label: '被害届が受理された' },
+  { k: 'rejected',  label: '★被害届を受理してもらえなかった' },
+  { k: 'inquiry',   label: '警察から取引所へ照会中' },
+];
+const POLICE_NEXT = {
+  none:      '住所地を管轄する警察署へ行ってください。#9110 やオンライン窓口では被害届は出せません。報告書の「警察提出用サマリー」を持参してください。',
+  consulted: '相談日・警察署名・担当者名を記録しておいてください。取引所への報告文に書けます。被害届の受理を待つ間も手続は進められます。',
+  filed:     '受理番号を記録し、各取引所へ写しを提出してください。あわせて「この取引所へ捜査関係事項照会を出してほしい」と担当者に伝えてください。',
+  rejected:  '★受理されない主な理由は「客観的証拠に乏しい」ことです。当社の報告書と警察提出用サマリーがその証拠になります。これを持って再度相談してください。別の警察署や、都道府県警のサイバー犯罪相談窓口も選択肢です。',
+  inquiry:   '照会が出れば、あとは警察と取引所のやり取りです。結果はお客様には直接届きません。担当の捜査員に経過を確認してください。',
+};
+
 function saveHearings() {
   fsp.writeFile(HEARINGS_FILE, JSON.stringify(Object.fromEntries(hearings)), 'utf8')
     .catch(e => console.error('[Hearing] 保存失敗:', e.message));
@@ -6466,7 +6528,40 @@ const CHAIN_FULL_NAME = { BTC: 'Bitcoin', ETH: 'Ethereum', XRP: 'XRP Ledger',
    規格が違えば取引所は該当の入金を見つけられない。 */
 const TOKEN_STANDARD = { ETH: 'ERC-20', POLYGON: 'ERC-20', ARBITRUM: 'ERC-20', TRON: 'TRC-20' };
 
-function freezeLetterText(ex, r, customerName, issuedAt) {
+/* ★警察の段階に応じた1文。取引所は被害者の依頼だけでは凍結しない（Binance公式：
+   "unable to unilaterally freeze any user's assets without an appropriate official
+   freezing order from law enforcement or a court"）。日本も同じで、警察庁の要請文書でも
+   「警察から当該事業者に対して情報提供の依頼が行われる」とされている。
+   ★つまりこの文書の役割は「凍結命令」ではなく【報告と記録の保全依頼】。
+   そのうえで警察の手続が進行中であることを示すのが、実際に効く形。
+
+   ★24時間以内に被害届を出す、とは書かない。日本では被害届は警察署の窓口でしか
+   出せず、その場で受理されないこともある（客観的証拠に乏しい等）。
+   守れない約束を書くと、かえって信用を落とす。
+   Binanceの24時間は「一時ロック」の条件であって、本筋（警察→取引所）は別に進む。 */
+const POLICE_STAGE = {
+  none: '本件について、速やかに警察へ相談し、被害届を提出する予定です。'
+      + '受理され次第、写しを提出いたします。',
+  consulted: (d) => `本件は警察へ相談済みです${d ? `（${d}）` : ''}。`
+      + '被害届が受理され次第、写しを提出いたします。',
+  filed: (d) => `本件は警察に被害届が受理されています${d ? `（${d}）` : ''}。`
+      + '写しを添付のうえ提出いたします。',
+};
+
+function policeStageLine(police) {
+  const p = police || {};
+  const st = p.stage || 'none';
+  const bits = [];
+  if (p.station) bits.push(p.station);
+  if (p.date)    bits.push(p.date);
+  if (p.refNo)   bits.push(`受付番号：${p.refNo}`);
+  const d = bits.join('／');
+  if (st === 'filed')     return POLICE_STAGE.filed(d);
+  if (st === 'consulted') return POLICE_STAGE.consulted(d);
+  return POLICE_STAGE.none;
+}
+
+function freezeLetterText(ex, r, customerName, issuedAt, police) {
   /* ★ブリッジを渡った先の取引所は、元のチェーンとは別のチェーンにある。
      チェーン名を間違えると、取引所は該当の入金を見つけられない。 */
   const chainKey  = String(ex.chain || r.chain || '').toUpperCase();
@@ -6493,13 +6588,14 @@ function freezeLetterText(ex, r, customerName, issuedAt) {
 ■ 当該アドレスへの着金額（当社追跡値）：${Number(ex.amount).toFixed(8)}${unit ? ' ' + unit : ''}`
       + (unit ? '' : '（通貨は貴社の記録にてご確認ください）') : '';
 
-  return `【${ex.name || '取引所'} サポートチームへ】
+  return `【${ex.name || '取引所'} コンプライアンス／サポート ご担当者様】
 
-件名：不正送金に関する緊急凍結要請
+件名：不正送金の被害報告および記録の保全のお願い
 
 拝啓
 
-不正な仮想通貨送金について、緊急のご対応をお願いいたします。
+詐欺被害による不正送金について、貴社への着金を確認いたしましたのでご報告いたします。
+${policeStageLine(police)}
 
 ■ 依頼者情報
 氏名：${customerName}
@@ -6518,11 +6614,15 @@ ${r.txid}
 　 ※ このタグが無いと、貴社は該当の口座を特定できません。` : ''}${arrived}
 
 上記は詐欺被害に起因する不正送金の疑いがあります。
-以下について緊急のご対応をお願い申し上げます。
+以下についてご対応をお願い申し上げます。
 
-① 上記アドレスの即時凍結措置
-② 関連する取引情報・KYC情報の保全
-③ 当局への情報提供へのご協力
+① 当該入金に関する取引記録・アクセスログ・本人確認（KYC）情報の保全
+② 貴社の規程上可能な範囲での、当該資金に対する保全措置のご検討
+③ 警察等の法執行機関から正式な照会があった際の、速やかなご対応
+
+※ 資産の凍結が法執行機関または裁判所の正式な命令を要することは承知しております。
+　 本書は凍結の命令ではなく、被害の報告と、記録が失われないようにするための
+　 お願いです。正式な照会は警察を通じて行われます。
 
 なお、当社の追跡は公開されているブロックチェーン上の記録に基づくものです。
 経路の途中で他の資金と混ざっている場合、着金額が当初の送金額と一致しないこと、
@@ -6786,7 +6886,7 @@ function policeSummaryHTML(results, issuedAt) {
   </div>`;
 }
 
-function generateReportHTML(results, customerName, issuedAt, aiData = {}, reportUrl = '', brand = 'bitto', hearingUrl = '') {
+function generateReportHTML(results, customerName, issuedAt, aiData = {}, reportUrl = '', brand = 'bitto', hearingUrl = '', police = null, progressUrl = '') {
   const chainFull = { BTC: 'Bitcoin', ETH: 'Ethereum', XRP: 'XRP Ledger', TRON: 'TRON（TRC20）' };
 
   // ── ブランド出し分け（未指定はBitTo＝従来どおり） ──
@@ -7018,7 +7118,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
         return `<p style="font-size:0.9em;margin:14px 0 6px"><strong>No.${escHtml(String(e.foundNo ?? '-'))}　${escHtml(e.name)}</strong> 宛
           ${c ? `<span style="font-size:0.85em;color:#94a3b8">／ 窓口：<a href="${escHtml(c.support || c.url)}">${escHtml(c.support || c.url)}</a></span>` : ''}
           ${e.fromEarlier ? '<span style="font-size:0.85em;color:#c9a96e">／ このTXIDの過去の調査で判明</span>' : ''}</p>
-        <div class="template-box">${escHtml(freezeLetterText(e, r, customerName, issuedAt))}</div>`;
+        <div class="template-box">${escHtml(freezeLetterText(e, r, customerName, issuedAt, police))}</div>`;
       }).join('');
 
       tplHTML = boxes ? `
@@ -7044,7 +7144,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
           return `<p style="font-size:0.9em;margin:14px 0 6px"><strong>No.${escHtml(String(e.foundNo ?? '-'))}　${escHtml(e.name)}</strong> 宛
             ${c ? `<span style="font-size:0.85em;color:#94a3b8">／ 窓口：<a href="${escHtml(c.support || c.url)}">${escHtml(c.support || c.url)}</a></span>` : ''}
             ${e.fromEarlier ? '<span style="font-size:0.85em;color:#c9a96e">／ このTXIDの過去の調査で判明</span>' : ''}</p>
-          <div class="template-box">${escHtml(freezeLetterText(e, r, customerName, issuedAt))}</div>`;
+          <div class="template-box">${escHtml(freezeLetterText(e, r, customerName, issuedAt, police))}</div>`;
         }).join('');
       }
     }
@@ -7580,6 +7680,14 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
     <p style="margin:0 0 10px"><strong style="color:var(--r-accent)">📑 被害時系列パック（任意・追加費用はかかりません）</strong><br>
     被害の経緯をうかがい、この調査結果と合わせて時系列の資料にまとめます。警察・取引所へご相談の際にお使いいただけます。</p>
     <a class="print-btn" href="${hearingUrl}" style="display:block;text-decoration:none;text-align:center">経緯を入力して資料を作る</a>
+  </div>` : ''}
+  ${progressUrl ? `<div class="print-bar" style="border-color:var(--r-accent)">
+    <p style="margin:0 0 10px;font-size:0.86rem;line-height:1.9">
+      <strong>手続きの記録</strong><br>
+      どの取引所にいつ報告し、どう返ってきたかを記録できます。次にすべきことも表示されます。<br>
+      <span style="font-size:0.8rem;color:var(--r-ink2)">※ 取引所はご本人の依頼だけでは凍結できません。実際に動くのは警察からの照会です。</span></p>
+    <a class="print-btn" href="${progressUrl}" style="display:block;text-decoration:none;text-align:center">手続きの記録を開く</a>
+    <div style="margin-top:8px;font-size:0.72rem;word-break:break-all;color:var(--r-ink2)">${progressUrl}</div>
   </div>` : ''}
   <div class="print-bar">
     <!-- PDFはサーバー側で作ってあるので、端末やブラウザを問わず1タップで保存できる。
@@ -9442,10 +9550,15 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
       ]).catch(() => ({ analysis: null, requests: [] }));
       const reportId   = crypto.randomUUID();
       const reportUrl  = `${BASE_URL}/report/${reportId}`;
+      /* ★手続きの記録を報告書と同時に作る。取引所の行は到達先で埋めておく。
+         お客様に一から入力させないため（第5-T節）。 */
+      const progressId = ensureProgress(reportId, formData.customerName,
+        list.flatMap(x => ((x.result && x.result.exchanges) || []).filter(e => e && e.address)));
       const reportHtml = generateReportHTML(list, formData.customerName, issuedAt, aiData, reportUrl,
         formData.brand || 'bitto',
         // 経緯をうかがう資料への入口。報告書はあとから見返されるので、ここにも置く
-        (formData.brand !== 'connection') ? `${BASE_URL}/hearing/${token}` : '');
+        (formData.brand !== 'connection') ? `${BASE_URL}/hearing/${token}` : '',
+        null, progressUrlFor(progressId));
       await saveReport(reportId, reportHtml);
 
       // SheetsにレポートURLを記録
@@ -9611,6 +9724,180 @@ h1{color:#f87171;font-size:1.3rem;margin-bottom:12px}.icon{font-size:3rem;margin
   }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
+});
+
+/* ══ 進捗の記録：画面とAPI ═════════════════════════════════════
+   ★アプリの作り直しは不要。報告書メールと報告書ページからURLで開く。
+   ヒアリングと同じくトークン付きURLでのみ到達でき、一覧するルートは作らない。 */
+/* 進捗の記録の画面。★白地・素の作りにする。被害直後の方が、
+   慣れない端末でも開けることを優先する（凝った作りは壊れたときに直せない）。 */
+function progressPageHTML(p) {
+  const opt = (list, cur) => list.map(x =>
+    `<option value="${escHtml(x.k)}"${x.k === cur ? ' selected' : ''}>${escHtml(x.label)}</option>`).join('');
+  const rows = (p.exchanges || []).map((e, i) => `
+    <div class="ex" data-i="${i}">
+      <h3>No.${escHtml(String(e.no ?? (i + 1)))}　${escHtml(e.name)}</h3>
+      <div class="addr">${escHtml(e.address)}${e.chain ? `　（${escHtml(e.chain)}）` : ''}</div>
+      <label>状況
+        <select class="st">${opt(EX_STATES, e.state)}</select></label>
+      <div class="two">
+        <label>報告した日<input type="date" class="rp" value="${escHtml(e.reportedAt)}"></label>
+        <label>被害届の写しを出した日<input type="date" class="dc" value="${escHtml(e.docSentAt)}"></label>
+      </div>
+      <label>取引所からの返答・メモ
+        <textarea class="mm" rows="3" placeholder="返答の文面をそのまま貼り付けていただけます">${escHtml(e.memo)}</textarea></label>
+      <div class="next" data-next=""></div>
+    </div>`).join('');
+
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BitTo 手続きの記録</title><style>
+body{font-family:-apple-system,'Hiragino Kaku Gothic ProN','Noto Sans JP',Meiryo,sans-serif;
+  color:#17202e;background:#fff;line-height:1.85;max-width:760px;margin:0 auto;padding:24px 18px 80px;font-size:15px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:16px;margin:30px 0 10px;padding-bottom:6px;border-bottom:2px solid #0d7d6d}
+h3{font-size:15px;margin:0 0 4px}
+.lead{background:#f2f7f6;border-left:4px solid #0d7d6d;padding:12px 14px;border-radius:0 6px 6px 0;font-size:14px}
+.ex{border:1px solid #c8d2de;border-radius:8px;padding:14px 16px;margin:14px 0}
+.addr{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:#4a5a72;word-break:break-all;margin-bottom:10px}
+label{display:block;font-size:13px;color:#4a5a72;margin:10px 0 0}
+select,input,textarea{width:100%;box-sizing:border-box;font-size:15px;padding:9px 10px;margin-top:4px;
+  border:1px solid #8fa0b8;border-radius:6px;font-family:inherit;color:#17202e;background:#fff}
+textarea{line-height:1.7}
+.two{display:flex;gap:12px}.two label{flex:1}
+.next{margin-top:10px;font-size:13.5px;background:#f4f7fa;border-left:3px solid #2f5fa8;
+  padding:9px 12px;border-radius:0 6px 6px 0;color:#17202e}
+.next:empty{display:none}
+.save{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid #c8d2de;padding:12px 18px;text-align:center}
+button{background:#0d7d6d;color:#fff;border:0;border-radius:8px;padding:13px 34px;font-size:16px;font-weight:700;cursor:pointer}
+.msg{font-size:13px;color:#0a6355;min-height:1.4em}
+.note{font-size:13px;color:#4a5a72;margin-top:8px}
+@media print{.save{display:none}body{padding:0}}
+</style></head><body>
+<h1>手続きの記録</h1>
+<div class="note">${escHtml(p.customerName || '')} 様　／　この画面はご本人のみが開けるURLです</div>
+
+<div class="lead">
+  <strong>先にお伝えしておきたいこと</strong><br>
+  取引所は、被害者ご本人の依頼だけでは資産を凍結できません。法執行機関または裁判所の
+  正式な要請が必要です。実際に動くのは<strong>警察から取引所への照会</strong>です。<br>
+  また取引所は、その後の経過をご本人には伝えられない決まりになっています。
+  <strong>「返答が来ない」ことは失敗ではなく、通常の経過です。</strong>
+</div>
+
+<h2>1. 警察の手続き</h2>
+<div class="ex" id="police">
+  <label>いまの段階
+    <select id="pstage">${opt(POLICE_STATES, (p.police || {}).stage || 'none')}</select></label>
+  <div class="two">
+    <label>警察署名<input id="pstation" value="${escHtml((p.police || {}).station || '')}" placeholder="○○警察署"></label>
+    <label>相談・受理の日<input id="pdate" type="date" value="${escHtml((p.police || {}).date || '')}"></label>
+  </div>
+  <label>受付番号・受理番号<input id="prefno" value="${escHtml((p.police || {}).refNo || '')}"></label>
+  <div class="next" id="pnext"></div>
+</div>
+
+<h2>2. 取引所ごとの状況</h2>
+${rows || '<p class="note">この調査では取引所が特定できていません。判明した場合にここへ追加します。</p>'}
+
+<div class="save"><button id="save">保存する</button><div class="msg" id="msg"></div></div>
+
+<script>
+const EX_NEXT = ${JSON.stringify(EX_NEXT)};
+const POLICE_NEXT = ${JSON.stringify(POLICE_NEXT)};
+const $ = s => document.querySelector(s);
+function paint(){
+  $('#pnext').textContent = POLICE_NEXT[$('#pstage').value] || '';
+  document.querySelectorAll('.ex[data-i]').forEach(el => {
+    el.querySelector('.next').textContent = EX_NEXT[el.querySelector('.st').value] || '';
+  });
+}
+document.addEventListener('change', paint);
+paint();
+$('#save').onclick = async () => {
+  const body = {
+    police: { stage: $('#pstage').value, station: $('#pstation').value,
+              date: $('#pdate').value, refNo: $('#prefno').value },
+    exchanges: [...document.querySelectorAll('.ex[data-i]')].map(el => ({
+      state: el.querySelector('.st').value,
+      reportedAt: el.querySelector('.rp').value,
+      docSentAt: el.querySelector('.dc').value,
+      memo: el.querySelector('.mm').value,
+    })),
+  };
+  $('#msg').textContent = '保存しています…';
+  try {
+    const r = await fetch(location.pathname.replace('/progress/', '/api/progress/'),
+      { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
+    $('#msg').textContent = r.ok ? '保存しました' : '保存できませんでした';
+  } catch { $('#msg').textContent = '通信を確認してください'; }
+};
+</script></body></html>`;
+}
+
+function progressUrlFor(id) { return `${BASE_URL}/progress/${id}`; }
+
+/* 報告書から進捗の記録を作る（無ければ作り、あれば返す）。
+   ★取引所の行は報告書の到達先で埋めておく。お客様に一から入力させない。 */
+function ensureProgress(reportId, customerName, exchanges) {
+  let id = [...progressRecs.entries()].find(([, p]) => p.reportId === reportId)?.[0];
+  if (!id) {
+    id = crypto.randomUUID();
+    progressRecs.set(id, {
+      id, reportId, customerName: customerName || '',
+      police: { stage: 'none', station: '', date: '', refNo: '' },
+      exchanges: (exchanges || []).map(e => ({
+        no: e.foundNo ?? null, name: e.name || '取引所', address: e.address || '',
+        chain: e.chain || '', state: 'none', reportedAt: '', docSentAt: '', memo: '',
+      })),
+      createdAt: Date.now(), updatedAt: Date.now(),
+    });
+    saveProgress();
+  }
+  return id;
+}
+
+app.get('/api/progress/:id', (req, res) => {
+  const p = progressRecs.get(req.params.id);
+  if (!p) return res.status(404).json({ error: '見つかりません' });
+  res.json({ ok: true, rec: p, exStates: EX_STATES, exNext: EX_NEXT,
+             policeStates: POLICE_STATES, policeNext: POLICE_NEXT });
+});
+
+app.post('/api/progress/:id', express.json({ limit: '256kb' }), (req, res) => {
+  const p = progressRecs.get(req.params.id);
+  if (!p) return res.status(404).json({ error: '見つかりません' });
+  const b = req.body || {};
+  const str = (v, n) => String(v == null ? '' : v).slice(0, n);
+  if (b.police && typeof b.police === 'object') {
+    const st = String(b.police.stage || 'none');
+    p.police = {
+      stage: POLICE_STATES.some(x => x.k === st) ? st : 'none',
+      station: str(b.police.station, 60), date: str(b.police.date, 20), refNo: str(b.police.refNo, 40),
+    };
+  }
+  if (Array.isArray(b.exchanges)) {
+    b.exchanges.forEach((row, i) => {
+      const t = p.exchanges[i];
+      if (!t || !row) return;
+      const st = String(row.state || 'none');
+      t.state      = EX_STATES.some(x => x.k === st) ? st : 'none';
+      t.reportedAt = str(row.reportedAt, 20);
+      t.docSentAt  = str(row.docSentAt, 20);
+      t.memo       = str(row.memo, 800);
+    });
+  }
+  p.updatedAt = Date.now();
+  saveProgress();
+  res.json({ ok: true });
+});
+
+app.get('/progress/:id', (req, res) => {
+  const p = progressRecs.get(req.params.id);
+  if (!p) return res.status(404).send('<!DOCTYPE html><meta charset="utf-8">'
+    + '<p style="font-family:sans-serif;padding:40px">この記録は見つかりませんでした。リンクをご確認ください。</p>');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(progressPageHTML(p));
 });
 
 // ══════════════════════════════════════════════════════════════
