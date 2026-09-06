@@ -1011,13 +1011,29 @@ function saveManualLabels() {
 }
 
 // ══ 取引所連絡先DB ════════════════════════════════════════════
+/* ★誰が申請できるかを持つ（2026-09-06 に各社の一次情報で確認）。
+   これが無いと、被害者本人が使えない窓口を案内してしまう。
+
+   who    : この窓口に出せるのは誰か
+   leo    : 法執行機関の窓口（警察に渡す先）
+   victim : ★被害者本人が使える窓口。無い会社もある
+
+   ★分かったこと：Binance・OKX・Bitget・Coinbase は同じ Kodex Global を使う。
+     警察には「Kodex で複数社まとめて出せます」と伝えられる。
+   ★資産の凍結は法執行機関または裁判所の正式な命令が要る（Binance・OKX とも明記）。
+     被害者の報告は、記録の保全と、警察が来たときに案件が既にある状態を作るためのもの。
+   ★取引所は結果を被害者に伝えない（守秘）。返答が無いのは通常の経過。 */
 const EXCHANGE_CONTACTS = {
   binance: {
     name: 'Binance', url: 'https://www.binance.com',
     support: 'https://www.binance.com/en/chat',
-    leo: 'https://www.binance.com/en/support/law-enforcement',
+    leo: 'https://app.kodexglobal.com/binance/signup',
     email: 'support@binance.com',
-    note: '法執行機関ポータルから凍結申請が可能',
+    who: '法執行機関のみ（Kodex Global 経由）',
+    victim: 'https://www.binance.com/en/support/faq/how-to-report-stolen-funds-transferred-to-binance-360000006051',
+    note: '★被害者本人は法執行機関ポータルを使えません。被害者はサポートから盗難資金の報告を行い、'
+        + '警察の被害届の写しを提出します。凍結には法執行機関または裁判所の正式な命令が必要で、'
+        + 'その後の経過は守秘のため本人には伝えられません（同社FAQ・2026-09-06確認）。',
   },
   coinbase: {
     name: 'Coinbase', url: 'https://www.coinbase.com',
@@ -1043,14 +1059,19 @@ const EXCHANGE_CONTACTS = {
     support: 'https://www.bybit.com/en/help-center/',
     leo: 'https://www.bybit.com/en/legal/law-enforcement-request',
     email: 'support@bybit.com',
-    note: '法執行機関向けガイドラインあり',
+    who: '法執行機関／★被害者本人も報告できます',
+    victim: 'https://www.bybit.com/en/help-center/article/How-to-Report-Stolen-Assets',
+    note: '★サポート画面の Self-Service に「Report Stolen Funds」があり、被害者本人が報告できます'
+        + '（2026-09-06確認）。凍結そのものは法執行機関の要請によります。',
   },
   okx: {
     name: 'OKX', url: 'https://www.okx.com',
     support: 'https://www.okx.com/support-center',
-    leo: 'https://www.okx.com/help/okxs-law-enforcement-response-guidelines',
-    email: 'law_enforcement@okx.com',
-    note: '法執行機関専用メールアドレスあり',
+    leo: 'https://app.kodexglobal.com/okx/signin',
+    email: 'enforcement@okx.com',
+    who: '法執行機関のみ（Kodex Global 経由。予備の窓口が enforcement@okx.com）',
+    note: '★署名済みの裁判所命令、または機関の便箋による公式の要請文が必要と明記されています。'
+        + '被害者本人向けの窓口は公開されていません（2026-09-06確認）。',
   },
   bitfinex: {
     name: 'Bitfinex', url: 'https://www.bitfinex.com',
@@ -1071,6 +1092,15 @@ const EXCHANGE_CONTACTS = {
     email: 'law@kucoin.com',
     note: '法執行機関向け専用窓口あり',
   },
+  bitget: {
+    name: 'Bitget', url: 'https://www.bitget.com',
+    support: 'https://www.bitget.com/support',
+    leo: 'https://www.bitget.com/support/articles/12560603829062',
+    email: 'lawenforcement@bitget.com',
+    who: '法執行機関（Kodex Global）／★被害者本人も報告できます',
+    note: '★被害者はサポートへ連絡し、先に被害届を出したうえで書類を提出します。'
+        + '受付時に案件番号が発行され、被害者はそれで照会できます（2026-09-06確認）。',
+  },
   gemini: {
     name: 'Gemini', url: 'https://www.gemini.com',
     support: 'https://support.gemini.com',
@@ -1082,13 +1112,18 @@ const EXCHANGE_CONTACTS = {
     name: 'Coincheck', url: 'https://coincheck.com',
     support: 'https://coincheck.com/ja/support',
     email: 'info@coincheck.com',
-    note: '日本語サポート対応。警察・弁護士からの書面要請が有効',
+    who: '★国内の登録業者。警察からの照会に国内法に基づいて対応します',
+    note: '日本語で連絡できます。被害者はサポートへ状況を連絡し、'
+        + '凍結・口座情報は警察からの照会で扱われます。'
+        + '警察へは「この事業者へ捜査関係事項照会を出してほしい」と伝えてください。',
   },
   bitflyer: {
     name: 'bitFlyer', url: 'https://bitflyer.com/ja-jp/',
     support: 'https://bitflyer.com/ja-jp/support/',
     email: 'support@bitflyer.com',
-    note: '日本語サポート対応。金融庁登録済み取引所',
+    who: '★国内の登録業者。警察からの照会に国内法に基づいて対応します',
+    note: '日本語で連絡できます。金融庁登録済み。'
+        + '警察へは「この事業者へ捜査関係事項照会を出してほしい」と伝えてください。',
   },
   zaif: {
     name: 'Zaif', url: 'https://zaif.jp',
@@ -1100,7 +1135,9 @@ const EXCHANGE_CONTACTS = {
     name: 'Bitbank', url: 'https://bitbank.cc',
     support: 'https://support.bitbank.cc',
     email: 'support@bitbank.cc',
-    note: '日本語サポート対応。金融庁登録済み取引所',
+    who: '★国内の登録業者。警察からの照会に国内法に基づいて対応します',
+    note: '日本語で連絡できます。金融庁登録済み。'
+        + '警察へは「この事業者へ捜査関係事項照会を出してほしい」と伝えてください。',
   },
   'gmoコイン': {
     url: 'https://coin.z.com/jp/',
@@ -6871,6 +6908,13 @@ function policeSummaryHTML(results, issuedAt) {
       <li>上記取引所への捜査関係事項照会（口座の凍結・本人確認情報の保全）</li>
       <li>取引所の法執行機関窓口は、別紙「取引所連絡先・対応窓口」に記載しています</li>
     </ol>
+    <p class="doc-note" style="margin-top:8px">
+      ※ 海外の主要取引所（Binance・OKX・Bitget・Coinbase 等）は、法執行機関からの照会を
+      <strong>Kodex Global</strong>（app.kodexglobal.com）という共通のプラットフォームで受け付けています。
+      機関のメールアドレスで登録すれば、複数社への照会を同じ窓口から行えます。<br>
+      ※ 被害者本人からの依頼では資産の凍結はできず、法執行機関または裁判所の正式な要請が必要である旨、
+      各社が明示しています。<strong>本件は貴署からのご照会が不可欠です。</strong>
+    </p>
 
     <h3 class="doc-h3">5. 添付</h3>
     <ol class="doc-ol">
@@ -7092,7 +7136,9 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
           <tr><th>公式サイト</th><td><a href="${contact.url}">${contact.url}</a></td></tr>
           ${contact.email ? `<tr><th>サポートメール</th><td>${contact.email}</td></tr>` : ''}
           <tr><th>サポートURL</th><td><a href="${contact.support}">${contact.support}</a></td></tr>
-          ${contact.leo ? `<tr><th>法執行機関窓口</th><td><a href="${contact.leo}">${contact.leo}</a></td></tr>` : ''}
+          ${contact.who ? `<tr><th>★申請できる人</th><td>${contact.who}</td></tr>` : ''}
+          ${contact.leo ? `<tr><th>法執行機関窓口<br><span style="font-size:0.78rem;font-weight:400;color:var(--r-ink2)">警察にお伝えください</span></th><td><a href="${contact.leo}">${contact.leo}</a></td></tr>` : ''}
+          ${contact.victim ? `<tr><th>被害者ご本人の窓口</th><td><a href="${contact.victim}">${contact.victim}</a></td></tr>` : ''}
           ${contact.note ? `<tr><th>対応メモ</th><td>${contact.note}</td></tr>` : ''}
         </table>` : `
         <h4 style="margin:18px 0 10px">📞 連絡先の調べ方</h4>
