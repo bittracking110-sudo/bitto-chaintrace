@@ -201,6 +201,13 @@
      .srv-note 全体に掛けるとテンプレート側の改行まで描画されて既存の注記が崩れるので、
      本文だけを包む。 */
   .srv-note .txt{white-space:pre-line}
+  /* ★「ご購入後の流れ」は判明した事実ではなく案内。緑（good＝到達した取引所・
+     ブリッジ・分散）と同じ色だと見落とされるため、専用の色と薄い下地で分ける。
+     level を知らない版（1.8）は info の青で描かれるので壊れない。 */
+  /* ★notesHTML が border-left-color と見出しの色を style= で直接書くため、
+     クラス側は !important でないと勝てない（背景は inline に無いので不要）。 */
+  .srv-note.afterbuy{border-left-color:#a78bfa !important;background:rgba(167,139,250,.07)}
+  .srv-note.afterbuy b{color:#c4b5fd !important}
   /* 確度が下がる区間。消さずに、薄くして区別する */
   .node.after-stop{opacity:.62;border-style:dashed}
   .caveat{margin-top:10px;font-size:11.5px;line-height:1.75;color:var(--sub);
