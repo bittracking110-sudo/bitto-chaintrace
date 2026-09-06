@@ -8009,7 +8009,19 @@ async function generateAIContent(results, customerName, opts = {}) {
       const r  = item.result;
       const ex = r.exchanges?.[0];
       if (!ex || !ex.name) return '';   // 名称未判明は凍結要請状を生成しない（証拠資料で対応）
-      return `[REQUEST_${idx}]（${ex.name}宛。依頼者:${customerName} TXID:${r.txid} チェーン:${r.chain} 日時:${r.blockTime} 金額:${r.amount?.toFixed(6)||'?'}${r.chain} 着金アドレス:${ex.address||'不明'} 送金経路の説明 凍結・保全・情報提供の3点を要請 取引所固有の申請窓口を明記した凍結要請メール全文）[/REQUEST_${idx}]`;
+      /* ★「凍結を要請」と書かせない。取引所は被害者の依頼だけでは凍結できず
+         （Binance公式：法執行機関または裁判所の正式な命令が必要）、
+         できないことを求める文面は相手にも被害者にも役に立たない。
+         求めるのは【記録の保全】と【警察からの照会への対応】。
+         ★ここを直さないと、1件目の文面だけAIの旧方針のままになる
+         （テンプレートは1件目をAI生成で置き換える作りのため）。 */
+      return `[REQUEST_${idx}]（${ex.name}宛。依頼者:${customerName} TXID:${r.txid} チェーン:${r.chain} 日時:${r.blockTime} 金額:${r.amount?.toFixed(6)||'?'}${r.chain} 着金アドレス:${ex.address||'不明'} 送金経路の説明。`
+        + `★件名は「不正送金の被害報告および記録の保全のお願い」。`
+        + `要請するのは①取引記録・アクセスログ・KYC情報の保全 ②貴社の規程上可能な範囲での保全措置の検討 ③警察等からの正式な照会への速やかな対応 の3点。`
+        + `★「即時凍結」「凍結してください」とは書かないこと。資産の凍結には法執行機関または裁判所の正式な命令が必要であることを承知している旨を本文に明記し、`
+        + `本書は凍結命令ではなく被害の報告と記録保全の依頼であること、正式な照会は警察を通じて行うことを書く。`
+        + `★被害届の提出期限は書かない（日本では警察署の窓口でしか出せず、その場で受理されないことがあるため）。`
+        + `取引所固有の申請窓口を明記したメール全文）[/REQUEST_${idx}]`;
     }).filter(Boolean).join('\n');
 
     const prompt = `あなたはブロックチェーン調査の専門家です。仮想通貨詐欺被害の調査結果を分析し、被害者（${customerName}様）への報告書を作成してください。
@@ -9827,10 +9839,13 @@ $('#save').onclick = async () => {
   };
   $('#msg').textContent = '保存しています…';
   try {
+    /* ★上限を持つ。電波の悪い場所で固まると「保存しています…」のまま止まり、
+       書いた内容が消えたのか残ったのか分からなくなる。 */
     const r = await fetch(location.pathname.replace('/progress/', '/api/progress/'),
-      { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
-    $('#msg').textContent = r.ok ? '保存しました' : '保存できませんでした';
-  } catch { $('#msg').textContent = '通信を確認してください'; }
+      { method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
+    $('#msg').textContent = r.ok ? '保存しました' : '保存できませんでした。もう一度お試しください';
+  } catch { $('#msg').textContent = '保存できませんでした。通信を確認して、もう一度お試しください'; }
 };
 </script></body></html>`;
 }
