@@ -6700,6 +6700,92 @@ function serviceNote(label) {
 
 // ══ 有料HTMLレポート生成 ══════════════════════════════════════
 
+/* ★警察提出用サマリー（A4・1枚）。
+   実測：報告書の本文は約4,800字・十数ページある。警察の相談窓口で、
+   担当者がこの分量をその場で読むことはまず無い。
+   受理の判断に要るのは「何が起きたか／金はどこへ行ったか／何をしてほしいか」の3点。
+   ★詳細は本編に残し、ここは1枚で完結させる。 */
+function policeSummaryHTML(results, issuedAt) {
+  const rs = (results || []).map(x => x.result).filter(Boolean);
+  if (!rs.length) return '';
+
+  // 到達した取引所を全件（判明した順の番号はサーバーの台帳の番号をそのまま使う）
+  const exAll = [];
+  rs.forEach(r => (r.exchanges || []).forEach(e => { if (e && e.address) exAll.push({ e, r }); }));
+
+  const row = (th, td) => `<tr><th>${th}</th><td>${td}</td></tr>`;
+  const txRows = (results || []).map((x, i) => {
+    const r = x.result || {};
+    const amt = (r.tokenSymbol && r.tokenAmount > 0)
+      ? `${r.tokenAmount} ${r.tokenSymbol}`
+      : `${r.amount != null ? r.amount : '不明'} ${r.chain || ''}`;
+    return `<tr><th>${i + 1}</th><td>
+      <span class="mono">${escHtml(x.txid)}</span><br>
+      ${escHtml(fmtDate(r.blockTime))}　／　送金額：${escHtml(amt)}　／　${escHtml(r.chain || '')}
+    </td></tr>`;
+  }).join('');
+
+  const sender = [...new Set(rs.map(r => r.sender || (r.path && r.path[0] && r.path[0].address)).filter(Boolean))];
+
+  /* ★取引所が出なかったときに空欄にしない。「どこまで追い、なぜ止まったか」は
+     捜査の手掛かりそのもので、書かないと「調べていない」と受け取られる。 */
+  const exBlock = exAll.length
+    ? `<table class="info-table">
+        <tr><th style="width:3.5em">番号</th><th style="width:9em">取引所</th><th>着金アドレス</th></tr>
+        ${exAll.map(({ e }) => `<tr>
+          <th>No.${escHtml(String(e.foundNo ?? '-'))}</th>
+          <th>${escHtml(e.name || '取引所')}</th>
+          <td><span class="mono">${escHtml(e.address)}</span>
+          ${e.chain ? `<br><span class="sm">チェーン：${escHtml(e.chain)}</span>` : ''}
+          ${e.destTag != null ? `<br><span class="sm">宛先タグ：<strong>${escHtml(String(e.destTag))}</strong>（口座の特定に必要）</span>` : ''}
+          </td></tr>`).join('')}
+      </table>`
+    : `<p class="doc-p">本調査では、資金の到達先として取引所を特定できませんでした。
+       追跡した経路と、追跡が止まった地点・その理由は本報告書に記載しています。
+       時間の経過により判明する場合があります。</p>`;
+
+  const hops = Math.max(0, ...rs.map(r => (r.path || []).length - 1));
+
+  return `
+  <div class="page police-page">
+    <h2 class="doc-h">警察提出用サマリー</h2>
+    <p class="doc-note" style="margin:0 0 16px">
+      本紙は、詳細な調査報告書（別紙）の要点を1枚にまとめたものです。根拠と全経路は別紙に記載しています。
+    </p>
+
+    <h3 class="doc-h3">1. 被害の概要</h3>
+    <table class="info-table">
+      ${row('送金元アドレス', sender.map(a => `<span class="mono">${escHtml(a)}</span>`).join('<br>') || '不明')}
+      ${row('追跡した段数', `${hops} 段`)}
+      ${row('報告書発行日時', escHtml(issuedAt))}
+    </table>
+    <h3 class="doc-h3">2. 対象のトランザクション（${(results || []).length}件）</h3>
+    <table class="info-table route-table">${txRows}</table>
+
+    <h3 class="doc-h3">3. 資金の到達先</h3>
+    ${exBlock}
+
+    <h3 class="doc-h3">4. お願いしたいこと</h3>
+    <ol class="doc-ol">
+      <li>被害届の受理</li>
+      <li>上記取引所への捜査関係事項照会（口座の凍結・本人確認情報の保全）</li>
+      <li>取引所の法執行機関窓口は、別紙「取引所連絡先・対応窓口」に記載しています</li>
+    </ol>
+
+    <h3 class="doc-h3">5. 添付</h3>
+    <ol class="doc-ol">
+      <li>調査報告書（本紙以降）— 送金経路・根拠・取引所連絡先</li>
+      <li>取引所への凍結要請文${exAll.length ? `（${exAll.length}通）` : ''}</li>
+    </ol>
+
+    <p class="doc-note">
+      ※ 本資料は、公開されているブロックチェーンの記録を解析した結果です。
+      暗号資産には個体の識別が無いため、経路上の資金が最初の送金と同一である保証はありません。
+      到達した取引所の記載は、記録上のつながりを示すものです。
+    </p>
+  </div>`;
+}
+
 function generateReportHTML(results, customerName, issuedAt, aiData = {}, reportUrl = '', brand = 'bitto', hearingUrl = '') {
   const chainFull = { BTC: 'Bitcoin', ETH: 'Ethereum', XRP: 'XRP Ledger', TRON: 'TRON（TRC20）' };
 
@@ -7323,6 +7409,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
     .doc-ol{margin:0 0 22px 20px;padding:0;font-size:0.88rem;line-height:1.9}
     .doc-ol li{margin-bottom:6px}
     .doc-note{font-size:0.8rem;color:var(--r-ink2);line-height:1.8;margin-top:12px}
+    .sm{font-size:0.9em;color:var(--r-ink2)}
     .cover{background:var(--r-coverbg);color:var(--r-coverink);border:1px solid var(--r-border);border-radius:12px;padding:32px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
     .cover-left h1{font-size:1.5rem;margin-bottom:4px}
     .cover-left p{color:var(--r-coversub);font-size:0.85rem}
@@ -7443,6 +7530,34 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       .flow-node{padding:10px 10px}
     }
     @media print{
+      /* ★紙に出すときは白地・黒文字にする。理由は実測にもとづく：
+         画面用のテーマは page:#0C1728 の濃紺で、PDFは printBackground:true のため
+         A4全ページがベタ塗りになる。コンビニのカラーは50〜60円/枚（白黒10円）で
+         費用が5〜6倍、しかもベタ塗りは印刷が遅い。
+         ★さらに、そのまま白黒で刷ると「濃いグレーの地に薄いグレーの文字」で読めない。
+         つまり現状はお客様に白黒という選択肢が無い（利用者の指摘・2026-09-06）。
+
+         ★色は捨てず、色相を保ったまま濃さだけ落とす。白い紙で 4.5:1 以上を満たす値。
+         ただし濃さを揃えると白黒値が全部46前後になり、白黒では色が区別できない。
+         そのため意味は文字ラベル・太字・罫線でも必ず示す（色は補助に降ろす）。 */
+      :root{
+        --r-page:#ffffff; --r-ink:#17202e; --r-ink2:#4a5a72;
+        --r-card:#ffffff; --r-border:#8fa0b8; --r-line:#c8d2de; --r-softbg:#f4f7fa;
+        --r-accent:#0d7d6d; --r-accentink:#0a6355;
+        --r-badgebg:#0d7d6d; --r-badgeink:#ffffff;
+        --r-coverbg:#ffffff; --r-coverink:#17202e; --r-coversub:#4a5a72;
+        --r-thbg:#eef3f8; --r-addrbg:#f6f9fc; --r-addrink:#14352f; --r-monoink:#14352f;
+        --r-aibg:#f2f7f6; --r-aititle:#0a6355; --r-aibody:#17202e; --r-ailabelbg:#0d7d6d;
+        --r-tmplbg:#f7f9fb;
+        --r-vbg:#fdf4f3; --r-vborder:#b04a3d; --r-vink:#a8342a;
+        --r-rbg:#f3f6fc; --r-rborder:#6d8cbd; --r-rink:#2f5fa8;
+        --r-ebg:#eef8f5; --r-eborder:#0d7d6d; --r-eink:#0a6355;
+        --r-usd:#2b6b55;
+      }
+      /* ★ロゴは濃紺の下地を絵の中に持っているので、白い表紙でもそのまま出る。 */
+      .cover-page{border:2px solid var(--r-accent)}
+      /* ★白黒で刷ったときに意味が消えないよう、罫線の種類でも区別する。 */
+      .police-page{break-after:page;page-break-after:always}
       body{background:var(--r-page);padding:0}
       .print-bar{display:none}
       .tx-section{border:none;padding:0;margin-bottom:40px}
@@ -7549,6 +7664,8 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
       <tr><th>作成</th><td>BitTo</td></tr>
     </table>
   </div>
+
+  ${policeSummaryHTML(results, issuedAt)}
 
   <div class="page">
     <h2 class="doc-h">調査の目的</h2>
