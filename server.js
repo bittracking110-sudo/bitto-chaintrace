@@ -6949,7 +6949,8 @@ function policeSummaryHTML(results, issuedAt) {
   <div class="page police-page">
     <h2 class="doc-h">警察提出用サマリー</h2>
     <p class="doc-note" style="margin:0 0 16px">
-      本紙は、詳細な調査報告書（別紙）の要点を1枚にまとめたものです。根拠と全経路は別紙に記載しています。
+      本紙は、詳細な調査報告書（別紙）の要点を1枚にまとめたものです。根拠と全経路は別紙に記載しています。<br>
+      ※ 本書は<strong>白黒印刷でも内容が損なわれない</strong>よう作成しています。コピーを取られる際は白黒で構いません。
     </p>
 
     <h3 class="doc-h3">1. 被害の概要</h3>
@@ -7811,6 +7812,12 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
        style="display:block;text-decoration:none;text-align:center">📄 PDFをダウンロード</a>
     <p style="margin:10px 0 0;font-size:0.78rem;color:var(--r-ink2)">
       うまく保存できない場合は、下の「印刷」からもPDF化できます</p>
+    <!-- ★白黒で刷ってよいことを、印刷を選ぶ場所で伝える。
+         コンビニは A4 白黒10円・カラー50〜60円で5〜6倍違う（第5-S節）。
+         「情報が欠けるのでは」と思うとお客様はカラーを選んでしまう。 -->
+    <p style="margin:8px 0 0;font-size:0.78rem;color:var(--r-ink2);line-height:1.8">
+      🖨 <strong>白黒印刷で問題ありません。</strong>色は補助として使っており、
+      白黒で刷っても内容が損なわれないよう作成しています。</p>
     <details style="margin-top:14px">
       <summary style="cursor:pointer;font-size:0.82rem;color:var(--r-ink2)">🖨 印刷して保存する場合はこちら</summary>
     <button class="print-btn" onclick="doPrint()" id="pdfBtn" style="margin-top:10px">🖨 PDF保存 / 印刷</button>
