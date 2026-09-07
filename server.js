@@ -1174,29 +1174,57 @@ const EXCHANGE_CONTACTS = {
         + '警察へは「この事業者へ捜査関係事項照会を出してほしい」と伝えてください。',
   },
   'gmoコイン': {
+    name: 'GMOコイン',
     url: 'https://coin.z.com/jp/',
-    support: 'https://support.coin.z.com',
-    note: '運営：GMOコイン株式会社（日本の暗号資産交換業者）。日本語で照会でき、警察からの照会にも国内法に基づき対応する体制があります。',
+    support: 'https://support.coin.z.com/hc/ja/requests/new',
+    email: 'help@coin.z.com',
+    who: '★国内の登録業者。凍結・口座情報は警察からの照会（捜査関係事項照会）で扱われます',
+    victim: 'https://support.coin.z.com/hc/ja/requests/new',
+    note: '運営：GMOコイン株式会社（日本の暗号資産交換業者）。'
+        + '★電話窓口はありません。問い合わせフォームまたはチャットです（平日9:00〜18:00）。'
+        + '返信は help@coin.z.com から届きます。'
+        + '警察へは「この事業者へ捜査関係事項照会を出してほしい」と、本報告書の警察提出用サマリーを示してお伝えください。（2026-09-06確認）',
   },
   'gmo coin': {
+    name: 'GMOコイン',
     url: 'https://coin.z.com/jp/',
-    support: 'https://support.coin.z.com',
-    note: '運営：GMOコイン株式会社（日本の暗号資産交換業者）。',
+    support: 'https://support.coin.z.com/hc/ja/requests/new',
+    email: 'help@coin.z.com',
+    who: '★国内の登録業者。凍結・口座情報は警察からの照会（捜査関係事項照会）で扱われます',
+    note: '運営：GMOコイン株式会社（日本の暗号資産交換業者）。★電話窓口はありません。',
   },
   'sbi vc': {
+    name: 'SBI VCトレード',
     url: 'https://www.sbivc.co.jp/',
-    support: 'https://www.sbivc.co.jp/faqs',
-    note: '運営：SBI VCトレード株式会社（日本の暗号資産交換業者）。DMM Bitcoin の口座・預かり資産の移管先でもあります（2025年3月）。',
+    support: 'https://www.sbivc.co.jp/faqs/form_top',
+    who: '★国内の登録業者。凍結・口座情報は警察からの照会（捜査関係事項照会）で扱われます',
+    victim: 'https://www.sbivc.co.jp/faqs/form_top',
+    note: '運営：SBI VCトレード株式会社（日本の暗号資産交換業者）。'
+        + 'DMM Bitcoin の口座・預かり資産の移管先でもあります（2025年3月）。'
+        + '★BITPOINT サービスの窓口も同社が案内しています。'
+        + 'フォームは24時間受付、返信は平日10:00〜17:00。'
+        + '同社は「詐欺被害に遭われた場合は速やかに最寄りの警察署へご相談ください」と案内しています。'
+        + '警察へは「この事業者へ捜査関係事項照会を出してほしい」と、本報告書の警察提出用サマリーを示してお伝えください。（2026-09-06確認）',
   },
   'sbivc': {
+    name: 'SBI VCトレード',
     url: 'https://www.sbivc.co.jp/',
-    support: 'https://www.sbivc.co.jp/faqs',
+    support: 'https://www.sbivc.co.jp/faqs/form_top',
+    who: '★国内の登録業者。凍結・口座情報は警察からの照会（捜査関係事項照会）で扱われます',
     note: '運営：SBI VCトレード株式会社（日本の暗号資産交換業者）。',
   },
   bitpoint: {
+    name: 'BITPOINT',
     url: 'https://www.bitpoint.co.jp/',
     support: 'https://faq.bitpoint.co.jp/',
-    note: '運営：SBI VCトレード株式会社（日本の暗号資産交換業者）。',
+    email: 'support@bitpoint.co.jp',
+    who: '★国内の登録業者。凍結・口座情報は警察からの照会（捜査関係事項照会）で扱われます',
+    victim: 'https://faq.bitpoint.co.jp/',
+    note: '運営：SBI VCトレード株式会社（日本の暗号資産交換業者）。'
+        + '★BITPOINT サービスの問い合わせは support@bitpoint.co.jp です。'
+        + '返信は平日10:00〜17:00。'
+        + '警察へは「この事業者へ捜査関係事項照会を出してほしい」と、'
+        + '本報告書の警察提出用サマリーを示してお伝えください。（2026-09-06確認）',
   },
   '楽天ウォレット': {
     url: 'https://www.rakuten-wallet.co.jp/',
@@ -6947,7 +6975,12 @@ function policeSummaryHTML(results, issuedAt) {
       <strong>Kodex Global</strong>（app.kodexglobal.com）という共通のプラットフォームで受け付けています。
       機関のメールアドレスで登録すれば、複数社への照会を同じ窓口から行えます。<br>
       ※ 被害者本人からの依頼では資産の凍結はできず、法執行機関または裁判所の正式な要請が必要である旨、
-      各社が明示しています。<strong>本件は貴署からのご照会が不可欠です。</strong>
+      各社が明示しています。<strong>本件は貴署からのご照会が不可欠です。</strong><br>
+      ※ 国内の登録業者（bitFlyer・Coincheck・bitbank・GMOコイン・SBI VCトレード・BITPOINT 等）へは、
+      <strong>捜査関係事項照会</strong>により口座情報の提供・凍結の要請が可能です。<br>
+      ※ 海外の一部の事業者は、被害者からの届出だけで一時的な保全を行う場合がありますが、
+      <strong>期限内に法執行機関からの要請が無いと解除されます</strong>（例：48時間）。
+      期限は事業者ごとに異なり、別紙の各社の欄に記載しています。
     </p>
 
     <h3 class="doc-h3">5. 添付</h3>
