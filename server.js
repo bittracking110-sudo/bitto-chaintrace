@@ -1038,15 +1038,22 @@ const EXCHANGE_CONTACTS = {
   coinbase: {
     name: 'Coinbase', url: 'https://www.coinbase.com',
     support: 'https://help.coinbase.com',
-    leo: 'https://www.coinbase.com/legal/law_enforcement',
+    leo: 'https://app.kodexglobal.com/gov/signup',
     email: 'legal@coinbase.com',
-    note: '法執行機関向け専用フォームあり',
+    who: '法執行機関のみ（Kodex Global 経由）',
+    note: '★保全要請（preservation）は令状が無くても記録の保全ができます。'
+        + '内容の開示には召喚状・裁判所命令・捜索令状が必要です。'
+        + '警察には「まず保全要請だけでも出してほしい」と伝えると、記録が消えるのを防げます（2026-09-06確認）。',
   },
   kraken: {
     name: 'Kraken', url: 'https://www.kraken.com',
     support: 'https://support.kraken.com',
     email: 'support@kraken.com',
-    note: 'サポートチケット経由で法的要請を送付',
+    leo: 'https://support.kraken.com/articles/how-do-i-submit-a-legal-inquiry',
+    victim: 'https://support.kraken.com/hc/forms/10306751646996',
+    who: '法執行機関／★被害者本人も詐欺の報告ができます',
+    note: '被害者は「Report a scam」フォームから報告できます。'
+        + '凍結そのものは法執行機関の要請によります（2026-09-06確認）。',
   },
   hitbtc: {
     name: 'HitBTC', url: 'https://hitbtc.com',
@@ -1082,15 +1089,20 @@ const EXCHANGE_CONTACTS = {
   huobi: {
     name: 'HTX (旧Huobi)', url: 'https://www.htx.com',
     support: 'https://www.htx.com/support',
-    email: 'support@htx.com',
-    note: 'サポートから法的要請フォームを申請',
+    email: 'jubao@huobi.com',
+    who: '被害者も通報できます（通報窓口 jubao@huobi.com）',
+    note: '★応答が不安定との報告があります（Europolの調査・ICIJの報道）。'
+        + '通報は出したうえで、警察経由の照会を優先してください（2026-09-06確認）。',
   },
   kucoin: {
     name: 'KuCoin', url: 'https://www.kucoin.com',
     support: 'https://www.kucoin.com/support',
-    leo: 'https://www.kucoin.com/legal/law-enforcement',
+    leo: 'https://www.kucoin.com/legal/requests',
     email: 'law@kucoin.com',
-    note: '法執行機関向け専用窓口あり',
+    who: '法執行機関のみ',
+    note: '★署名または押印のある正式な文書（英語）が必要で、電子署名・電子印は受け付けません。'
+        + '★保全には期限があり、期限までに延長の公文書が届かないと解除されます。'
+        + '警察に「期限があること」を必ずお伝えください（2026-09-06確認）。',
   },
   bitget: {
     name: 'Bitget', url: 'https://www.bitget.com',
@@ -1100,6 +1112,28 @@ const EXCHANGE_CONTACTS = {
     who: '法執行機関（Kodex Global）／★被害者本人も報告できます',
     note: '★被害者はサポートへ連絡し、先に被害届を出したうえで書類を提出します。'
         + '受付時に案件番号が発行され、被害者はそれで照会できます（2026-09-06確認）。',
+  },
+  mexc: {
+    name: 'MEXC', url: 'https://www.mexc.com',
+    support: 'https://www.mexc.com/support',
+    leo: 'https://www.mexc.com/support/requests/legal',
+    victim: 'https://www.mexc.com/support/articles/17827791512560',
+    who: '★被害者ご本人の報告だけで一時凍結が始まります',
+    hold: '48時間。延長には警察の受理を示す書類が必要です',
+    note: '★「Report Abnormal Funds」から報告すると、報告内容だけで一時凍結される場合があります。'
+        + 'ただし48時間以内に法執行機関からの要請が無いと解除されます。'
+        + '受理を示す書類を出せば延長されることがあります（同社案内・2026-09-06確認）。',
+  },
+  gate: {
+    name: 'Gate', url: 'https://www.gate.com',
+    support: 'https://www.gate.com/help',
+    leo: 'regulatory@gate.com',
+    victim: 'https://www.gate.com/help/guide/security-zone/16479/Regarding-stolen-illicit-funds-traced-to-Gate.io',
+    who: '★被害者ご本人の報告で凍結の検討が始まります',
+    hold: '報告から24時間以内に警察へ届け出て、受理を示す書類を提出してください',
+    note: '★疑いが相応と判断されれば口座を凍結するとしています。'
+        + '報告後24時間以内に警察へ届け出て、受理の書類を早めに提出するよう案内されています。'
+        + '法執行機関の窓口は regulatory@gate.com、凍結には裁判所命令が必要です（2026-09-06確認）。',
   },
   gemini: {
     name: 'Gemini', url: 'https://www.gemini.com',
@@ -7137,6 +7171,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
           ${contact.email ? `<tr><th>サポートメール</th><td>${contact.email}</td></tr>` : ''}
           <tr><th>サポートURL</th><td><a href="${contact.support}">${contact.support}</a></td></tr>
           ${contact.who ? `<tr><th>★申請できる人</th><td>${contact.who}</td></tr>` : ''}
+          ${contact.hold ? `<tr><th>★一時保全の期限</th><td><strong>${contact.hold}</strong></td></tr>` : ''}
           ${contact.leo ? `<tr><th>法執行機関窓口<br><span style="font-size:0.78rem;font-weight:400;color:var(--r-ink2)">警察にお伝えください</span></th><td><a href="${contact.leo}">${contact.leo}</a></td></tr>` : ''}
           ${contact.victim ? `<tr><th>被害者ご本人の窓口</th><td><a href="${contact.victim}">${contact.victim}</a></td></tr>` : ''}
           ${contact.note ? `<tr><th>対応メモ</th><td>${contact.note}</td></tr>` : ''}
