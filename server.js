@@ -446,6 +446,20 @@ function saveProgress() {
     .catch(e => console.error('[Progress] 保存失敗:', e.message));
 }
 
+/* ★入れっぱなしの入れ物を作らない（CLAUDE.md の決まり）。
+   ただしここは「いつ誰に何を出したか」の記録で、警察や弁護士に示す資料になる。
+   数日で消すのは論外なので、★2年という長い期限にする。
+   刑事の時効や、被害者が後から動き出す期間を考えるとこれより短くできない。 */
+const PROGRESS_KEEP_MS = Number(process.env.PROGRESS_KEEP_MS ?? 730 * 86400000);
+setInterval(() => {
+  const cutoff = Date.now() - PROGRESS_KEEP_MS;
+  let n = 0;
+  for (const [id, r] of progressRecs) {
+    if ((r.updatedAt || r.createdAt || 0) < cutoff) { progressRecs.delete(id); n++; }
+  }
+  if (n) { console.log(`[Progress] 期限切れ ${n}件を削除`); saveProgress(); }
+}, 86400000).unref?.();
+
 /* 取引所ごとの状態。★「返答なし」を異常扱いしない並びにしてある。 */
 const EX_STATES = [
   { k: 'none',     label: '未報告' },
@@ -7755,6 +7769,11 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
          ★色は捨てず、色相を保ったまま濃さだけ落とす。白い紙で 4.5:1 以上を満たす値。
          ただし濃さを揃えると白黒値が全部46前後になり、白黒では色が区別できない。
          そのため意味は文字ラベル・太字・罫線でも必ず示す（色は補助に降ろす）。 */
+      /* ★BitTo だけに掛ける。Connection のテーマは元から白地（page #FBF8F1・
+         本文のコントラスト 12.04:1）で印刷に耐えるうえ、ここを一律に当てると
+         Connection の金（#B88A3E）が BitTo のティールに化けて別ブランドの
+         書類になってしまう（点検で発見・2026-09-09）。 */
+      ${brand === 'connection' ? '' : `
       :root{
         --r-page:#ffffff; --r-ink:#17202e; --r-ink2:#4a5a72;
         --r-card:#ffffff; --r-border:#8fa0b8; --r-line:#c8d2de; --r-softbg:#f4f7fa;
@@ -7768,7 +7787,7 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
         --r-rbg:#f3f6fc; --r-rborder:#6d8cbd; --r-rink:#2f5fa8;
         --r-ebg:#eef8f5; --r-eborder:#0d7d6d; --r-eink:#0a6355;
         --r-usd:#2b6b55;
-      }
+      }`}
       /* ★ロゴは濃紺の下地を絵の中に持っているので、白い表紙でもそのまま出る。 */
       .cover-page{border:2px solid var(--r-accent)}
       /* ★白黒で刷ったときに意味が消えないよう、罫線の種類でも区別する。 */
@@ -9686,7 +9705,8 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
       /* ★手続きの記録を報告書と同時に作る。取引所の行は到達先で埋めておく。
          お客様に一から入力させないため（第5-T節）。 */
       const progressId = ensureProgress(reportId, formData.customerName,
-        list.flatMap(x => ((x.result && x.result.exchanges) || []).filter(e => e && e.address)));
+        list.flatMap(x => ((x.result && x.result.exchanges) || []).filter(e => e && e.address)),
+        list);
       const reportHtml = generateReportHTML(list, formData.customerName, issuedAt, aiData, reportUrl,
         formData.brand || 'bitto',
         // 経緯をうかがう資料への入口。報告書はあとから見返されるので、ここにも置く
@@ -9865,6 +9885,20 @@ h1{color:#f87171;font-size:1.3rem;margin-bottom:12px}.icon{font-size:3rem;margin
 /* 進捗の記録の画面。★白地・素の作りにする。被害直後の方が、
    慣れない端末でも開けることを優先する（凝った作りは壊れたときに直せない）。 */
 function progressPageHTML(p) {
+  /* ★いまの段階に合わせて要請文を作り直す。
+     報告書は1度作ったら固定なので、警察の手続が進んでも文面が古いまま出る。
+     ここなら段階を保存するたびに正しい文面を出せる（点検で発見・2026-09-09）。
+     ★保存し直すまで文面は変わらないので、その旨を画面に書く。 */
+  const letters = (p.tx && (p.exchanges || []).length) ? `
+    <h2>3. 取引所へ送る文面</h2>
+    <p class="note">いまご記入の段階に合わせた文面です。段階を変えて保存し直すと、文面も変わります。</p>
+    ${p.exchanges.map(e => `
+      <div class="ex">
+        <h3>No.${escHtml(String(e.no ?? '-'))}　${escHtml(e.name)} 宛</h3>
+        <textarea rows="15" readonly onclick="this.select()">${escHtml(
+          freezeLetterText(e, p.tx, p.customerName, '', p.police))}</textarea>
+        <div class="note" style="margin-top:6px">枠内をタップすると全体を選択できます。</div>
+      </div>`).join('')}` : '';
   const opt = (list, cur) => list.map(x =>
     `<option value="${escHtml(x.k)}"${x.k === cur ? ' selected' : ''}>${escHtml(x.label)}</option>`).join('');
   const rows = (p.exchanges || []).map((e, i) => `
@@ -9933,6 +9967,8 @@ button{background:#0d7d6d;color:#fff;border:0;border-radius:8px;padding:13px 34p
 <h2>2. 取引所ごとの状況</h2>
 ${rows || '<p class="note">この調査では取引所が特定できていません。判明した場合にここへ追加します。</p>'}
 
+${letters}
+
 <div class="save"><button id="save">保存する</button><div class="msg" id="msg"></div></div>
 
 <script>
@@ -9975,16 +10011,27 @@ function progressUrlFor(id) { return `${BASE_URL}/progress/${id}`; }
 
 /* 報告書から進捗の記録を作る（無ければ作り、あれば返す）。
    ★取引所の行は報告書の到達先で埋めておく。お客様に一から入力させない。 */
-function ensureProgress(reportId, customerName, exchanges) {
+function ensureProgress(reportId, customerName, exchanges, results) {
   let id = [...progressRecs.entries()].find(([, p]) => p.reportId === reportId)?.[0];
   if (!id) {
     id = crypto.randomUUID();
+    /* ★要請文は警察の段階で文面が変わる。報告書は1度作ったら固定なので、
+       段階が進んでも古い文面のままになる（点検で発見・2026-09-09）。
+       文面を作り直せるだけの最小限をここに持たせ、この画面で出す。
+       ★経路そのものは持たない。要るのは差出人が書く事実だけ。 */
+    const r0 = (results || [])[0] && (results || [])[0].result;
     progressRecs.set(id, {
       id, reportId, customerName: customerName || '',
+      tx: r0 ? {
+        txid: r0.txid || '', chain: r0.chain || '', blockTime: r0.blockTime || '',
+        amount: r0.amount ?? null, tokenSymbol: r0.tokenSymbol || '', tokenAmount: r0.tokenAmount ?? null,
+      } : null,
       police: { stage: 'none', station: '', date: '', refNo: '' },
       exchanges: (exchanges || []).map(e => ({
         no: e.foundNo ?? null, name: e.name || '取引所', address: e.address || '',
-        chain: e.chain || '', state: 'none', reportedAt: '', docSentAt: '', memo: '',
+        chain: e.chain || '', token: e.token || '', amount: e.amount ?? null,
+        destTag: e.destTag ?? null,
+        state: 'none', reportedAt: '', docSentAt: '', memo: '',
       })),
       createdAt: Date.now(), updatedAt: Date.now(),
     });
@@ -9993,7 +10040,21 @@ function ensureProgress(reportId, customerName, exchanges) {
   return id;
 }
 
+/* ★IDを総当たりで探されないように回数を絞る。UUIDなので現実には当たらないが、
+   当たらないことを理由に無制限にしてよい口は無い（第5-K節の考え方）。 */
+const progressHits = new Map();   // IP → [時刻]
+function progressRateOk(ip) {
+  if (!ip) return true;
+  const now = Date.now();
+  const arr = (progressHits.get(ip) || []).filter(t => now - t < 3600000);
+  arr.push(now);
+  progressHits.set(ip, arr);
+  if (progressHits.size > 5000) progressHits.clear();   // 入れっぱなしにしない
+  return arr.length <= 120;
+}
+
 app.get('/api/progress/:id', (req, res) => {
+  if (!progressRateOk(reqIp(req))) return res.status(429).json({ error: 'しばらく時間をおいてお試しください' });
   const p = progressRecs.get(req.params.id);
   if (!p) return res.status(404).json({ error: '見つかりません' });
   res.json({ ok: true, rec: p, exStates: EX_STATES, exNext: EX_NEXT,
@@ -10001,6 +10062,7 @@ app.get('/api/progress/:id', (req, res) => {
 });
 
 app.post('/api/progress/:id', express.json({ limit: '256kb' }), (req, res) => {
+  if (!progressRateOk(reqIp(req))) return res.status(429).json({ error: 'しばらく時間をおいてお試しください' });
   const p = progressRecs.get(req.params.id);
   if (!p) return res.status(404).json({ error: '見つかりません' });
   const b = req.body || {};
@@ -10029,6 +10091,8 @@ app.post('/api/progress/:id', express.json({ limit: '256kb' }), (req, res) => {
 });
 
 app.get('/progress/:id', (req, res) => {
+  if (!progressRateOk(reqIp(req))) return res.status(429).send('<!DOCTYPE html><meta charset="utf-8">'
+    + '<p style="font-family:sans-serif;padding:40px">しばらく時間をおいてお試しください。</p>');
   const p = progressRecs.get(req.params.id);
   if (!p) return res.status(404).send('<!DOCTYPE html><meta charset="utf-8">'
     + '<p style="font-family:sans-serif;padding:40px">この記録は見つかりませんでした。リンクをご確認ください。</p>');
