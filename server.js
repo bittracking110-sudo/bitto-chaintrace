@@ -11198,6 +11198,24 @@ app.listen(PORT, () => {
   console.log(`🔑 Etherscan  : ${ETHERSCAN_KEY ? '✓' : '⚠ 未設定（EVMの追跡が止まります）'}`);
   console.log(`🔑 TronGrid   : ${TRON_KEY ? '✓' : '⚠ 未設定（TRONの追跡が制限で止まります）'}`);
   console.log(`🔑 MistTrack  : ${MISTTRACK_KEY ? '✓' : '⚠ 未設定（取引所名が引けません）'}`);
+  /* ★上限の実効値を出す。Railway の画面は値が伏字で、設定が効いたか確認できない。
+     しかもここは既定値のまま動いてしまう（TOTAL_CAP を入れ忘れると100で止まる）。
+     ★上限値は秘密ではないので、そのまま出して確認できるようにする。 */
+  if (MISTTRACK_KEY) {
+    const left = MISTTRACK_TOTAL_CAP - labelUsage.total;
+    console.log(`   ├ 購入総数 ${MISTTRACK_TOTAL_CAP} 回 ／ これまで ${labelUsage.total} 回 ／ 残り ${left} 回`);
+    console.log(`   ├ 有料用に確保 ${MISTTRACK_PAID_RESERVE} 回（無料は残り${left - MISTTRACK_PAID_RESERVE}回で停止）`);
+    console.log(`   ├ 全体 1日 ${MISTTRACK_DAILY_CAP} 回 ／ 1か月 ${MISTTRACK_MONTH_CAP} 回`);
+    console.log(`   ├ 1人 1日 ${MISTTRACK_USER_DAILY} 回 ／ 1か月 ${MISTTRACK_USER_MONTH} 回`);
+    console.log(`   └ 1件あたり 無料 ${MISTTRACK_FREE_LOOKUPS} 回 ／ 有料 ${MISTTRACK_PAID_LOOKUPS} 回`);
+    /* ★1人あたりの上限より全体が小さいと、2人目が0回になる（第5-I節で一度やった）。 */
+    if (MISTTRACK_MONTH_CAP < MISTTRACK_USER_MONTH * 2)
+      console.warn(`   ⚠ 全体の月上限(${MISTTRACK_MONTH_CAP})が1人分(${MISTTRACK_USER_MONTH})の2倍未満です。2人目がほぼ使えません`);
+    if (MISTTRACK_DAILY_CAP < MISTTRACK_USER_DAILY * 2)
+      console.warn(`   ⚠ 全体の日上限(${MISTTRACK_DAILY_CAP})が1人分(${MISTTRACK_USER_DAILY})の2倍未満です`);
+    if (left <= MISTTRACK_PAID_RESERVE)
+      console.warn(`   ⚠ ★無料調査は停止中です（残り${left}回 ≦ 確保${MISTTRACK_PAID_RESERVE}回）。TOTAL_CAP の見直しが要ります`);
+  }
   console.log(`🔑 Blockchair : ${BLOCKCHAIR_KEY ? '✓' : '⚠ 未設定'}`);
   /* ★Bithomp は XRP の取引所名の二重化。鍵が無ければ黙って飛ぶ実装なので、
      登録し忘れ・名前の打ち間違いに気づけるよう起動時に出す。 */
