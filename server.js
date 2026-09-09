@@ -9889,14 +9889,15 @@ function progressPageHTML(p) {
      報告書は1度作ったら固定なので、警察の手続が進んでも文面が古いまま出る。
      ここなら段階を保存するたびに正しい文面を出せる（点検で発見・2026-09-09）。
      ★保存し直すまで文面は変わらないので、その旨を画面に書く。 */
-  const letters = (p.tx && (p.exchanges || []).length) ? `
+  const letters = ((p.exchanges || []).some(e => e.tx || p.tx)) ? `
     <h2>3. 取引所へ送る文面</h2>
     <p class="note">いまご記入の段階に合わせた文面です。段階を変えて保存し直すと、文面も変わります。</p>
     ${p.exchanges.map(e => `
       <div class="ex">
         <h3>No.${escHtml(String(e.no ?? '-'))}　${escHtml(e.name)} 宛</h3>
+        <div class="addr">対象のTXID：${escHtml(((e.tx || p.tx || {}).txid) || '不明')}</div>
         <textarea rows="15" readonly onclick="this.select()">${escHtml(
-          freezeLetterText(e, p.tx, p.customerName, '', p.police))}</textarea>
+          freezeLetterText(e, e.tx || p.tx, p.customerName, '', p.police))}</textarea>
         <div class="note" style="margin-top:6px">枠内をタップすると全体を選択できます。</div>
       </div>`).join('')}` : '';
   const opt = (list, cur) => list.map(x =>
@@ -10011,6 +10012,24 @@ function progressUrlFor(id) { return `${BASE_URL}/progress/${id}`; }
 
 /* 報告書から進捗の記録を作る（無ければ作り、あれば返す）。
    ★取引所の行は報告書の到達先で埋めておく。お客様に一から入力させない。 */
+/* ★取引所は「どのTXIDから見つかったか」と必ず組で持つ。
+   まとめ買いの方は5件10件とTXIDがあり、平らにすると
+   4件目で見つけた取引所に1件目のTXIDを書いた要請文が出る。
+   ★TXIDが違えば取引所は該当の入金を見つけられない（第5-K節と同じ間違い）。 */
+function exchangesWithTx(results) {
+  const out = [];
+  for (const item of (results || [])) {
+    const r = item && item.result;
+    if (!r) continue;
+    const tx = {
+      txid: r.txid || item.txid || '', chain: r.chain || '', blockTime: r.blockTime || '',
+      amount: r.amount ?? null, tokenSymbol: r.tokenSymbol || '', tokenAmount: r.tokenAmount ?? null,
+    };
+    for (const e of (r.exchanges || [])) if (e && e.address) out.push({ e, tx });
+  }
+  return out;
+}
+
 function ensureProgress(reportId, customerName, exchanges, results) {
   let id = [...progressRecs.entries()].find(([, p]) => p.reportId === reportId)?.[0];
   if (!id) {
@@ -10027,10 +10046,11 @@ function ensureProgress(reportId, customerName, exchanges, results) {
         amount: r0.amount ?? null, tokenSymbol: r0.tokenSymbol || '', tokenAmount: r0.tokenAmount ?? null,
       } : null,
       police: { stage: 'none', station: '', date: '', refNo: '' },
-      exchanges: (exchanges || []).map(e => ({
+      exchanges: exchangesWithTx(results).map(({ e, tx }) => ({
         no: e.foundNo ?? null, name: e.name || '取引所', address: e.address || '',
         chain: e.chain || '', token: e.token || '', amount: e.amount ?? null,
         destTag: e.destTag ?? null,
+        tx,                                   // ★この取引所を見つけたTXID
         state: 'none', reportedAt: '', docSentAt: '', memo: '',
       })),
       createdAt: Date.now(), updatedAt: Date.now(),
