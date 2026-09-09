@@ -1451,8 +1451,47 @@ function labelQuotaOk(paid = false, device = null) {
   if (!deviceQuotaOk(device)) return false;
   return true;
 }
+/* ★残りが少なくなったら運用者に知らせる。
+   MistTrack の OpenAPI に残数を返す口は無く（実測：quota/usage/credits いずれも404）、
+   購入総数は手で入れるしかない。★入れ忘れると静かに劣化する。
+   実際に起きたこと（2026-09-09）：300回に買い増したのに当社は100のままで、
+   91回使用済み＝あと9回。しかも有料確保30回のため無料調査はとっくに止まっていた。
+   利用者からは「取引所名が出ない」としか見えず、こちらは気づけなかった。
+   ★ログは誰も見ていない。減ったらメールで知らせる。 */
+const QUOTA_ALERT_AT = (process.env.QUOTA_ALERT_AT || '60,30,10')
+  .split(',').map(n => Number(n.trim())).filter(n => n > 0).sort((a, b) => b - a);
+function quotaAlertCheck() {
+  if (!MISTTRACK_KEY || !SMTP_USER) return;
+  const left = MISTTRACK_TOTAL_CAP - labelUsage.total;
+  /* ★送った印は使用記録と一緒に永続化する。メモリだけだと再デプロイのたびに
+     同じ通知が飛ぶ。デプロイは1日に何度も走る。 */
+  const sent = labelUsage.alerted || (labelUsage.alerted = []);
+  /* ★買い増して残りが戻ったら、その印は消す。消さないと次に減ったとき通知が出ない。 */
+  for (let i = sent.length - 1; i >= 0; i--) if (left > sent[i]) sent.splice(i, 1);
+  for (const mark of QUOTA_ALERT_AT) {
+    if (left > mark || sent.includes(mark)) continue;
+    sent.push(mark);
+    saveLabelUsage();
+    const freeLeft = left - MISTTRACK_PAID_RESERVE;
+    sendEmail(SMTP_USER, `【BitTo】MistTrack の残りが ${left} 回です`,
+      `<p>取引所名の照会に使える回数が残り <strong>${left} 回</strong>になりました。</p>`
+      + `<ul><li>購入総数（Railway の MISTTRACK_TOTAL_CAP）：${MISTTRACK_TOTAL_CAP}</li>`
+      + `<li>これまでの照会：${labelUsage.total}</li>`
+      + `<li>有料用に確保：${MISTTRACK_PAID_RESERVE}</li>`
+      + `<li>無料調査に使える残り：${freeLeft > 0 ? freeLeft + ' 回' : '<strong>0回（停止中）</strong>'}</li></ul>`
+      + `<p>買い増した場合は、MistTrack の画面の <strong>Total Calls</strong> の数字を`
+      + ` Railway の <code>MISTTRACK_TOTAL_CAP</code> にそのまま入れてください。`
+      + `（例：Total Calls が 400 なら 400）</p>`
+      + `<p>入れ忘れると、無料調査で取引所名が出なくなります。</p>`, 'bitto')
+      .catch(e => console.error('[Quota] 通知の送信に失敗:', e.message));
+    console.warn(`[Quota] ★残り${left}回。運用者へ通知しました`);
+    break;
+  }
+}
+
 function labelQuotaUse(device) {
   labelUsage.count++; labelUsage.monthCount++; labelUsage.total++;
+  quotaAlertCheck();
   if (device) {
     const u = deviceUsageOf(device);
     u.count++; u.monthCount++;
@@ -11204,6 +11243,7 @@ app.listen(PORT, () => {
   if (MISTTRACK_KEY) {
     const left = MISTTRACK_TOTAL_CAP - labelUsage.total;
     console.log(`   ├ 購入総数 ${MISTTRACK_TOTAL_CAP} 回 ／ これまで ${labelUsage.total} 回 ／ 残り ${left} 回`);
+    console.log('   │   ※ 買い増したら MistTrack の Total Calls をそのまま MISTTRACK_TOTAL_CAP に入れる（足し算は不要）');
     console.log(`   ├ 有料用に確保 ${MISTTRACK_PAID_RESERVE} 回（無料は残り${left - MISTTRACK_PAID_RESERVE}回で停止）`);
     console.log(`   ├ 全体 1日 ${MISTTRACK_DAILY_CAP} 回 ／ 1か月 ${MISTTRACK_MONTH_CAP} 回`);
     console.log(`   ├ 1人 1日 ${MISTTRACK_USER_DAILY} 回 ／ 1か月 ${MISTTRACK_USER_MONTH} 回`);
