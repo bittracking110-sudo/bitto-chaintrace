@@ -5730,6 +5730,7 @@ function mergeFindings(txid, result, paid) {
 function finalizeResult(txid, result, paid) {
   collectExchanges(result);
   markFundsStaying(result);        // ★最終地点に資金が残っているか
+  markFundsMoved(result);          // ★出ているなら、どこへ行ったかまで言う
   mergeFindings(txid, result, paid);
   attachNotes(result, paid);
   return result;
@@ -5897,6 +5898,35 @@ const STILL_MOVING_DAYS = 7;
 
    残高は経路の情報付けですでに取得済み。新たな通信は要らない。 */
 const STAY_MIN_USD = Number(process.env.STAY_MIN_USD ?? 100);
+/* ★資金がその地点から出ているなら、【どこへ行ったか】とセットで言う。
+   「先へ移動しています」だけで止めると、行き先が分かっているのに
+   事実の半分しか伝えていないことになる（利用者の指摘・2026-09-10）。
+
+   ★画面には到着額が大きく出る（例：249,800 USDT）。残高を言わないと、
+   まだそこに在ると読まれる。実際の残高は 0.0006ドルだった。 */
+const MOVED_MAX_USD = Number(process.env.MOVED_MAX_USD ?? 100);
+function markFundsMoved(result) {
+  const path = result && result.path;
+  if (!Array.isArray(path) || path.length < 2) return;
+  const last = path[path.length - 1];
+  if (!last || last.isExchange) return;
+  /* 到着額が分かっていて、いまの残高がほぼ0のときだけ。 */
+  const arrived = Number(last.amount);
+  if (!Number.isFinite(arrived) || !(arrived > 0)) return;
+  const usd = Number(last.balanceUSD);
+  const bal = Number(last.balance);
+  const empty = Number.isFinite(usd) ? usd < MOVED_MAX_USD
+              : (Number.isFinite(bal) && bal < 0.001);
+  if (!empty) return;
+  const sibs = (last.siblings || []).filter(x => x && x.address);
+  result.fundsMoved = {
+    address: last.address,
+    arrived, token: last.token || nativeUnit(result.chain),
+    dests: sibs.length,
+    tracing: sibs.filter(x => !x.searched && !(x.reached || []).length).length,
+  };
+}
+
 function markFundsStaying(result) {
   const path = result && result.path;
   if (!Array.isArray(path) || path.length < 2) return;
@@ -6842,6 +6872,35 @@ function resultNotes(result, paid) {
   if (result.stillMoving) {
     out.push(note('moving', 'warn', 'まだ資金が動いている最中かもしれません',
       stillMovingText(result.stillMoving)));
+  }
+
+  /* ★資金がその地点から出ているなら、行き先とセットで言う。
+     画面には到着額が大きく出るため（例：249,800 USDT）、残高を言わないと
+     まだそこに在ると読まれる。実測では残高0.0006ドルだった。
+
+     ★有料の案内は、ここでは【取引所がまだ1件も出ていないとき】だけにする。
+     取引所が出ているなら、お客様が見るべきはその一覧であって売り文句ではない。
+     しかも無料でも調べ直せば続きが出る。★先に無料の道を書く。
+     困っていない人にまで売り込むのは、電話営業の会社と同じことになる。 */
+  if (result.fundsMoved) {
+    const m = result.fundsMoved;
+    const amt = `${Number(m.arrived).toLocaleString()} ${m.token || ''}`.trim();
+    const hasEx = (result.exchanges || []).length > 0;
+    const where = m.dests > 0
+      ? `資金は${m.dests}件の送金先へ移動しており、その先も追跡しています。`
+      : '資金はこの先へ移動しています。';
+    out.push(note('moved', 'info', 'この地点に資金は残っていません',
+      `${amt} が届きましたが、すでに送り出されています（現在の残高はほぼ0です）。`
+      + where
+      + `
+該当のアドレス：${m.address}`,
+      hasEx
+        ? '★この先で到達した取引所は、下の「到達した取引所の一覧」に記載しています。'
+        : (m.tracing > 0
+            ? '追いきれていない枝があります。しばらくしてから同じTXIDを調べ直すと、'
+              + '続きの結果が出ます（無料のままで構いません）。'
+              + '有料調査では、時間切れで追いきれなかった枝も報告書にすべて記載します。'
+            : undefined)));
   }
 
   /* ★資金がまだ最終地点に残っているなら、それを伝える。
