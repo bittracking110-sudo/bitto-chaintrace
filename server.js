@@ -5729,6 +5729,7 @@ function mergeFindings(txid, result, paid) {
      説明文が台帳を反映しないまま返る。1つにまとめる。 */
 function finalizeResult(txid, result, paid) {
   collectExchanges(result);
+  markFundsStaying(result);        // ★最終地点に資金が残っているか
   mergeFindings(txid, result, paid);
   attachNotes(result, paid);
   return result;
@@ -5883,6 +5884,35 @@ async function investigate(txid, chain, opts = {}) {
 /* 詐欺資金が取引所に届くまでの日数の目安。これを過ぎても出ない場合は
    「移動中」ではなく、追跡の限界（ブリッジ等）を疑う。 */
 const STILL_MOVING_DAYS = 7;
+
+/* ★最終地点にまだ資金が残っているか。
+   「取引所が見つかりません」と「資金はまだそのアドレスに残っています」は、
+   被害者にとってまったく別の情報。前者は行き止まり、後者は★まだ手が届く。
+   残っているなら、警察経由で押さえられる可能性がある。
+
+   実測（2026-09-10・利用者のテスト）：最終地点は取引100回で打ち切り基準
+   （10,000回）のはるか下、段数も5段で上限10段の半分。つまり追跡は止まって
+   おらず、単に「その先に名前のある取引所がまだ現れていない」だけだった。
+   ★この状態を「見つかりません」としか出さないのは、事実を伝えきれていない。
+
+   残高は経路の情報付けですでに取得済み。新たな通信は要らない。 */
+const STAY_MIN_USD = Number(process.env.STAY_MIN_USD ?? 100);
+function markFundsStaying(result) {
+  const path = result && result.path;
+  if (!Array.isArray(path) || path.length < 2) return;
+  const last = path[path.length - 1];
+  if (!last || last.isExchange) return;                 // 取引所に着いていれば別の話
+  const bal = Number(last.balance);
+  if (!Number.isFinite(bal) || !(bal > 0)) return;
+  const usd = Number(last.balanceUSD);
+  /* ★ガス代の残りかすを「残っています」と言わない。
+     期待させて空振りさせるのは、黙っているより悪い。 */
+  if (Number.isFinite(usd) && usd < STAY_MIN_USD) return;
+  if (!Number.isFinite(usd) && bal < 0.001) return;     // 額が出ないときの最低限
+  result.fundsStaying = { address: last.address, balance: bal, balanceUSD: Number.isFinite(usd) ? usd : null,
+                          token: last.token || nativeUnit(result.chain), txCount: last.txCount ?? null };
+  console.log(`[滞留] 最終地点に残高あり: ${String(last.address).slice(0,12)}… ${bal}`);
+}
 
 function stillMovingText(sm) {
   if (!sm) return '';
@@ -6814,6 +6844,25 @@ function resultNotes(result, paid) {
       stillMovingText(result.stillMoving)));
   }
 
+  /* ★資金がまだ最終地点に残っているなら、それを伝える。
+     「取引所が見つかりません」だけだと、被害者は行き止まりだと受け取る。
+     実際には★まだそこに在り、警察経由で押さえられる可能性がある。
+     取引所に着いていれば別の話なので、着いていないときだけ出す。 */
+  if (result.fundsStaying) {
+    const f = result.fundsStaying;
+    const amt = `${Number(f.balance) < 0.0001 ? Number(f.balance).toFixed(8) : Number(f.balance).toFixed(4)} ${f.token || ''}`.trim();
+    const usd = f.balanceUSD != null ? `（およそ ${Math.round(f.balanceUSD).toLocaleString()} 米ドル相当）` : '';
+    out.push(note('staying', 'good', '追跡した資金は、まだ最終地点に残っています',
+      `最後に到達したアドレスに、いまも ${amt}${usd} が残っています。`
+      + '取引所へは届いておらず、現金化もされていない状態です。'
+      + `
+残っているアドレス：${f.address}`,
+      '★これは行き止まりではありません。資金がまだ動いていないうちは、'
+      + '警察から取引所や関係先への照会が届く余地があります。'
+      + '警察へご相談の際は、このアドレスと残高を必ずお伝えください。'
+      + '資金が動くと状況が変わるため、お早めの相談をお勧めします。'));
+  }
+
   /* ★そっくりなアドレスからの着金＝アドレス汚染。
      追跡の精度の話ではなく、被害者が【次に送金するとき】に騙される話なので、
      取引所が出ていても、枠が余っていても、見つけたら必ず出す。
@@ -7250,6 +7299,24 @@ function policeSummaryHTML(results, issuedAt) {
 
     <h3 class="doc-h3">3. 資金の到達先</h3>
     ${exBlock}
+
+    ${(() => {
+      /* ★資金がまだ残っているなら、サマリーの目立つ位置に出す。
+         警察にとって「まだ動いていない資金がある」は、動く理由そのもの。
+         着金先が判明していない案件ほど、この一行の価値が高い。 */
+      const f = rs.map(r => r.fundsStaying).find(Boolean);
+      if (!f) return '';
+      const amt = `${Number(f.balance) < 0.0001 ? Number(f.balance).toFixed(8) : Number(f.balance).toFixed(4)} ${escHtml(f.token || '')}`.trim();
+      const usd = f.balanceUSD != null ? `（およそ ${Math.round(f.balanceUSD).toLocaleString()} 米ドル相当）` : '';
+      return `<div style="margin:14px 0;padding:12px 14px;border:2px solid var(--r-eborder);background:var(--r-ebg);border-radius:6px">
+        <strong>★追跡した資金は、現時点でも下記のアドレスに残っています</strong><br>
+        <span class="mono">${escHtml(f.address)}</span><br>
+        残高：<strong>${amt}</strong>${usd}
+        ${f.txCount != null ? `／このアドレスの取引回数：${escHtml(String(f.txCount))}回` : ''}<br>
+        <span class="sm">取引所へは届いておらず、現金化もされていない状態です。
+        資金が動く前であれば、照会・保全の効果が見込めます。</span>
+      </div>`;
+    })()}
 
     <h3 class="doc-h3">4. お願いしたいこと</h3>
     <ol class="doc-ol">
