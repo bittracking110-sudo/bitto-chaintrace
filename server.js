@@ -2545,6 +2545,41 @@ const BRIDGE_METHODS = {
    実測：この案件はTRON側1段で止まったが、原因は資金の終点ではなく
    TronGridの 429（回数制限）だった。事実と違う結論を静かに出していた。 */
 let tronDenied = 0;
+/* ══ アドレス汚染（address poisoning）の検出 ═══════════════════
+   ★詐欺師は、被害者が使っている本物のアドレスと【先頭と末尾がそっくり】な
+   アドレスを作り、そこから極小額を送りつける。被害者の履歴に偽物が並び、
+   後で履歴からコピーして送金すると、詐欺師の手に渡る。
+
+   実測（2026-09-10・利用者のテスト TXID 0x051455a6…）：
+     本物 0x14fa17d455c08e20d35c666b5afaa9bbec664e11
+     偽物 0x14fa1fa266b27aee72…  0.000001 ETH（★先頭5桁・末尾4桁が一致）
+
+   ★金額では見分けられない。少額でも本物の送金はある。
+   見分けるのは【アドレスのそっくり具合】。先頭4桁と末尾4桁が偶然そろう確率は
+   16の8乗分の1＝約43億分の1で、まず起こらない。
+
+   ★これは追跡の精度の話ではなく、被害者を二次被害から守る話。
+   偽アドレスをコピーして送金する事故は実際に多い。 */
+function looksAlikeAddr(a, b) {
+  const x = String(a || '').toLowerCase().replace(/^0x/, '');
+  const y = String(b || '').toLowerCase().replace(/^0x/, '');
+  if (!x || !y || x === y || x.length !== y.length) return false;
+  let head = 0; while (head < x.length && x[head] === y[head]) head++;
+  let tail = 0; while (tail < x.length && x[x.length - 1 - tail] === y[y.length - 1 - tail]) tail++;
+  return head >= 4 && tail >= 4;
+}
+
+let poisonHits = [];          // { real, fake, amount, token }
+function poisonReset() { poisonHits = []; }
+function poisonNote(real, fake, amount, token) {
+  const f = String(fake || '').toLowerCase();
+  if (!f || poisonHits.some(h => h.fake === f)) return;
+  if (poisonHits.length >= 8) return;                 // 入れっぱなしにしない
+  poisonHits.push({ real: String(real || '').toLowerCase(), fake: f, amount, token: token || '' });
+  console.warn(`[汚染] そっくりなアドレスから着金: ${f} ← 本物 ${real}`);
+}
+function poisonList() { return poisonHits.slice(); }
+
 function tronDeniedReset() { tronDenied = 0; }
 function tronDeniedCount() { return tronDenied; }
 
@@ -2725,7 +2760,14 @@ async function nextCandidatesAny(addr, time, amountIn, chain) {
   const one = c => ({ address: c.addr || c.address, amount: c.amount, time: c.time,
                       label: c.label || '', token: c.token, txHash: c.txHash,
                       isExchange: !!c.isExchange });
-  return [one(nx), ...(nx._siblings || []).map(one)].filter(c => c.address);
+  /* ★額が0と分かっている宛先は、どのチェーンでも候補にしない。
+     0の送金は資金の移動ではなく、多くはアドレス汚染（偽アドレスを履歴に
+     紛れ込ませ、後で本物と間違えてコピーさせる手口）の0円送金。
+     ★汚染先を経路に載せると、被害者は無関係の相手へ凍結要請を送る。
+     額が分からない（null）ものは残す。分からないことと0であることは違う。 */
+  return [one(nx), ...(nx._siblings || []).map(one)]
+    .filter(c => c.address)
+    .filter(c => !(Number.isFinite(c.amount) && c.amount === 0));
 }
 
 function isNamedExchange(label, isEx) {
@@ -4253,6 +4295,13 @@ async function getNextTxETH(addr, afterTime, amountIn, chain = 'eth') {
     for (const tx of txs) {
       const txMs = parseInt(tx.timeStamp) * 1000;
       if (txMs < refMs) continue;
+      /* ★同じ応答に「入ってきた分」も入っている。追加の通信をせずに
+         そっくりなアドレスからの着金＝汚染を見つけられる。
+         ここで拾わないと、汚染に気づく機会がどこにも無い。 */
+      if (String(tx.to || '').toLowerCase() === addr.toLowerCase()
+          && looksAlikeAddr(addr, tx.from)) {
+        poisonNote(addr, tx.from, Number(tx.value) / 1e18, nativeUnit(chain));
+      }
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
       if (tx.isError === '1') continue;
       if (!tx.to) continue;
@@ -4321,6 +4370,11 @@ async function getNextTxETH(addr, afterTime, amountIn, chain = 'eth') {
       const txMs = parseInt(tx.timeStamp) * 1000;
       if (txMs < refMs) continue; // 昇順に変えたため、入金より前は読み飛ばす
       if (tx.from.toLowerCase() !== addr.toLowerCase()) continue;
+      if (String(tx.to || '').toLowerCase() === addr.toLowerCase()
+          && looksAlikeAddr(addr, tx.from)) {
+        poisonNote(addr, tx.from, Number(tx.value) / Math.pow(10, parseInt(tx.tokenDecimal) || 18),
+                   tx.tokenSymbol || '');
+      }
       /* 記号を騙るトークンは追わない。実データで「ETH」を名乗る別トークンを
          掴み、無関係の経路を追っていた（第4-R節）。 */
       if (isImpostorToken(tx.tokenSymbol, tx.contractAddress, chain)) {
@@ -4333,6 +4387,15 @@ async function getNextTxETH(addr, afterTime, amountIn, chain = 'eth') {
       const isVia = isViaService(lbl);
       const isEx = !isTok && !isVia && (db.type === 'exchange' || isExchange(lbl));
       const dec  = parseInt(tx.tokenDecimal) || 18;
+      /* ★額が0のトークン送金は追わない。これは資金の移動ではなく、
+         多くは【アドレス汚染】——詐欺師が被害者の履歴に偽アドレスを紛れ込ませ、
+         後で本物と間違えてコピーさせる手口——の0円送金である。
+         実測（2026-09-10・利用者のテスト）：TXID 0x051455a6… の追跡が
+         0xe5a6…fff5 に達していたが、この地点は受取0件・送出0件で、
+         受け取っていたのは 0.000000 DAI と 0.000000 USDT だけだった。
+         ★汚染アドレスを報告書に載せると、被害者は無関係の相手へ凍結要請を送る。
+         さらに、その地点の名前を引くために代金も払っていた。 */
+      if (!(parseFloat(tx.value) > 0)) continue;
       tokenCandidates.push({ addr: tx.to, amount: parseFloat(tx.value)/Math.pow(10,dec), time: new Date(txMs).toISOString(), txHash: tx.hash, label: lbl, isExchange: isEx, token: tx.tokenSymbol, txMs });
     }
     if (tokenCandidates.length > 0) {
@@ -4866,6 +4929,8 @@ async function getNextTokenTxETH(addr, afterTime, contract, decimals = 18, amoun
       const lbl = db.label || '';
       const isTok = db.type === 'token' || isTokenContract(lbl);
       const isVia = isViaService(lbl);
+      /* ★額が0のトークン送金は追わない（アドレス汚染。上の説明と同じ理由）。 */
+      if (!(parseFloat(t.value) > 0)) continue;
       candidates.push({
         addr: t.to, amount: parseFloat(t.value) / Math.pow(10, decimals),
         time: new Date(txMs).toISOString(), txHash: t.hash, label: lbl,
@@ -5662,6 +5727,7 @@ async function investigate(txid, chain, opts = {}) {
      残り時間から後段の予算を削って、必ず内側で終える。 */
   const hardDeadline = Date.now() + investigateSoftMs(opts.paid);
   tronDeniedReset();                 // ★この調査でTRONに断られた回数を数え直す
+  poisonReset();                     // ★この調査で見つけた汚染も数え直す
   const ph = mkPhases(txid);
   let result;
   if (chain === 'btc') {
@@ -5744,6 +5810,9 @@ async function investigate(txid, chain, opts = {}) {
   result.tronDenied = tronDeniedCount();   // ★断られた回数を説明に載せるため
   /* ★枠切れをこの結果に移す。無いと「取引所が見つからなかった」と読まれる。 */
   if (opts.quotaBlocked) result.quotaBlocked = true;
+  /* ★汚染はこの調査で見つけた分をそのまま持たせる。追跡の精度の話ではなく、
+     被害者を二次被害から守る話なので、取引所が出ていても必ず伝える。 */
+  { const pz = poisonList(); if (pz.length) result.poison = pz; }
   finalizeResult(txid, result, !!opts.paid);
 
   /* ★締切に間に合わなかった枝は、返したあとに追い続ける。
@@ -6700,6 +6769,26 @@ function resultNotes(result, paid) {
   if (result.stillMoving) {
     out.push(note('moving', 'warn', 'まだ資金が動いている最中かもしれません',
       stillMovingText(result.stillMoving)));
+  }
+
+  /* ★そっくりなアドレスからの着金＝アドレス汚染。
+     追跡の精度の話ではなく、被害者が【次に送金するとき】に騙される話なので、
+     取引所が出ていても、枠が余っていても、見つけたら必ず出す。
+     実測（2026-09-10・利用者のテスト）：
+       本物 0x14fa17d455…bbec664e11
+       偽物 0x14fa1fa266…bfb34e11  0.000001 ETH（先頭5桁・末尾4桁が一致）
+     ★履歴からアドレスをコピーすると、この偽物を掴む。 */
+  if ((result.poison || []).length) {
+    const p0 = result.poison[0];
+    out.push(note('poison', 'warn', 'そっくりな偽アドレスが履歴に紛れています',
+      `本物とよく似たアドレスから、ごく少額の送金が届いています（${result.poison.length}件）。`
+      + 'これは「アドレス汚染」と呼ばれる手口で、履歴に偽アドレスを並べておき、'
+      + '次の送金のときにコピーさせて資金を奪うことを狙ったものです。'
+      + `
+本物：${p0.real}
+偽物：${p0.fake}`,
+      '★送金先をコピーするときは、先頭と末尾だけでなく【全部の桁】を確認してください。'
+      + '履歴からのコピーは特に危険です。今回の追跡では、この偽アドレスは資金の流れとして扱っていません。'));
   }
 
   /* ★枠を使い切ったときは、そう書く。黙っていると
