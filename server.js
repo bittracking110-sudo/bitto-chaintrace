@@ -2569,6 +2569,39 @@ function looksAlikeAddr(a, b) {
   return head >= 4 && tail >= 4;
 }
 
+/* ★汚染は【入金より前】に来ていることが多い。
+   実測（利用者のテスト）：入金は 2026-04-16（block 24890263）、
+   汚染の送金は 2026-04-09（block 24839978）で、★1週間前だった。
+   追跡は入金以降しか読まないので、その走査だけでは絶対に拾えない。
+   ★そもそも汚染は「先に履歴へ紛れ込ませておく」手口なので、前にあるのが自然。
+
+   そこで、資金が最初に着いた地点だけ、履歴をさかのぼって1回だけ確認する。
+   ここは被害者が次の送金でコピーする可能性が最も高い場所。
+   Etherscan は無料なので、1回の追加で済むならやる価値がある。 */
+async function poisonScanAddress(addr, chain) {
+  if (!isEVM(chain) || !ETHERSCAN_KEY || !addr) return;
+  try {
+    const j = await apiJson(esUrl(chain,
+      `module=account&action=txlist&address=${addr}&page=1&offset=200&sort=desc`));
+    const rows = Array.isArray(j.result) ? j.result : [];
+    const lo = String(addr).toLowerCase();
+    for (const t of rows) {
+      if (String(t.to || '').toLowerCase() !== lo) continue;      // 入ってきた分だけ
+      if (!looksAlikeAddr(addr, t.from)) continue;
+      poisonNote(addr, t.from, Number(t.value) / 1e18, nativeUnit(chain));
+    }
+    /* トークンでの汚染（0円のUSDT等）も同じ手口。 */
+    const k = await apiJson(esUrl(chain,
+      `module=account&action=tokentx&address=${addr}&page=1&offset=200&sort=desc`));
+    for (const t of (Array.isArray(k.result) ? k.result : [])) {
+      if (String(t.to || '').toLowerCase() !== lo) continue;
+      if (!looksAlikeAddr(addr, t.from)) continue;
+      poisonNote(addr, t.from, Number(t.value) / Math.pow(10, parseInt(t.tokenDecimal) || 18),
+                 t.tokenSymbol || '');
+    }
+  } catch (e) { console.error('[汚染] 確認に失敗:', e.message); }
+}
+
 let poisonHits = [];          // { real, fake, amount, token }
 function poisonReset() { poisonHits = []; }
 function poisonNote(real, fake, amount, token) {
@@ -5810,6 +5843,16 @@ async function investigate(txid, chain, opts = {}) {
   result.tronDenied = tronDeniedCount();   // ★断られた回数を説明に載せるため
   /* ★枠切れをこの結果に移す。無いと「取引所が見つからなかった」と読まれる。 */
   if (opts.quotaBlocked) result.quotaBlocked = true;
+  /* ★資金が最初に着いた地点をさかのぼって確認する。
+     汚染は入金より前に仕込まれるため、追跡の走査（入金以降）では拾えない。
+     ★1地点だけ。ここが被害者の履歴に残り、次の送金でコピーされる場所。 */
+  try {
+    const first = (result.path || [])[1];
+    if (first && first.address && budgetLeft(opts, 6000) > 3000) {
+      await poisonScanAddress(first.address, result.chainKey || chain);
+    }
+  } catch (e) { console.error('[汚染] 確認をとばしました:', e.message); }
+
   /* ★汚染はこの調査で見つけた分をそのまま持たせる。追跡の精度の話ではなく、
      被害者を二次被害から守る話なので、取引所が出ていても必ず伝える。 */
   { const pz = poisonList(); if (pz.length) result.poison = pz; }
