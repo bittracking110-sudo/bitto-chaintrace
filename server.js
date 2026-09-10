@@ -8916,6 +8916,51 @@ app.get('/api/admin/label-lookup', requireAdmin, async (req, res) => {
    ここに後から出てくる。 */
 /* ★到達先の名前を、確認したその場で登録する画面。
    デプロイも再起動も要らない。次の調査から名前が出る。 */
+/* ★照会して得た名前の持ち出し口。
+   labelCache は MistTrack に代金を払って得た知識そのもので、
+   1件ぶんの価値がある（無料枠が尽きればこれが唯一の情報源になる）。
+   ところが置き場は永続ディスクだけで、★ボリュームを作り直すと消える。
+   自前DB(manualLabels)には git へ写す口があるのに、こちらには無かった
+   （点検で発覚・2026-09-10）。★お金で買ったものほど守るべき。
+
+   名前なし（''）も持ち出す。これが「引いたが名前は無かった」の記録で、
+   二度払わないための情報。取引所の入金アドレスはほとんどが名前なしなので、
+   ここが失われると同じアドレスにまた代金を払うことになる。 */
+app.get('/api/admin/label-cache.json', requireAdmin, (req, res) => {
+  const all = Object.fromEntries(labelCache);
+  const named = Object.values(all).filter(v => (typeof v === 'string' ? v : (v && v.name)) ).length;
+  res.setHeader('Content-Disposition', 'attachment; filename="label-cache.json"');
+  res.type('application/json').send(JSON.stringify({
+    _meta: {
+      writtenAt: new Date().toISOString(),
+      total: labelCache.size,
+      named,
+      unnamed: labelCache.size - named,
+      note: '照会済みの名前。空文字は「引いたが名前は無かった」＝二度払わないための記録',
+    },
+    labels: all,
+  }, null, 2));
+});
+
+/* ★書き出しただけでは戻せない。読み込む口も要る。
+   ボリュームを作り直したあと、ここへ貼れば買い直さずに済む。
+   ★上書きしない。いま持っている名前のほうが新しいので、無い分だけ足す。 */
+app.post('/api/admin/label-cache/restore', requireAdmin, express.json({ limit: '8mb' }), (req, res) => {
+  const src = (req.body && (req.body.labels || req.body)) || {};
+  if (typeof src !== 'object') return res.status(400).json({ error: '形式が違います' });
+  let added = 0, skipped = 0;
+  for (const [addr, v] of Object.entries(src)) {
+    if (addr === '_meta') continue;
+    const lo = String(addr).toLowerCase();
+    if (labelCache.has(lo)) { skipped++; continue; }   // ★今あるものを壊さない
+    labelCache.set(lo, v);
+    added++;
+  }
+  if (added) saveLabelCache();
+  console.log(`[LabelCache] 復元: 追加${added}件 / 既存${skipped}件 / 合計${labelCache.size}件`);
+  res.json({ ok: true, added, skipped, total: labelCache.size });
+});
+
 app.get('/api/admin/labels', requireAdmin, (req, res) => {
   const t = String(req.query.t || '');
   const esc = x => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -8951,6 +8996,34 @@ ${msg}${err}
 </form>
 <p>対応：0x…（Ethereum系）／T…（TRON）／r…（XRP）／bc1・1・3…（Bitcoin）<br>
 登録した瞬間から有効です。デプロイも再起動も要りません。</p>
+
+<h2>照会済みの名前（代金を払って得た分）</h2>
+<p>MistTrack に照会して得た名前です。<b>置き場は永続ディスクだけで、ボリュームを作り直すと消えます。</b><br>
+消えると同じアドレスにまた代金がかかるので、ときどき保存しておいてください。<br>
+※「名前なし」も含めて出します。これが「引いたが名前は無かった」の記録で、二度払わないために要ります。</p>
+<p>
+  <a href="/api/admin/label-cache.json?t=${esc(t)}"><button type="button">保存する（JSONで書き出し）</button></a>
+  <span style="margin-left:10px">いま ${labelCache.size} 件</span>
+</p>
+<p>戻すときは、書き出したファイルの中身をそのまま貼って読み込んでください。<br>
+<b>いまある名前は上書きしません。</b>足りない分だけ足します。</p>
+<textarea id="restore" placeholder='{"labels": { ... }} または {"0x…": "Binance", …}'></textarea>
+<p><button type="button" onclick="doRestore()">読み込む</button> <span id="rmsg"></span></p>
+<script>
+async function doRestore(){
+  const el=document.getElementById('restore'), msg=document.getElementById('rmsg');
+  let body; try{ body=JSON.parse(el.value); }catch{ msg.textContent='JSONとして読めません'; return; }
+  msg.textContent='読み込んでいます…';
+  try{
+    const r=await fetch('/api/admin/label-cache/restore?t=' + encodeURIComponent(${JSON.stringify(t)}),
+      {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),
+       signal:AbortSignal.timeout(30000)});
+    const j=await r.json();
+    msg.textContent = r.ok ? ('追加'+j.added+'件 ／ 既にあった'+j.skipped+'件 ／ 合計'+j.total+'件')
+                           : ('失敗：'+(j.error||r.status));
+  }catch(e){ msg.textContent='失敗しました。通信を確認してください'; }
+}
+</script>
 
 <h2>登録済み ${rows.length}件</h2>
 ${rows.length ? `<table><tr><th>アドレス</th><th>名前</th><th>登録日時</th><th></th></tr>
@@ -11271,7 +11344,13 @@ app.listen(PORT, () => {
     console.log(`   ├ 有料用に確保 ${MISTTRACK_PAID_RESERVE} 回（無料は残り${left - MISTTRACK_PAID_RESERVE}回で停止）`);
     console.log(`   ├ 全体 1日 ${MISTTRACK_DAILY_CAP} 回 ／ 1か月 ${MISTTRACK_MONTH_CAP} 回`);
     console.log(`   ├ 1人 1日 ${MISTTRACK_USER_DAILY} 回 ／ 1か月 ${MISTTRACK_USER_MONTH} 回`);
-    console.log(`   └ 1件あたり 無料 ${MISTTRACK_FREE_LOOKUPS} 回 ／ 有料 ${MISTTRACK_PAID_LOOKUPS} 回`);
+    console.log(`   ├ 1件あたり 無料 ${MISTTRACK_FREE_LOOKUPS} 回 ／ 有料 ${MISTTRACK_PAID_LOOKUPS} 回`);
+    /* ★照会済みの名前は代金を払って得た知識。ここが減っていたら
+       ボリュームが作り直された疑いがある（＝買い直しになる）。 */
+    {
+      const named = [...labelCache.values()].filter(v => (typeof v === 'string' ? v : (v && v.name))).length;
+      console.log(`   └ 照会済みの名前 ${labelCache.size} 件（名前あり ${named} ／ 名前なし ${labelCache.size - named}）`);
+    }
     /* ★1人あたりの上限より全体が小さいと、2人目が0回になる（第5-I節で一度やった）。 */
     if (MISTTRACK_MONTH_CAP < MISTTRACK_USER_MONTH * 2)
       console.warn(`   ⚠ 全体の月上限(${MISTTRACK_MONTH_CAP})が1人分(${MISTTRACK_USER_MONTH})の2倍未満です。2人目がほぼ使えません`);
