@@ -1510,6 +1510,52 @@ function quotaAlertCheck() {
    これが無いと「取引所が見つからなかった」と区別が付かない。
    被害者は資金が消えたと受け取るが、実際は当社が引けなかっただけ。
    ★実際にこの状態で運用していた（2026-09-09 の点検で発覚）。 */
+/* ★控えを自動で送る。
+   これまでは管理画面から手で書き出して git に置く運用だったが、
+   ★人がやる手順は必ず抜ける。抜けた頃にボリュームが作り直されると買い直しになる。
+
+   置き場をサーバーから増やす方法は他にもあるが：
+   ・GitHubへ直接コミット → サーバーにリポジトリの書き込み権限を持たせることになる。
+     サーバーが破られたときの被害が広がるので採らない。
+   ・別のクラウドに保存   → 新しい鍵と設定が増える。
+   ★メールなら、いまある設定だけで済み、新しい権限も鍵も要らない。
+   受け取ったファイルをそのまま backup/ に置けば、これまでどおり git に残せる。
+
+   ★増えたときだけ送る。変わっていないのに毎日届くと、人は見なくなる。 */
+const BACKUP_MAIL_EVERY_MS = Number(process.env.BACKUP_MAIL_EVERY_MS ?? 86400000);
+function labelBackupMailCheck() {
+  if (!SMTP_USER || !labelCache.size) return;
+  const sentAt   = labelUsage.backupAt || 0;
+  const sentSize = labelUsage.backupSize || 0;
+  if (labelCache.size <= sentSize) return;             // 増えていない
+  if (Date.now() - sentAt < BACKUP_MAIL_EVERY_MS) return;
+
+  const named = [...labelCache.values()].filter(v => (typeof v === 'string' ? v : (v && v.name))).length;
+  const body = JSON.stringify({
+    _meta: { writtenAt: new Date().toISOString(), total: labelCache.size, named,
+             unnamed: labelCache.size - named,
+             note: '照会済みの名前。空文字は「引いたが名前は無かった」＝二度払わないための記録' },
+    labels: Object.fromEntries(labelCache),
+  }, null, 2);
+  const day = new Date().toISOString().slice(0, 10);
+
+  labelUsage.backupAt = Date.now();
+  labelUsage.backupSize = labelCache.size;
+  saveLabelUsage();
+
+  sendEmail(SMTP_USER, `【BitTo】照会済みの名前の控え（${labelCache.size}件）`,
+    `<p>MistTrack に照会して得た名前の控えです。</p>`
+    + `<ul><li>合計 ${labelCache.size} 件（名前あり ${named} ／ 名前なし ${labelCache.size - named}）</li>`
+    + `<li>前回お送りしたとき ${sentSize} 件</li></ul>`
+    + `<p>添付を <code>chaintrace/backup/label-cache.json</code> に置いて、`
+    + `<code>bash backup/commit.sh</code> を実行すると git に残ります。</p>`
+    + `<p>本番の置き場は Railway の永続ディスク1箇所だけです。`
+    + `ボリュームを作り直すと消え、同じアドレスにまた代金がかかります。</p>`,
+    'bitto', [{ filename: `label-cache-${day}.json`, content: body }])
+    .catch(e => console.error('[Backup] 控えの送信に失敗:', e.message));
+  console.log(`[Backup] 控えを送信しました（${labelCache.size}件）`);
+}
+
 function labelQuotaOkFor(opts) {
   const ok = labelQuotaOkFor(opts);
   if (!ok) opts.quotaBlocked = true;
@@ -2031,6 +2077,7 @@ async function lookupLabelAPI(addr, chain) {
     const picked = pickLabelFromResponse(j);
     labelCache.set(lo, picked);
     saveLabelCache();
+    labelBackupMailCheck();      // ★増えていれば控えを送る（1日1回まで）
     if (picked.name) console.log(`[LabelAPI] ${addr.slice(0, 10)}... → "${picked.name}" (${picked.type || '種別なし'})`);
     else console.log('[LabelAPI] 名前なし:', addr.slice(0, 12), JSON.stringify(j).slice(0, 160));
     return picked;
@@ -6115,7 +6162,7 @@ function mailFromFor(brand) {
   return `BitTo <${m ? m[1] : MAIL_FROM}>`;
 }
 
-async function sendViaResend(to, subject, html, brand) {
+async function sendViaResend(to, subject, html, brand, attachments) {
   // テストドメイン（onboarding@resend.dev）では本人以外・BCCに送れないため、
   // 独自ドメイン認証後（MAIL_FROMがresend.dev以外）のみ運営者控えBCCを付ける
   const from = mailFromFor(brand);
@@ -6128,18 +6175,22 @@ async function sendViaResend(to, subject, html, brand) {
       'Authorization': `Bearer ${RESEND_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ from, to: [to], bcc, subject, html }),
+    /* ★添付は base64 で渡す。控えの持ち出しに使う（第5-V節）。 */
+    body: JSON.stringify({ from, to: [to], bcc, subject, html,
+      ...(attachments && attachments.length ? { attachments: attachments.map(a => ({
+        filename: a.filename, content: Buffer.from(a.content).toString('base64'),
+      })) } : {}) }),
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`Resend ${r.status}: ${data.message || JSON.stringify(data)}`);
   return data.id;
 }
 
-async function sendEmail(to, subject, html, brand) {
+async function sendEmail(to, subject, html, brand, attachments) {
   // ① Resend（推奨：HTTP経由でRailway対応）
   if (RESEND_API_KEY) {
     try {
-      const id = await sendViaResend(to, subject, html, brand);
+      const id = await sendViaResend(to, subject, html, brand, attachments);
       console.log('[Mail] Resend送信完了 → to:', to, '/ id:', id);
       return;
     } catch (e) {
@@ -6155,6 +6206,7 @@ async function sendEmail(to, subject, html, brand) {
     const info = await mailer.sendMail({
       from: `"${String(brand || '').toLowerCase() === 'bitto' ? 'BitTo' : 'Connection'} 調査サービス" <${SMTP_USER}>`,
       to, bcc, subject, html,
+      ...(attachments && attachments.length ? { attachments } : {}),
     });
     console.log('[Mail] SMTP送信完了 → to:', to, '/ bcc:', bcc || 'なし', '/ messageId:', info.messageId);
   } catch (e) {
