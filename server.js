@@ -1458,8 +1458,16 @@ function labelQuotaOk(paid = false, device = null) {
    91回使用済み＝あと9回。しかも有料確保30回のため無料調査はとっくに止まっていた。
    利用者からは「取引所名が出ない」としか見えず、こちらは気づけなかった。
    ★ログは誰も見ていない。減ったらメールで知らせる。 */
-const QUOTA_ALERT_AT = (process.env.QUOTA_ALERT_AT || '60,30,10')
-  .split(',').map(n => Number(n.trim())).filter(n => n > 0).sort((a, b) => b - a);
+/* ★節目は「全体の残り」で見る。ただしそれだけでは無料が止まる瞬間を逃す。
+   無料は残りが確保分(PAID_RESERVE)まで減った時点で止まるので、
+   その手前と、止まった直後にも知らせる。
+   実例：確保90回のとき、無料は残り90で止まるのに1通目は残り60。
+   ★止まったことに気づけないまま広告を回すことになる（点検で発覚・2026-09-10）。 */
+const QUOTA_ALERT_AT = [...new Set(
+  (process.env.QUOTA_ALERT_AT || '60,30,10')
+    .split(',').map(n => Number(n.trim())).filter(n => n > 0)
+    .concat([MISTTRACK_PAID_RESERVE + 30, MISTTRACK_PAID_RESERVE])
+)].filter(n => n > 0).sort((a, b) => b - a);
 function quotaAlertCheck() {
   if (!MISTTRACK_KEY || !SMTP_USER) return;
   const left = MISTTRACK_TOTAL_CAP - labelUsage.total;
@@ -1473,7 +1481,16 @@ function quotaAlertCheck() {
     sent.push(mark);
     saveLabelUsage();
     const freeLeft = left - MISTTRACK_PAID_RESERVE;
-    sendEmail(SMTP_USER, `【BitTo】MistTrack の残りが ${left} 回です`,
+    const freeStopped = left <= MISTTRACK_PAID_RESERVE;
+    sendEmail(SMTP_USER,
+      freeStopped ? '【BitTo】★無料調査で取引所名が出なくなりました'
+                  : `【BitTo】MistTrack の残りが ${left} 回です`,
+      (freeStopped
+        ? '<p><strong>無料調査では取引所名を引けない状態になりました。</strong>'
+          + '有料調査は引き続き通常どおり動きます。</p>'
+          + '<p>広告を出している期間であれば、来訪された方に取引所名が出ません。'
+          + '買い増しをご検討ください。</p>'
+        : '') +
       `<p>取引所名の照会に使える回数が残り <strong>${left} 回</strong>になりました。</p>`
       + `<ul><li>購入総数（Railway の MISTTRACK_TOTAL_CAP）：${MISTTRACK_TOTAL_CAP}</li>`
       + `<li>これまでの照会：${labelUsage.total}</li>`
