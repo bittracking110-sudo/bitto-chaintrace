@@ -1489,6 +1489,16 @@ function quotaAlertCheck() {
   }
 }
 
+/* ★枠を使い切ったことを、その調査の結果に残す。
+   これが無いと「取引所が見つからなかった」と区別が付かない。
+   被害者は資金が消えたと受け取るが、実際は当社が引けなかっただけ。
+   ★実際にこの状態で運用していた（2026-09-09 の点検で発覚）。 */
+function labelQuotaOkFor(opts) {
+  const ok = labelQuotaOkFor(opts);
+  if (!ok) opts.quotaBlocked = true;
+  return ok;
+}
+
 function labelQuotaUse(device) {
   labelUsage.count++; labelUsage.monthCount++; labelUsage.total++;
   quotaAlertCheck();
@@ -2949,7 +2959,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
          確定した経路として出せなくなる（第4-X節の判定ができない）。
          ★キャッシュ済みなら通信しないので、この見切りは要らない。 */
       const timeOk = known || Date.now() < deadline - 7000;
-      if (known || (budgetOk && timeOk && labelQuotaOk(opts.paid, opts.device))) {
+      if (known || (budgetOk && timeOk && labelQuotaOkFor(opts))) {
         if (!known) { apiLookups++; labelQuotaUse(opts.device); }
         const api = await lookupLabelAPI(node.address, chain);
         if (api.name) {
@@ -3289,7 +3299,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   const unnamedKnown = unnamed && labelCache.has(String(unnamed.reachedAddress || '').toLowerCase());
   if (unnamed && MISTTRACK_KEY && misttrackSupports(chain)   // ★対象外に投げない
       && notOrigin(unnamed.reachedAddress)
-      && (unnamedKnown || labelQuotaOk(opts.paid, opts.device))) {
+      && (unnamedKnown || labelQuotaOkFor(opts))) {
     try {
       if (!unnamedKnown) labelQuotaUse(opts.device);
       const api = await lookupLabelAPI(unnamed.reachedAddress, chain);
@@ -3334,7 +3344,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
       const lastIsSender = !last || last.role === 'sender' || last === path[0];
       if (!last.label && MISTTRACK_KEY && misttrackSupports(chain) && !lastIsSender) {
         const known = labelCache.has(last.address.toLowerCase());
-        if (known || (apiLookups < lookupBudget && labelQuotaOk(opts.paid, opts.device))) {
+        if (known || (apiLookups < lookupBudget && labelQuotaOkFor(opts))) {
           if (!known) { apiLookups++; labelQuotaUse(opts.device); }
           const api = await lookupLabelAPI(last.address, chain);
           if (api.name) {
@@ -3375,7 +3385,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   if (pfBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
       && target && target.address && !knownExchange && !target.isVia && !target.isToken) {
     const known = profileCache.has(target.address.toLowerCase());
-    if (known || labelQuotaOk(opts.paid, opts.device)) {
+    if (known || labelQuotaOkFor(opts)) {
       if (!known) labelQuotaUse(opts.device);
       const pf = await lookupProfileAPI(target.address, chain).catch(() => null);
       if (pf) {
@@ -3394,7 +3404,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
   if (rkBudget > 0 && MISTTRACK_KEY && misttrackSupports(chain)
       && target && target.address && !knownExchange && !target.isVia && !target.isToken) {
     const known = riskCache.has(target.address.toLowerCase());
-    if (known || labelQuotaOk(opts.paid, opts.device)) {
+    if (known || labelQuotaOkFor(opts)) {
       if (!known) labelQuotaUse(opts.device);
       const rk = await lookupRiskAPI(target.address, chain).catch(() => null);
       if (rk) target.risk = rk;
@@ -3413,7 +3423,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
     if (String(target.address).toLowerCase() === originAddr1) continue;   // ★出金元には使わない
     const cache = kind === 'action' ? actionCache : overviewCache;
     const known = cache.has(target.address.toLowerCase());
-    if (!known && !labelQuotaOk(opts.paid, opts.device)) continue;
+    if (!known && !labelQuotaOkFor(opts)) continue;
     if (!known) labelQuotaUse(opts.device);
     const v = await lookupMistTrackSimple(kind, target.address, chain).catch(() => null);
     if (v) target[field] = v;
@@ -3429,7 +3439,7 @@ async function enrichPathWithAddressInfo(path, chain, opts = {}) {
       && last && last.address && !named && !last.isVia && !last.isToken
       && last.role !== 'sender' && last !== path[0]) {   // ★出金元には使わない
     const known = cpCache.has(last.address.toLowerCase());
-    if (known || labelQuotaOk(opts.paid, opts.device)) {
+    if (known || labelQuotaOkFor(opts)) {
       if (!known) labelQuotaUse(opts.device);
       const cp = await lookupCounterpartyAPI(last.address, chain).catch(() => []);
       if (cp.length) {
@@ -3493,7 +3503,7 @@ async function enrichCrossChain(path, opts = {}) {
       if (budgetLeft(opts, 20000) < 4000) return;
 
       const known = cpCache.has(String(addr).toLowerCase());
-      if (!known && !labelQuotaOk(opts.paid, opts.device)) return;
+      if (!known && !labelQuotaOkFor(opts)) return;
       if (!known) { labelQuotaUse(opts.device); used++; }
 
       const cp = await lookupCounterpartyAPI(addr, cxChain).catch(() => []);
@@ -5668,6 +5678,8 @@ async function investigate(txid, chain, opts = {}) {
      DEX・ブリッジ・トークン契約は着金先ではないので入れない。 */
   ph.mark('情報付け');
   result.tronDenied = tronDeniedCount();   // ★断られた回数を説明に載せるため
+  /* ★枠切れをこの結果に移す。無いと「取引所が見つからなかった」と読まれる。 */
+  if (opts.quotaBlocked) result.quotaBlocked = true;
   finalizeResult(txid, result, !!opts.paid);
 
   /* ★締切に間に合わなかった枝は、返したあとに追い続ける。
@@ -6619,6 +6631,18 @@ function resultNotes(result, paid) {
   if (result.stillMoving) {
     out.push(note('moving', 'warn', 'まだ資金が動いている最中かもしれません',
       stillMovingText(result.stillMoving)));
+  }
+
+  /* ★枠を使い切ったときは、そう書く。黙っていると
+     「取引所に届いていない」＝資金が消えた、と読まれる。事実と違う。
+     ★有料調査はこの上限を受けないので、そこも書く。売り文句ではなく事実。 */
+  if (result.quotaBlocked && !(result.exchanges || []).length) {
+    out.push(note('quota', 'warn', '無料調査でお調べできる回数の上限に達しました',
+      '取引所名の照会には1日・1か月あたりの回数に限りがあり、この調査では上限に達したため'
+      + '取引所名を引けていません。★取引所に届いていない、という意味ではありません。'
+      + '追跡した経路そのものは記録のとおりです。',
+      '時間をおいて同じTXIDをお調べいただくと、続きから照会できます。'
+      + '有料調査はこの上限の対象外で、到達先の照会を優先して行います。'));
   }
 
   /* ★有料調査を申し込む前に、申し込んだあと何が起きるかを見せる。
