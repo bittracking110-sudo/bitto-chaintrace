@@ -1,0 +1,91 @@
+{
+  "_meta": {
+    "writtenAt": "2026-09-10T00:43:50.296Z",
+    "total": 20,
+    "named": 12,
+    "unnamed": 8,
+    "note": "照会済みの名前。空文字は「引いたが名前は無かった」＝二度払わないための記録"
+  },
+  "labels": {
+    "0xec0ba8d4b69505632fc2add60c5aa0aaf4ea3926": {
+      "name": "",
+      "type": ""
+    },
+    "0x935d2e470284fb536227a76a723f96a94efae6a9": {
+      "name": "ccpayment.com（hot）",
+      "type": "exchange"
+    },
+    "0x8894e0a0c962cb723c1976a4421c95949be2d4e3": {
+      "name": "Binance（hot）",
+      "type": "exchange"
+    },
+    "0x835033bd90b943fa0d0f8e5382d9dc568d3fbd96": {
+      "name": "bitFlyer（hot）",
+      "type": "exchange"
+    },
+    "0xeae7380dd4cef6fbd1144f49e4d1e6964258a4f4": {
+      "name": "binance（deposit）",
+      "type": "exchange"
+    },
+    "0x3f3ec95b37df1b26ad00c222c460afa9d202ffd7": {
+      "name": "hitbtc（deposit）",
+      "type": "exchange"
+    },
+    "0x22d371de6b40be8c024a887b765cffedb980922d": {
+      "name": "",
+      "type": ""
+    },
+    "txdmxla9t2isels2akzrahvtkapz2jdk3c": {
+      "name": "okx（deposit）",
+      "type": "exchange"
+    },
+    "0x56187e8bb9c26b0d796b5b48aa028ef9dd213184": {
+      "name": "",
+      "type": ""
+    },
+    "0x0280baf5c87cfa44d7d661805cc17db29d7973b7": {
+      "name": "HiFiSwap.io",
+      "type": "defi"
+    },
+    "0xa68118deb4c75af9327346c13b64d5fe2d6c2486": {
+      "name": "",
+      "type": ""
+    },
+    "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h": {
+      "name": "Binance（hot）",
+      "type": "exchange"
+    },
+    "bc1qsyy7f38p9y46r5w7ja57nxsn7245eggskezray": {
+      "name": "HiFiSwap.io（hot）",
+      "type": "defi"
+    },
+    "bc1qms05qq3w2375skqhyhuwl2phg3feswyth8ytyf": {
+      "name": "",
+      "type": ""
+    },
+    "bc1qstpzhd7ydxd8qx007yyazgahww3zju6s7y4ere": {
+      "name": "Bitbank（hot）",
+      "type": "exchange"
+    },
+    "0x154d253268ee5ab5af102afcf7e38155248baad5": {
+      "name": "",
+      "type": ""
+    },
+    "0x9642b23ed1e01df1092b92641051881a322f5d4e": {
+      "name": "mexc（hot）",
+      "type": "exchange"
+    },
+    "0xe72f51e2ecf8a6c0c6c316f611c1137182e77e76": {
+      "name": "maskex（deposit）",
+      "type": "exchange"
+    },
+    "0xe5a656c4b22a49df869093c41eea71bb36c3fff5": {
+      "name": "",
+      "type": ""
+    },
+    "0x35ce4d2f37867234ea5c8044af0ba1380787ab56": {
+      "name": "",
+      "type": ""
+    }
+  }
+}
