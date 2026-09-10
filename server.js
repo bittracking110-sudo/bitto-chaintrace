@@ -6861,14 +6861,22 @@ function resultNotes(result, paid) {
        同じ色に案内文を混ぜると見落とされる（利用者の指摘・2026-09-06）。
        ★notesHTML は知らない level を info（青）にして描くので、
        公開中の 1.8 でも壊れない。web と 1.9 は専用の色で出る。 */
-    out.push(note('afterbuy', 'afterbuy', 'ご購入後の流れ',
+    /* ★色は 'good'（緑）。判明系と同じ色になるが、公開中の1.8では
+       知らない level が info（青）になり、青の注記が3つ並んで見分けが付かなかった。
+       実機で見て、緑のほうが目立つことを確認（利用者の判断・2026-09-10）。 */
+    out.push(note('afterbuy', 'good', 'ご購入後の流れ',
       '① TXIDをこの画面からご入力いただきます（数分で終わります）' + '\n'
       + '② 当社が調査します（1件あたり5分〜）' + '\n'
       + '③ 報告書ができたら、このチャットにお届けします。アプリでは左上の ☰ →「レポート」からいつでも開けます。'
       + '同じものをご登録のメールにもお送りします（迷惑メールに入っていることがあるのでご確認ください）' + '\n'
       /* ★「取引所ごとの要請文が入っています」と言い切ると、到達しなかった時に約束が破れる。
          後半が本体：特定できなくても何が残るかを先に書く。 */
-      + '④ 到達した取引所が判明した場合、取引所ごとの凍結要請文が入っています。そのまま取引所へお送りいただけます。'
+      + '④ 到達した取引所が判明した場合、取引所ごとの凍結要請文が入っています。'
+      /* ★誰が送るのかを、買う前にはっきりさせる。
+         「送ってくれると思っていた」という食い違いは、後から埋められない。
+         取引所は本人からの申告として受け付ける（第5-T節）。 */
+      + '★要請文は当社がすべて作成しますが、取引所へ送るのはご本人様です'
+      + '（取引所はご本人からの申告として受け付けます）。'
       + '判明しなかった場合も、追跡した経路と、追えなくなった理由を記載します' + '\n'
       + '⑤ 報告書はPDFで保存・印刷できます。警察や弁護士へのご相談にそのままお使いください' + '\n\n'
       /* ★但し書きは text 側に置く。sub は『強調して添える一行』として作られており
@@ -7516,6 +7524,10 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
 
       tplHTML = boxes ? `
         <h3>📝 取引所への要請テンプレート（${named.length}件）</h3>
+        <p style="font-size:0.9em;margin:0 0 10px;padding:10px 12px;border-left:3px solid var(--r-accent);background:var(--r-softbg)">
+        <strong>★要請文は当社がすべて作成しますが、取引所へ送るのはご本人様です。</strong><br>
+        取引所は、口座の名義や被害の当事者からの申告として受け付けます。当社が代理でお送りすることはできません。<br>
+        下記をそのままコピーして、各取引所の窓口（本報告書の「取引所連絡先・対応窓口」欄）へお送りください。</p>
         <p style="font-size:0.85em;color:#94a3b8;margin:0 0 8px">下記は、取引所へそのまま送付できる要請文です。
         ${named.length > 1 ? '<strong>到達した取引所ごとに用意しています。凍結要請は複数の取引所へ同時に出せます。</strong>' : ''}</p>
         ${boxes}` : '';
@@ -7527,6 +7539,12 @@ function generateReportHTML(results, customerName, issuedAt, aiData = {}, report
         const c0 = getExchangeContact(first.name);
         tplHTML = `
         <h3>📝 取引所への要請テンプレート（${named.length}件）</h3>
+        <!-- ★AI生成の文面は1件目を置き換える。こちらにも同じ注意書きが要る
+             （片方だけだと、いちばん最初に読む文面に出ない）。 -->
+        <p style="font-size:0.9em;margin:0 0 10px;padding:10px 12px;border-left:3px solid var(--r-accent);background:var(--r-softbg)">
+        <strong>★要請文は当社がすべて作成しますが、取引所へ送るのはご本人様です。</strong><br>
+        取引所は、口座の名義や被害の当事者からの申告として受け付けます。当社が代理でお送りすることはできません。<br>
+        下記をそのままコピーして、各取引所の窓口（本報告書の「取引所連絡先・対応窓口」欄）へお送りください。</p>
         <p style="font-size:0.85em;color:#94a3b8;margin:0 0 8px">下記は、上記「申請アドバイス」に沿って取引所へそのまま送付できる要請文です。
         ${named.length > 1 ? '<strong>到達した取引所ごとに用意しています。凍結要請は複数の取引所へ同時に出せます。</strong>' : ''}</p>
         <p style="font-size:0.9em;margin:14px 0 6px"><strong>No.${escHtml(String(first.foundNo ?? '-'))}　${escHtml(first.name)}</strong> 宛
