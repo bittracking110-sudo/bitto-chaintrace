@@ -6280,7 +6280,14 @@ async function appendToSheet(rowData) {
   }
 }
 
-async function updateSheetReportUrl(sessionId, reportUrl) {
+/* ★J列の文言。「支払い完了」と書いていたが、当社は支払いを確認していない。
+   実測（2026-09-12・利用者のテスト）：残高の無いカードで購入できてしまい、
+   支払われていないのに「支払い完了」と記録されていた。
+   ★確かめていないことを、確かめたように書かない。
+
+   さらに、申込時に付けた未払の印を、この更新が上書きして消していた。
+   印は引き継ぐ。 */
+async function updateSheetReportUrl(sessionId, reportUrl, unpaid) {
   try {
     const sheets = getSheets();
     if (!sheets) return;
@@ -6293,13 +6300,24 @@ async function updateSheetReportUrl(sessionId, reportUrl) {
     const rowIdx = rows.findIndex(row => row[0] === sessionId);
     if (rowIdx === -1) { console.log('[Sheets] sessionId 未検出:', sessionId); return; }
     const sheetRow = rowIdx + 1; // 1-indexed
+    /* ★印が渡ってこなかったときは、いま書いてある値から拾う。
+       再起動をまたぐと申込のトークンが消えるので、引数だけに頼らない。 */
+    if (!unpaid) {
+      try {
+        const cur = await sheets.spreadsheets.values.get({
+          spreadsheetId: GOOGLE_SHEET_ID, range: `シート1!J${sheetRow}`,
+        });
+        const now = String(((cur.data.values || [])[0] || [])[0] || '');
+        if (now.includes('未払') || now.includes('未確定')) unpaid = true;
+      } catch { /* 取れなくても更新は続ける */ }
+    }
     await sheets.spreadsheets.values.batchUpdate({
       spreadsheetId: GOOGLE_SHEET_ID,
       requestBody: {
         valueInputOption: 'USER_ENTERED',
         data: [
           { range: `シート1!I${sheetRow}`, values: [[reportUrl]] },
-          { range: `シート1!J${sheetRow}`, values: [['支払い完了']] },
+          { range: `シート1!J${sheetRow}`, values: [[unpaid ? '報告書お渡し済み【未払】' : '報告書お渡し済み']] },
         ],
       },
     });
@@ -10199,7 +10217,8 @@ app.post('/api/submit-txids', express.json(), async (req, res) => {
       await saveReport(reportId, reportHtml);
 
       // SheetsにレポートURLを記録
-      updateSheetReportUrl(formData.sessionId, reportUrl).catch(console.error);
+      updateSheetReportUrl(formData.sessionId, reportUrl,
+        !!(formData.iap && formData.iap.unpaidSuspect)).catch(console.error);
 
       // LINEにレポートURL送信
       if (formData.userId) {
