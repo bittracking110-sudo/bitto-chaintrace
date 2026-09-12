@@ -11723,7 +11723,15 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+/* ★見つからないURLは、調査チャットへ送る。
+   これまでは public/index.html（初期に作った ChainTrace の内部ツール）を返していた。
+   実測（2026-09-12）：独自ドメイン app.bit-to.jp を直打ちすると、
+   ★Blockchair APIキー・Gemini Key の入力欄がある内部ツールが公開されていた。
+   広告から来た方が最初に見る画面としても、内部ツールとしても、どちらも良くない。
+
+   ★catch-all なので、打ち間違いや古いリンクもここに来る。
+   「見つかりません」を出すより、使える画面へ送るほうが被害者の役に立つ。 */
+app.get('*', (_req, res) => res.redirect(302, '/bitto'));
 
 app.listen(PORT, () => {
   console.log(`\n✅ BitTo サーバー起動完了`);
