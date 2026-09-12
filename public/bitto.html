@@ -201,6 +201,9 @@
      .srv-note 全体に掛けるとテンプレート側の改行まで描画されて既存の注記が崩れるので、
      本文だけを包む。 */
   .srv-note .txt{white-space:pre-line}
+  /* ★調査でいちばん大事な結論。灰色の注記に埋もれて読み飛ばされていた。 */
+  .ex-hit{margin:10px 0;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.8;
+          color:#062018;background:#3DDC97;font-weight:700}
   /* 確度が下がる区間。消さずに、薄くして区別する */
   .node.after-stop{opacity:.62;border-style:dashed}
   .caveat{margin-top:10px;font-size:11.5px;line-height:1.75;color:var(--sub);
@@ -1032,7 +1035,7 @@ function resultCard(results){
     return `
     <div class="card"><h4>資金フロー（概要）${results.length>1 ? ` ${i+1}/${results.length}` : ''} — ${esc(r.chain)}</h4>
       ${flowHTML(p)}
-      ${ex.length ? `<div class="note">到達した取引所（判明した順）：${esc(ex.join('、'))}</div>` : ''}
+      ${ex.length ? `<div class="ex-hit">🏦 到達した取引所（判明した順）<br>${esc(ex.join('　／　'))}</div>` : ''}
       ${notesHTML(r.notes)}
       ${bridgeStopHTML(p)}
       ${refTraceHTML(p)}
