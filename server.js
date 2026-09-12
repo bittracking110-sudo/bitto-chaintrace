@@ -9431,6 +9431,9 @@ app.get('/api/admin/orders', requireAdmin, (req, res) => {
       報告書: v.report ? '完成' : 'まだ',
       報告書URL: v.report ? v.report.reportUrl : null,
       試験購入: !!(v.iap && v.iap.sandbox),
+      /* ★支払いが確定していない購入を、注文一覧でも見えるようにする。
+         メールだけだと埋もれる。売上を締めるときにここで確認できる。 */
+      支払未確定: !!(v.iap && v.iap.unpaidSuspect),
       購入の識別: v.iap ? String(v.iap.appUserId || '').slice(0, 12) + '…' : null,
       取引ID数: v.iap ? (v.iap.transactionIds || []).length : 0,
     });
@@ -11610,6 +11613,36 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
     const paidSum = chosen.reduce((a, t) => a + (t.paid || 0), 0);
     const paidTotal = paidSum > 0 ? Math.round(paidSum) : BITTO_PRICE * n;
 
+    /* ★支払いが済んでいない疑いを見つける。
+       実測（2026-09-12・利用者のテスト）：残高の無いカードで購入したところ、
+       Apple は「お支払いを処理できませんでした」と出しながら購入自体は成立させ、
+       ★報告書の発注まで通った。Apple は後から請求を再試行し、
+       最終的に失敗すれば取り消すが、★当社にはそれを知る手段が無い。
+
+       ★止めることはしない。Apple 側の再試行で成功することがあり、
+       止めると本当に払う人を拒むことになる。★気づけるようにするのが要点。
+
+       支払額が返らない（0 または空）＝ 決済が確定していない疑い。
+       試験購入（Sandbox）は元から0なので対象外。 */
+    const unpaidSuspect = !chosen.some(c => c.sandbox)
+      && chosen.every(c => !(Number(c.paid) > 0));
+    if (unpaidSuspect) {
+      console.warn(`[IAP] ★支払い未確定の疑い: ${email} / ${chosen.map(c => c.tid).join(',')}`);
+      if (SMTP_USER) {
+        sendEmail(SMTP_USER, '【BitTo】★支払いが確定していない購入があります',
+          '<p>購入は成立していますが、<strong>支払額が返ってきていません</strong>。'
+          + 'カードの残高不足などで、Apple／Google が請求を再試行している可能性があります。</p>'
+          + `<ul><li>お客様：${escHtml(name || '')}（${escHtml(email)}）</li>`
+          + `<li>件数：${n}件</li>`
+          + `<li>商品：${escHtml(productId || (chosen[0] && chosen[0].pid) || '')}</li>`
+          + `<li>取引ID：${escHtml(chosen.map(c => c.tid).join(', '))}</li></ul>`
+          + '<p>★報告書は通常どおりお渡ししています（止めると、再試行で支払えた方を拒むため）。</p>'
+          + '<p>数日後にストアの売上明細で入金を確認してください。'
+          + '取り消されていれば、その分は売上から外してください。</p>', 'bitto')
+          .catch(e => console.error('[IAP] 未払い通知の送信に失敗:', e.message));
+      }
+    }
+
     // TXID入力フォームのトークンを発行（brand=bitto）
     const formToken = crypto.randomUUID();
     const sessionId = `bitto-${formToken.slice(0, 8)}`;
@@ -11622,6 +11655,7 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
         platform: platform || '', appUserId,
         productId: productId || (chosen[0] && chosen[0].pid) || '',
         transactionIds: chosen.map(c => c.tid), sandbox: chosen.some(c => c.sandbox),
+        unpaidSuspect,                       // ★支払いが確定していない疑い
       },
     });
     const formUrl = `${BASE_URL}/txid-form/${formToken}`;
@@ -11635,7 +11669,10 @@ app.post('/api/bitto/iap/verify', express.json(), async (req, res) => {
     appendToSheet([
       submittedAt, name || '', phone || '', email, '', String(n),
       isSandbox ? '0' : String(paidTotal), sessionId, '',
-      isSandbox ? '★試験購入(BitTo/IAP・課金なし)' : '申込済み(BitTo/IAP)',
+      /* ★支払いが確定していない分は、帳簿でも見分けが付く形で記す。
+         そのまま売上に混ぜると、取り消されたときに気づけない。 */
+      isSandbox ? '★試験購入(BitTo/IAP・課金なし)'
+        : unpaidSuspect ? '★支払い未確定(BitTo/IAP・要確認)' : '申込済み(BitTo/IAP)',
     ]).catch(console.error);
     if (isSandbox) console.log('[IAP] ★試験購入（Sandbox）として記録しました');
 
